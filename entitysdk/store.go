@@ -229,6 +229,7 @@ func (s *Store) Watch(pattern string) (*StoreWatch, error) {
 		pattern: pattern,
 		match:   match,
 		events:  make(chan ChangeEvent, 64),
+		done:    make(chan struct{}),
 		hub:     s.watchHub,
 	}
 	if err := s.watchHub.register(w); err != nil {

@@ -232,3 +232,64 @@ func TestPeerCloseClosesWatches(t *testing.T) {
 		t.Error("channel did not close after peer Close")
 	}
 }
+
+// TestWatchCloseWithSenderParkedOnFullBuffer pins the fix for a
+// send-on-closed-channel defect in the hub.
+//
+// The bug: watchHub.run sampled w.closed under w.mu, released w.mu,
+// and only then sent on w.events. A cancel landing in that window
+// closed the channel out from under the sender — "send on closed
+// channel", a real panic rather than only a -race report. The fix
+// closes w.done before w.events and holds w.mu across an abortable
+// `select { case events <- ce: case <-done: }`.
+//
+// This drives the window deterministically instead of racing for it:
+// a watch with NO consumer, more writes than the 64-entry buffer, so
+// the hub goroutine is parked inside the send when Close arrives.
+// (The foreign-namespace gate surfaced the defect first, but only on
+// roughly one run in three — a pin that flaky is not a pin.)
+//
+// It also covers the property the fix must not break: Close must not
+// deadlock behind a consumer that has stopped reading.
+func TestWatchCloseWithSenderParkedOnFullBuffer(t *testing.T) {
+	ap, err := NewAppPeer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.Close()
+	st := ap.Store()
+
+	w, err := st.Watch("parked/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No consumer. Writes run on their own goroutine because once the
+	// hub parks, the core sink backs up and Put blocks too.
+	writesDone := make(chan struct{})
+	go func() {
+		defer close(writesDone)
+		for i := 0; i < 300; i++ {
+			_, _ = st.Put("parked/e", "test/note", i)
+		}
+	}()
+
+	// Let the buffer fill and the hub park in the send.
+	time.Sleep(250 * time.Millisecond)
+
+	// Close with a sender parked on the channel.
+	w.Close()
+
+	select {
+	case <-writesDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("writes never drained after Close — the hub is stuck in a send " +
+			"(Close must abort the in-flight delivery, not wait on a consumer)")
+	}
+
+	// The channel is closed and drained, and a second Close is a
+	// no-op rather than a double-close panic.
+	for range w.Events() {
+	}
+	w.Close()
+}

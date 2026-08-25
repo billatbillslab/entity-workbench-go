@@ -43,9 +43,32 @@ type StoreWatch struct {
 
 	events chan ChangeEvent
 
+	// done is closed FIRST on cancellation, before events is closed.
+	// It is what makes a blocking send abortable: the hub parks on
+	// `select { case events <- ce: case <-done: }` while holding mu,
+	// so a cancel unblocks the send instead of deadlocking against
+	// the consumer, and events is only ever closed by a party holding
+	// mu — which no sender can be past at that point.
+	//
+	// Without this split the hub sampled `closed` under mu, released
+	// mu, and then sent; a cancel landing in that window closed the
+	// channel under the sender and the next send panicked with "send
+	// on closed channel". Surfaced by the foreign-namespace
+	// subscription gate (`foreign_namespace_subscription_test.go`),
+	// which registers two watches and cancels both while events are
+	// in flight.
+	done     chan struct{}
+	doneOnce sync.Once
+
 	hub    *watchHub
 	closed bool
 	mu     sync.Mutex
+}
+
+// signalDone closes done exactly once. Callers must not close done
+// directly — cancel and hub-shutdown both reach it.
+func (w *StoreWatch) signalDone() {
+	w.doneOnce.Do(func() { close(w.done) })
 }
 
 // Pattern returns the pattern this StoreWatch was created with.
@@ -107,21 +130,31 @@ func (h *watchHub) run() {
 			// Blocking send — spec §6.1 forbids silent drops. A slow
 			// consumer will slow the hub; use a generous buffer at
 			// registration to absorb bursts.
+			//
+			// mu is held ACROSS the send, which is what keeps the
+			// channel from closing underneath it (see StoreWatch.done).
+			// The send is abortable via done, so holding mu here
+			// cannot deadlock a canceller: unregister closes done
+			// before it reaches for mu.
 			w.mu.Lock()
 			if w.closed {
 				w.mu.Unlock()
 				continue
 			}
-			events := w.events
+			select {
+			case w.events <- ce:
+			case <-w.done:
+			}
 			w.mu.Unlock()
-			events <- ce
 		}
 	}
 
-	// Sink closed — close all pending watches.
+	// Sink closed — close all pending watches. Same ordering rule as
+	// unregister: done first, then events under mu.
 	h.mu.Lock()
 	h.closed = true
 	for w := range h.watches {
+		w.signalDone()
 		w.mu.Lock()
 		if !w.closed {
 			w.closed = true
@@ -144,6 +177,11 @@ func (h *watchHub) register(w *StoreWatch) *Error {
 }
 
 func (h *watchHub) unregister(w *StoreWatch) {
+	// Order matters: closing done first releases any hub send parked
+	// on this watch, so the mu acquisition below cannot block behind
+	// a consumer that has stopped reading.
+	w.signalDone()
+
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()

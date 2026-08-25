@@ -131,6 +131,9 @@ func (a *AppPeer) SubscribeRawAt(peerID, pattern, deliverURI, deliverOp string, 
 	if deliverURI == "" || deliverOp == "" {
 		return nil, NewError(400, "invalid_delivery", "deliverURI + deliverOp are required")
 	}
+	if verr := validateEvents(opts.Events); verr != nil {
+		return nil, verr
+	}
 
 	// Mint a delivery token authorizing the subscription engine to
 	// dispatch deliverOp at deliverURI. The cap's resource scope must
@@ -250,9 +253,27 @@ func (a *AppPeer) mintRawDeliveryToken(deliverURI, operation string) (entity.Ent
 // subscriber's intent, but note the server MAY tighten further (it
 // MUST NOT relax) — a permissive Limits sent to an impl with
 // restrictive server defaults still caps at the server's value.
+// The EXTENSION-SUBSCRIPTION §3 `events` vocabulary — the complete,
+// closed set. The spec pins both the enum ("created", "updated",
+// "deleted") and the absent-field default (all three); core-go's
+// engine emits exactly these strings (`ext/subscription/engine.go`)
+// and its handler applies the same default (`handler.go`).
+//
+// Named here rather than spelled inline because the SDK validates
+// against them: an unknown value used to pass through to the wire,
+// where it silently matched no event and produced a subscription that
+// delivered nothing. A typo is a caller bug, and it should surface as
+// a 400 at the call, not as silence at runtime.
+const (
+	EventCreated = "created"
+	EventUpdated = "updated"
+	EventDeleted = "deleted"
+)
+
 type SubscribeOpts struct {
 	// Events filters which event types to deliver. Leave empty for
-	// all three ("created", "updated", "deleted").
+	// all three (EventCreated, EventUpdated, EventDeleted). Any other
+	// value is rejected with 400 invalid_events.
 	Events []string
 
 	// IncludePayload opts in to entity bundling in the delivery
@@ -276,6 +297,27 @@ type SubscribeOpts struct {
 	// expresses workbench-side intent and is min'd with server
 	// values rather than treated as opt-out.
 	Limits *types.SubscriptionLimitsData
+}
+
+// validateEvents rejects any value outside the §3 vocabulary. Empty
+// is valid and means "all three" — the wire omits the field and the
+// server applies the default, so we must not substitute the full set
+// here (an explicit list and an absent field are different requests
+// once a server tightens its own default).
+//
+// Duplicates are permitted: they are redundant, not ambiguous, and
+// the engine matches by membership.
+func validateEvents(events []string) *Error {
+	for _, e := range events {
+		switch e {
+		case EventCreated, EventUpdated, EventDeleted:
+		default:
+			return NewError(400, "invalid_events",
+				fmt.Sprintf("events[%q] is not one of %q, %q, %q (EXTENSION-SUBSCRIPTION §3)",
+					e, EventCreated, EventUpdated, EventDeleted))
+		}
+	}
+	return nil
 }
 
 // Events returns the read-only event channel. It is closed after
@@ -398,6 +440,9 @@ func (a *AppPeer) SubscribeAt(peerID, pattern string, opts SubscribeOpts) (*Subs
 	}
 	if peerID == "" {
 		return nil, NewError(400, "invalid_peer_id", "peerID is empty")
+	}
+	if verr := validateEvents(opts.Events); verr != nil {
+		return nil, verr
 	}
 
 	id, err := randomID()
