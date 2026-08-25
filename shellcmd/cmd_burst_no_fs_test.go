@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"go.entitychurch.org/entity-core-go/core/hash"
 	"go.entitychurch.org/entity-core-go/core/peer"
+	"go.entitychurch.org/entity-core-go/core/tree"
 	"go.entitychurch.org/entity-core-go/core/types"
 
 	"entity-workbench-go/entitysdk"
@@ -114,8 +117,41 @@ func TestE2E_Bidirectional_BurstWrites_NoFS(t *testing.T) {
 				t.Logf("  %s", m)
 			}
 		}
-		t.Fatalf("CONVERGENCE FAILED (heads_equal=%v) — alice=%s bob=%s",
-			aHead.Head == bHead.Head, aHead.Head, bHead.Head)
+
+		// **The two failures below are different bugs and the old
+		// message could not tell them apart.**
+		//
+		// The wait condition is a CONJUNCTION (heads equal AND every
+		// path bound), so a timeout says only "at least one of the two
+		// was false." It used to report `heads_equal=%v` on one line,
+		// which read as a paradox when it printed `true` — and the 2/4
+		// failures on 2026-08-19 all printed `true`. It is not a
+		// paradox, and it is not a dropped notification either:
+		//
+		//   - heads DIFFER  → the merge or the notification that drives
+		//     it never landed. That is the delivery-path story, and the
+		//     known subscription-saturation item is a candidate.
+		//   - heads EQUAL, a path unbound → the head advanced and the
+		//     CHECKOUT did not project the whole trie into the location
+		//     index. Store.Has is `locationIndex.Has` (entitysdk/store.go)
+		//     — a pure binding check — so agreeing on a revision head
+		//     while disagreeing on the bound set means the revision
+		//     merged and its projection did not follow. Nothing about
+		//     delivery explains that; both peers already have the head.
+		//
+		// The DAG dump runs for the second case because that is the one
+		// where the head is worth walking.
+		if aHead.Head == bHead.Head {
+			dumpRevisionDAG(t, "alice", a.ap, aHead.Head, targetPrefix)
+			dumpRevisionDAG(t, "bob  ", b.ap, bHead.Head, targetPrefix)
+			verdict := classifyConvergedHeadFailure(t, a.ap, b.ap, aHead.Head, missing)
+			t.Fatalf("CONVERGENCE FAILED — HEADS AGREE (%s) BUT THE BOUND SET DOES NOT.\n%s",
+				aHead.Head, verdict)
+		}
+		t.Fatalf("CONVERGENCE FAILED — HEADS DIFFER: alice=%s bob=%s.\n"+
+			"One peer never merged the other's revision. This is the delivery/merge path; the "+
+			"known subscription-saturation item is a candidate here and only here.",
+			aHead.Head, bHead.Head)
 	}
 
 	if !allConverged() {
@@ -207,5 +243,154 @@ func newNoFSPeer(t *testing.T, rootName string) *bidiPeer {
 		ap:       ap,
 		rootName: rootName,
 		id:       ap.PeerID(),
+	}
+}
+
+// classifyConvergedHeadFailure answers the one question that splits the
+// heads-agree-but-data-differs failure into two different bugs, and it
+// answers it by walking the trie rather than by arguing.
+//
+// **The fork.** Both peers hold head H and a path P is unbound on one of
+// them. Either:
+//
+//	(A) H's trie COMMITS to P → the head was adopted without its
+//	    bindings being projected. The version DAG is right and the live
+//	    tree is behind it: an apply/projection gap.
+//	(B) H's trie does NOT commit to P → the write was never captured, or
+//	    was captured and then WIPED. The live tree is right on the peer
+//	    that still has P and the DAG never learned about it: a
+//	    capture/transcription gap.
+//
+// **(B) has a named prior and a live suspect.** `ext/revision/merge.go`'s
+// fast-forward path carries a comment describing exactly this bug class
+// — the "F10 diagnosis": an implementation that read the LIVE TREE to
+// compute what to remove classified any in-flight write (present in the
+// tree, not yet captured by auto-version) as removed and wiped it, so
+// "the slower committer's writes vanished" under burst. That path was
+// fixed to diff the COMMITTED trie instead. **`applyBindings`, which the
+// three-way `performMerge` path calls, still removes every current
+// binding under the prefix and re-sets only what the merged tries
+// carry** (`ext/revision/merge.go::applyBindings`). A write in flight
+// across that window is in neither trie.
+//
+// Two peers writing concurrently DIVERGE, so a bidirectional burst is
+// exactly the shape that takes the three-way path rather than the
+// fast-forward one.
+//
+// **This function is why that stays a hypothesis until it fires.** D19 /
+// AP10: reading a code path establishes what the path does, not what the
+// operation does — the two claims this repo routed on the strength of a
+// correct source reading both missed a layer underneath. The verdict
+// below is a measurement of the actual failing run, and it is what gets
+// routed, not the argument above.
+func classifyConvergedHeadFailure(
+	t *testing.T, a, b *entitysdk.AppPeer, head hash.Hash, missing []string,
+) string {
+	t.Helper()
+	if head.IsZero() {
+		return "head is zero — nothing to walk."
+	}
+	// The version entity's Root is the trie; read it from whichever peer
+	// has it (they agree on the head, so either will do).
+	var root hash.Hash
+	for _, ap := range []*entitysdk.AppPeer{a, b} {
+		ent, ok := ap.RawContentStore().Get(head)
+		if !ok {
+			continue
+		}
+		ver, err := types.RevisionEntryDataFromEntity(ent)
+		if err != nil {
+			continue
+		}
+		root = ver.Root
+		break
+	}
+	if root.IsZero() {
+		return "VERDICT INCONCLUSIVE — the agreed head is not resolvable to a version/root on " +
+			"either peer, which is its own finding: both advanced to a head neither can read."
+	}
+
+	committed := tree.CollectAllBindings(a.RawContentStore(), root, "")
+	if len(committed) == 0 {
+		committed = tree.CollectAllBindings(b.RawContentStore(), root, "")
+	}
+
+	var inTrie, notInTrie []string
+	for _, m := range missing {
+		// `missing` entries read "alice missing <path>" / "bob missing <path>".
+		path := m
+		if i := strings.LastIndex(m, " "); i >= 0 {
+			path = m[i+1:]
+		}
+		found := false
+		for k := range committed {
+			if strings.HasSuffix(path, strings.TrimPrefix(k, "/")) || strings.HasSuffix(k, path) {
+				found = true
+				break
+			}
+		}
+		if found {
+			inTrie = append(inTrie, path)
+		} else {
+			notInTrie = append(notInTrie, path)
+		}
+	}
+
+	t.Logf("agreed head %s → trie root %s, committing to %d bindings", head, root, len(committed))
+	for k := range committed {
+		t.Logf("  trie: %s", k)
+	}
+
+	switch {
+	case len(inTrie) > 0 && len(notInTrie) == 0:
+		return fmt.Sprintf("VERDICT (A) — APPLY/PROJECTION GAP. The agreed head's trie COMMITS to "+
+			"%v, and those paths are not bound in the live tree. The version DAG is ahead of the "+
+			"tree: a head was adopted without its bindings being projected. Route against the "+
+			"merge apply path, NOT against delivery — both peers already have the head.", inTrie)
+	case len(notInTrie) > 0 && len(inTrie) == 0:
+		// **Split (B) again on one observable: does the peer that MADE
+		// the write still hold it?** "Never captured" and "captured then
+		// wiped" both leave the path out of the trie, and they are
+		// different bugs in different files — so the verdict must not
+		// name a suspect it has not separated.
+		//
+		//   B1 · the writer still holds it → the version DAG never
+		//        learned about the write at all. Auto-version's capture
+		//        side; nothing removed anything.
+		//   B2 · nobody holds it → it was captured and then removed from
+		//        the live tree. That is the F10 bug class, and
+		//        ext/revision/merge.go::applyBindings is the live
+		//        instance: it TreeRemoves every binding under the prefix
+		//        and re-sets only what the merged tries carry, so a
+		//        write in flight across that window is in neither. The
+		//        FAST-FORWARD path was fixed for exactly this and the
+		//        three-way path was not.
+		var orphaned, wiped []string
+		for _, path := range notInTrie {
+			if a.Store().Has(path) || b.Store().Has(path) {
+				orphaned = append(orphaned, path)
+			} else {
+				wiped = append(wiped, path)
+			}
+		}
+		if len(wiped) > 0 {
+			return fmt.Sprintf("VERDICT (B2) — CAPTURED THEN WIPED. %v are in neither peer's "+
+				"live tree and in no version. Something removed them. Prime suspect: "+
+				"ext/revision/merge.go::applyBindings — it TreeRemoves every binding under the "+
+				"prefix and re-sets only what the merged tries carry, so a write in flight across "+
+				"that window survives nowhere. The F10 bug class, fixed in fastForward and not in "+
+				"the three-way path a bidirectional burst takes.", wiped)
+		}
+		return fmt.Sprintf("VERDICT (B1) — NEVER CAPTURED. %v are still held by the peer that "+
+			"WROTE them and appear in NO version, so the counterpart has no way to learn of them: "+
+			"the version DAG is the only channel and it never carried them. This is auto-version's "+
+			"capture side, NOT a merge wipe — a wipe would have taken the writer's copy too, and "+
+			"it did not. Terminal rather than transient: the head is settled, so nothing further "+
+			"is emitted and no later merge can recover a write no version ever named.", orphaned)
+	case len(inTrie) > 0 && len(notInTrie) > 0:
+		return fmt.Sprintf("VERDICT MIXED — committed-but-unbound %v AND uncommitted-but-live %v. "+
+			"Both gaps in one run; do not collapse them into one report.", inTrie, notInTrie)
+	default:
+		return "VERDICT INCONCLUSIVE — no missing path could be classified against the trie."
 	}
 }

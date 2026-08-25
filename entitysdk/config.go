@@ -426,6 +426,55 @@ type LocalFilesConfig struct{ Disabled bool }
 // Zero value = enabled with defaults. Pass &SubscriptionConfig{Disabled: true}
 // to opt out. Knobs like per-peer delivery limits or a debug logger
 // can be added here without breaking ExtensionsConfig.
+// DefaultDeliveryQueueSize is the SDK's total async delivery buffer
+// capacity, and it deliberately differs from core-go's.
+//
+// **core-go defaults to 65536 slots, eagerly allocated at
+// StartDelivery. Measured: 20.3 MB per peer, before the peer does
+// anything.** That is a sound default for a production process holding
+// ONE long-lived peer; it is the wrong one for a library, because the
+// SDK does not know how many peers its embedder will hold. A test
+// binary building ~100 of them paid ~2 GB — and none of it came back,
+// because `subscription.Engine` has no Stop and nothing releases the
+// ring when a peer closes. Both halves routed to core-go.
+//
+// 4096 is chosen against the sizing rationale core-go states for its
+// own default — "sized for 1000+-file mount bursts" — leaving 4× margin
+// over that documented worst case at **6% of the memory** (~1.2 MB per
+// peer). It is not a guess at a smaller number: it is the documented
+// requirement plus headroom.
+//
+// **Raise it on a peer that mounts large trees.** The queue drops when
+// full, it does not block, so an undersized queue loses notifications
+// silently under load. Depth buys time, not throughput — it will not
+// fix the delivery-saturation cliff documented in STATUS.
+const DefaultDeliveryQueueSize = 4096
+
 type SubscriptionConfig struct {
 	Disabled bool
+
+	// DeliveryQueueSize is the TOTAL async delivery buffer capacity
+	// across all shards. Zero takes DefaultDeliveryQueueSize (4096),
+	// NOT core-go's 65536 — see that constant for the measurement and
+	// the reasoning.
+	//
+	// That default is sized for a production peer absorbing a 1000+-file
+	// mount burst, and for one long-lived peer it is the right call. It
+	// is the wrong call for a process that holds many peers at once: a
+	// test binary building ~100 of them pays ~2 GB before any of them
+	// does anything, and **none of it comes back**, because
+	// `subscription.Engine` has no Stop and nothing releases the ring
+	// when a peer closes (routed to core-go).
+	//
+	// Sizing it down trades burst absorption for memory: a full queue
+	// DROPS, it does not block, so an undersized queue loses
+	// notifications silently under load. Do not shrink it on a peer
+	// that mounts large trees.
+	DeliveryQueueSize int
+
+	// DeliveryWorkers is the number of delivery shards. Zero resolves
+	// to min(NumCPU, core-go's shard cap) at StartDelivery. Each shard
+	// owns one goroutine and one queue, and DeliveryQueueSize is split
+	// across them — so this multiplies goroutines, not memory.
+	DeliveryWorkers int
 }

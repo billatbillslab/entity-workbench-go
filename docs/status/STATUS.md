@@ -12,26 +12,42 @@ _Updated: 2026-08-19 · public: v0.8.0 (master) · working branch: `dev` (ahead 
 **Avalonia: 57/57 headless** (`make -C avalonia test`), plus `make smoke-xvfb-handlers` green
 under real X11 + software Skia — 21 handlers walked, exit 0.
 
-**One flake, named rather than buried — and its signature is a lead, not noise.**
-`TestE2E_Bidirectional_BurstWrites_NoFS` failed in **2 of 4** full-suite runs on 2026-08-19, and
-passed 3/3 when run isolated. Both failures were byte-identical in shape:
+**The burst flake is diagnosed, and it is a terminal write loss — not a flake and not saturation.**
+`TestE2E_Bidirectional_BurstWrites_NoFS`, reproduced 5× under load (0-in-10 idle). The
+`heads_equal=true` signature the last session flagged as a lead was one, and it pointed here:
 
-```
-alice has 10 / 10 expected entries; bob has 9 / 10
-  bob missing archives/notes/a-4.md
-CONVERGENCE FAILED (heads_equal=true) — alice=ecf-sha256:… bob=ecf-sha256:…   (same hash)
-```
+- The heads AGREE, and the agreed head's trie commits to **9 of 10** paths. The lost path is in
+  **no version at all**.
+- **The peer that WROTE it still holds it; the counterpart never gets it.** That discriminator
+  rules out a merge wipe — a wipe takes the writer's copy too. The write was **never captured**.
+- Always the **last write** of one peer's burst, symmetric between peers, and **terminal**: the
+  head is settled, nothing further is emitted, and no later merge can recover a write no version
+  ever named.
 
-**`heads_equal=true` with 9/10 entries is the part worth chasing.** The two peers agree on the
-revision head while disagreeing on the entry set, which is not what a plain delivery drop looks
-like — a dropped notification should leave the heads *different*. Either the test samples entries
-before a final sync settles while comparing heads after (a test-side race, most likely), or a head
-can be reached that does not cover every entry it commits to (a real one). **Nobody has looked
-yet**, and it is filed here rather than absorbed into "the known saturation item" because that
-label would explain away the one observation that does not fit it.
+**core-go's own source names this failure and says it was fixed.** `ext/revision/auto_version.go`'s
+CAS-retry comment calls it *"the symmetric last-burst-write loss pattern… diagnosed by the
+workbench in the F10 part-3 results."* It still reproduces. The structural hole is that **every
+give-up path in `fire()` recovers via "the next sync-hook event will fire() again", and the last
+write of a burst has no next event** — which is exactly why it is always the last write and never
+an interior one, and why it is the write under maximum contention.
 
-It builds its peers directly via `entitysdk` and is untouched by this session's work. It is
-load-dependent, so `make test-each` reproduces it far more readily than a targeted run.
+Routed: `docs/architecture/reviews/CORE-GO-LAST-BURST-WRITE-LOSS-2026-08-20.md`. **Not fixed here**
+— the reproducer builds its peers straight through `entitysdk` with no filesystem, no localfiles
+and no workbench model layer, so the workbench is not in the failing path.
+
+**What we could not determine, recorded rather than guessed:** which give-up path fires.
+`AutoVersioner.debugf` would say in one line, but its output never appeared in ours — the
+`PeerConfig.DebugLog` we set does not reach the revision AutoVersioner's logger. Asked for
+alongside the main finding. The §3 argument holds whichever path fires, and it is routed as that
+rather than as a measurement (D19/AP10).
+
+**The harness now classifies at the moment of failure** instead of leaving it to a reader.
+`classifyConvergedHeadFailure` walks the agreed head's trie and prints one of four verdicts —
+(A) apply/projection gap, (B1) never captured, (B2) captured then wiped, or inconclusive — so the
+next occurrence arrives as evidence. The old message printed `heads_equal=%v` on one line, which
+read as a paradox and got the failure shelved under a label that could not explain it.
+**`applyBindings` was our prime suspect from source reading and the measurement ruled it out** for
+this failure; the B1/B2 split is what keeps that honest.
 
 **Latest arch packet read: `ROUTING-2026-08-19-j`** (arch `05faaa5`, carrying **REGISTRY 1.18**);
 `-19-i` at arch `3dd5800` (**REGISTRY 1.17**) read in the same pass. browser-rust's
@@ -1104,14 +1120,17 @@ first.
   an independent transport failure mode; captured as an observation, the test passes.
 - Selection-state reader hardening: replace the silent legacy-tolerance path in
   `entitysdk/workspace_state.go` with log-on-violation or reject-on-decode.
-- **An ephemeral shell silently re-namespaces a persistent store.** `entity-shell -storage sqlite`
-  with no `-identity` generates a fresh keypair per invocation, so every process writes under a
-  new peer-id in the same DB and nothing written by the last run is visible to the next. Found
-  driving the `name` verb end-to-end (§7); it affects every persistent surface, not names. The DB
-  accretes a full bootstrap per run. Candidate fixes: derive+persist a keypair alongside the
-  store, or refuse `-storage sqlite` without `-identity` the way sqlite-without-storage-path is
-  already refused. **The second is honest and cheap**; the first is friendlier and needs a home
-  for the key. Not decided.
+- ~~**An ephemeral shell silently re-namespaces a persistent store.**~~ — **FIXED 2026-08-20**
+  (`6c72dfa`). `-storage sqlite` with no `-identity` now uses the `default` identity, created on
+  first use: a plain nameable one that shows up in `identity ls`, with the store at the
+  GUIDE-PERSISTENCE §1.1 path derived from it. Create-if-absent and never overwrite (regenerating
+  over an existing keypair would orphan everything under the old peer-id — the same
+  re-namespacing, made permanent); the 409-exists race resolves to the winner's keypair rather
+  than an error. **Memory storage keeps its ephemeral keypair, with a control arm pinning that** —
+  nothing survives the process either way. The old `-storage sqlite` + no-path + no-identity
+  refusal is dropped and its pin replaced rather than deleted: it guarded against an orphan store
+  and missed the case where the *identity*, not the path, was unknown. Verified through
+  `bin/entity-shell` across separate processes, which is the only place the bug existed.
 - **Registry restart baseline (core-go, observed 2026-08-19).** A peer with NO registry extension
   and NO identity ceremony still accretes **+2 entities per restart** of the same SQLite DB
   (paths stay flat). Measured as the control arm in

@@ -451,6 +451,21 @@ func buildPeerOptions(cfg PeerConfig) (*builtOptions, error) {
 			peer.WithCloseFunc(cancelEngine),
 		)
 
+		// Size the delivery ring here, at construction, because both
+		// setters are no-ops once StartDelivery has run — StartDelivery
+		// is what allocates. Left at core-go's default when unset; see
+		// SubscriptionConfig.DeliveryQueueSize for what that default
+		// costs (~20 MB per peer, eagerly) and when it is worth moving.
+		queueSize := DefaultDeliveryQueueSize
+		if sc := cfg.Extensions.Subscription; sc != nil {
+			if sc.DeliveryQueueSize > 0 {
+				queueSize = sc.DeliveryQueueSize
+			}
+			if sc.DeliveryWorkers > 0 {
+				engine.SetDeliveryWorkers(sc.DeliveryWorkers)
+			}
+		}
+		engine.SetDeliveryQueueSize(queueSize)
 		built.subEngine = engine
 		built.subEvents = subEvents
 		built.subCancel = cancelEngine
@@ -1093,6 +1108,33 @@ func (a *AppPeer) Close() error {
 	if rdv != nil {
 		rdv.Close()
 	}
+
+	// **Stop the subscription engine's notify loop.** This field has
+	// existed since the engine landed, with a doc comment saying it is
+	// cancelled "on AppPeer.Close" — and nothing ever called it. It was
+	// assigned in one place and read in none.
+	//
+	// The cost was not one goroutine. The engine holds the store and the
+	// location index, so a peer that was Closed stayed wholly reachable:
+	// its content store, its index, every entity it ever held. In a test
+	// binary that builds a hundred peers and closes each one, that is the
+	// entire suite's data retained to the last test — measured at **3.9 GB
+	// of monotonic growth** across `shellcmd` with no large-file case in
+	// the run, RSS peaking on the final test and never falling.
+	//
+	// Cancelled BEFORE peer.Close, matching the rendezvous stop above:
+	// shut down the things that dispatch through the peer, then the peer.
+	//
+	// D7 (symmetric state — every start has a paired stop) and D9 (runtime
+	// accounting) both name this, and the reason neither caught it is that
+	// the pairing WAS written down. It was written in a comment instead of
+	// in code, which is the same "a named hazard with no gate is a
+	// comment" shape this repo has now hit three times.
+	if a.cancelSubEngine != nil {
+		a.cancelSubEngine()
+		a.cancelSubEngine = nil // idempotent: Close may be called twice
+	}
+
 	if err := a.peer.Close(); err != nil {
 		return WrapError(500, "close_failed", "peer close", err)
 	}

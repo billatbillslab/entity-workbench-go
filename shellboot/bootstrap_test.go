@@ -2,6 +2,7 @@ package shellboot
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -55,15 +56,45 @@ func TestBootstrap_SQLiteInMemory(t *testing.T) {
 	}
 }
 
-// TestBootstrap_SQLiteRequiresPathOrIdentity verifies the safety
-// check: -storage=sqlite with neither an explicit path nor an
-// identity name to derive from is rejected before it can land an
-// orphan store.
-func TestBootstrap_SQLiteRequiresPathOrIdentity(t *testing.T) {
+// TestBootstrap_SQLiteWithNoPathOrIdentityUsesTheDefault replaces
+// TestBootstrap_SQLiteRequiresPathOrIdentity, which asserted the
+// refusal this change deliberately removed. **The reversal is recorded
+// rather than the old test quietly deleted**, because the old behaviour
+// was defensible and the reason it changed is not obvious from the
+// diff.
+//
+// The refusal existed to stop an "orphan store" — a database landing
+// somewhere nobody chose. But the orphan it was guarding against is not
+// what happened: the caller who supplied `-storage-path` and no identity
+// sailed straight past it and got something worse, a store whose
+// contents were invisible to the next run because the peer-id changed
+// underneath it. The refusal covered the case where the path was
+// unknown and missed the case where the *identity* was.
+//
+// Both are now answered by the same default: NAME defaults to
+// `default`, the store lands at the GUIDE-PERSISTENCE §1.1 path derived
+// from it, and the peer-id is stable across runs. Nothing is orphaned —
+// the location is derived from a name an operator can see and reuse.
+//
+// Tier: contract pin.
+func TestBootstrap_SQLiteWithNoPathOrIdentityUsesTheDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
 	ctx := context.Background()
-	_, _, err := Bootstrap(ctx, Config{StorageKind: "sqlite"})
-	if err == nil {
-		t.Fatalf("expected error when storage=sqlite with no path or identity")
+	ap, _, err := Bootstrap(ctx, Config{StorageKind: "sqlite"})
+	if err != nil {
+		t.Fatalf("Bootstrap with neither path nor identity: %v\n"+
+			"This used to be refused to prevent an orphan store; it now derives "+
+			"~/.entity/peers/%s/store.db, which is not orphaned — the location comes from a "+
+			"name an operator can see and reuse", err, DefaultIdentityName)
+	}
+	defer ap.Close()
+
+	want := filepath.Join(home, ".entity", "peers", DefaultIdentityName, "store.db")
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("no store at the derived path %s (%v); the derivation is the whole reason the "+
+			"refusal could be dropped", want, err)
 	}
 }
 
@@ -186,5 +217,114 @@ func TestBootstrap_ANameDisclosingConfigDoesNotStopTheBoot(t *testing.T) {
 		got.NameFormatDispatch[0].BackendKinds[0] != types.BackendKindDNSTXT {
 		t.Errorf("the boot rewrote the operator's config (%+v); a resolver MUST NOT rewrite stored "+
 			"configuration as a side effect of reading it", got)
+	}
+}
+
+// TestBootstrap_SQLiteWithoutIdentityIsStableAcrossRuns is the
+// regression fence for the ephemeral-shell re-namespacing bug.
+//
+// **What was broken.** `entity-shell -storage sqlite` with no
+// `-identity` generated a fresh keypair per invocation. The tree is
+// peer-id-namespaced end to end, so every run wrote under a different
+// namespace of the same database and nothing the previous run stored was
+// visible to the next. It presented to a user as "persistence does not
+// work", it affected **every** persistent surface rather than one
+// feature, and the database accreted a full bootstrap per run on top.
+//
+// **Why no existing test saw it.** A peer-id only changes across a
+// PROCESS, and every suite here builds its peers in-process and keeps
+// them. The bug was found driving the shipped binary across separate
+// invocations (D10 — headless/in-process green is necessary, not
+// sufficient). This test is the cheap standing version of that: two
+// Bootstraps, one HOME, no identity named, asserting the peer-id is the
+// same both times.
+//
+// It asserts the PEER-ID rather than "a file exists", because the
+// peer-id is the thing the namespace is keyed on — a fix that created an
+// identity and then failed to bind it would pass a file check and leave
+// the bug exactly where it was.
+//
+// Tier: real-session.
+func TestBootstrap_SQLiteWithoutIdentityIsStableAcrossRuns(t *testing.T) {
+	// Redirect the identity + peer directories into the test's own HOME
+	// so this never reads or writes the developer's real ~/.entity.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	ctx := context.Background()
+	cfg := Config{StorageKind: "sqlite", StoragePath: filepath.Join(t.TempDir(), "store.db")}
+
+	ap1, _, err := Bootstrap(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Bootstrap (first run): %v", err)
+	}
+	first := ap1.PeerID()
+	if err := ap1.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	ap2, _, err := Bootstrap(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Bootstrap (second run): %v", err)
+	}
+	defer ap2.Close()
+	second := ap2.PeerID()
+
+	if first != second {
+		t.Fatalf("a persistent store came up under two different peer-ids across runs:\n"+
+			"  run 1: %s\n  run 2: %s\n"+
+			"The tree is peer-id-namespaced, so the second run cannot see anything the first "+
+			"wrote — and the database accretes a fresh bootstrap every time. A persistent store "+
+			"under a per-invocation keypair is not persistence.", first, second)
+	}
+	if first == "" {
+		t.Fatal("peer-id is empty on both runs; the comparison above would pass vacuously")
+	}
+
+	// The identity it used is a real, nameable one — an operator who
+	// never asked for an identity must still be able to see the one they
+	// got, name it in a later -identity, and delete it.
+	if _, err := entitysdk.LoadIdentity(DefaultIdentityName); err != nil {
+		t.Errorf("the default identity is not loadable by name (%v); a keypair an operator "+
+			"cannot see or name is one they cannot manage", err)
+	}
+}
+
+// TestBootstrap_MemoryStorageStaysEphemeral is the control arm for the
+// test above, and it is what keeps that fix from becoming "every peer
+// gets a durable on-disk identity now".
+//
+// An in-memory peer keeps its per-invocation keypair, and that is
+// coherent rather than an oversight: nothing survives the process
+// either way, so there is no state for a stable id to be the key to.
+// Creating an on-disk keypair for a peer that stores nothing would write
+// to a user's home directory for a run that asked to leave no trace.
+//
+// Tier: contract pin.
+func TestBootstrap_MemoryStorageStaysEphemeral(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	ctx := context.Background()
+	ap1, _, err := Bootstrap(ctx, Config{})
+	if err != nil {
+		t.Fatalf("Bootstrap (first): %v", err)
+	}
+	first := ap1.PeerID()
+	_ = ap1.Close()
+
+	ap2, _, err := Bootstrap(ctx, Config{})
+	if err != nil {
+		t.Fatalf("Bootstrap (second): %v", err)
+	}
+	defer ap2.Close()
+
+	if first == ap2.PeerID() {
+		t.Error("two in-memory peers came up under the SAME peer-id; the sqlite fix leaked into " +
+			"the ephemeral path, which now writes a durable keypair for a run that stores nothing")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".entity", "identities", DefaultIdentityName)); err == nil {
+		t.Errorf("an in-memory bootstrap created %s in the operator's home; a peer that persists "+
+			"nothing must not leave a keypair behind", DefaultIdentityName)
 	}
 }

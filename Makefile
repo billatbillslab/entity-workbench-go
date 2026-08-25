@@ -218,11 +218,11 @@ gui-test:
 # HOME, so it validates the ACTUAL product end to end and leaves nothing
 # behind. This is the thing to run when you want to see where we are.
 #
-# It uses -identity deliberately: without one, entity-shell generates a
-# fresh keypair per invocation, so each command would write into a
-# different namespace of the same store and nothing would appear to
-# persist. That is a real rough edge (tracked in docs/status/STATUS.md);
-# the demo does not hide it, it just does the supported thing.
+# It names an -identity explicitly. That is no longer a workaround —
+# sqlite without one now uses the "default" identity and persists
+# correctly — but a scripted tour should show the peer it is operating
+# as rather than rely on a default, and the demo is also the place a
+# reader learns the flag exists.
 .PHONY: demo
 demo: shell-build
 	@bash tools/demo.sh "$(BIN_DIR)/entity-shell"

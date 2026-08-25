@@ -30,11 +30,18 @@ Flags:
                       extension namespace and is not a peer alias.
   -json               Emit results as JSON (one-shot mode only)
   -storage KIND       Storage backend: "memory" (default) or "sqlite"
-  -storage-path PATH  SQLite DB path. When -storage=sqlite and -identity
-                      NAME is set, defaults to ~/.entity/peers/NAME/store.db
-                      per GUIDE-PERSISTENCE.md §1.1. Use ":memory:" for an
-                      in-process SQL DB. Required when sqlite is used
-                      without -identity.
+  -storage-path PATH  SQLite DB path. Defaults to
+                      ~/.entity/peers/NAME/store.db per
+                      GUIDE-PERSISTENCE.md §1.1, where NAME is -identity
+                      or "default". Use ":memory:" for an in-process SQL
+                      DB.
+
+                      -storage=sqlite without -identity uses the
+                      "default" identity, creating it on first use. A
+                      persistent store needs a persistent peer-id: the
+                      tree is peer-id-namespaced, so a fresh keypair per
+                      run would write a namespace the next run cannot
+                      see.
   -listen ADDR        TCP listener for inbound peer connections,
                       e.g. ":9100" or "127.0.0.1:9100". When empty
                       the peer is local-only (no inbound dial).

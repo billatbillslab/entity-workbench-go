@@ -34,9 +34,16 @@ import (
 // avalonia/frontend/Program.cs BridgeConfig serializer).
 // ExtraPeerOptions is JSON-ignored (not serializable).
 type Config struct {
-	// Identity is the optional identity name bound to the peer. Empty
-	// means an ephemeral keypair. Non-empty resolves the on-disk
-	// identity bundle via entitysdk.IdentityBindingConfig.
+	// Identity is the optional identity name bound to the peer.
+	// Non-empty resolves the on-disk identity bundle via
+	// entitysdk.IdentityBindingConfig.
+	//
+	// Empty means an ephemeral keypair — EXCEPT under
+	// StorageKind == "sqlite", where Bootstrap substitutes
+	// DefaultIdentityName and creates it if absent. A persistent store
+	// under a per-invocation keypair is not persistence: the tree is
+	// peer-id-namespaced, so each run writes a namespace the next one
+	// cannot see. See Bootstrap.
 	Identity string `json:"identity"`
 
 	// LocalAlias is the alias under which the in-process peer is
@@ -51,10 +58,9 @@ type Config struct {
 	StorageKind string `json:"storage"`
 
 	// StoragePath is the SQLite path when StorageKind == "sqlite".
-	// Empty + Identity set → derived as
-	// ~/.entity/peers/{Identity}/store.db (GUIDE-PERSISTENCE §1.1).
-	// Use ":memory:" for an in-process SQL DB. Required for
-	// StorageKind == "sqlite" when Identity is empty.
+	// Empty → derived as ~/.entity/peers/{Identity}/store.db
+	// (GUIDE-PERSISTENCE §1.1), using DefaultIdentityName when Identity
+	// is empty. Use ":memory:" for an in-process SQL DB.
 	StoragePath string `json:"storage_path"`
 
 	// ListenAddr is the inbound TCP listener address (e.g.
@@ -139,15 +145,39 @@ func Bootstrap(ctx context.Context, cfg Config) (*entitysdk.AppPeer, *shellcmd.S
 		}
 	}
 
+	// **A persistent store needs a persistent peer-id, so sqlite without
+	// an identity gets the default one — created on first use.**
+	//
+	// This is a fix, not a convenience. Without an identity the peer
+	// generates a FRESH KEYPAIR PER INVOCATION, and the whole tree is
+	// peer-id-namespaced: every run wrote under a different namespace of
+	// the same database, so nothing the last run stored was visible to
+	// the next. It presented as "persistence is broken" and it affected
+	// every persistent surface — names, mounts, aliases, revisions — not
+	// one feature. Found driving the `name` verb end to end across
+	// separate processes, which is the only way to see it: a single
+	// in-process test never restarts, so the keypair never changes.
+	//
+	// The database was still accumulating a full bootstrap per run, so
+	// the cost was not merely invisible state — it was unbounded growth
+	// nobody could account for.
+	//
+	// Ephemeral storage keeps the ephemeral keypair. That is coherent:
+	// nothing survives the process either way, so there is no state for
+	// a stable id to be the key to.
+	if cfg.StorageKind == "sqlite" && cfg.Identity == "" {
+		if err := ensureDefaultIdentity(); err != nil {
+			return nil, nil, err
+		}
+		cfg.Identity = DefaultIdentityName
+	}
+
 	// SQLite path derivation: when -storage=sqlite and -storage-path
 	// is empty, derive ~/.entity/peers/{Identity}/store.db per
-	// GUIDE-PERSISTENCE §1.1. Identity is required for the derivation;
-	// without it the caller must supply an explicit path.
+	// GUIDE-PERSISTENCE §1.1. Identity is always set by the block above
+	// for sqlite, so this no longer has an empty-identity door.
 	resolvedStoragePath := cfg.StoragePath
 	if cfg.StorageKind == "sqlite" && resolvedStoragePath == "" {
-		if cfg.Identity == "" {
-			return nil, nil, fmt.Errorf("shellboot: storage=sqlite requires storage-path or identity (to derive ~/.entity/peers/{NAME}/store.db)")
-		}
 		p, err := entitysdk.DefaultPeerStoragePath(cfg.Identity)
 		if err != nil {
 			return nil, nil, fmt.Errorf("shellboot: resolve storage path: %w", err)
@@ -256,4 +286,45 @@ func Bootstrap(ctx context.Context, cfg Config) (*entitysdk.AppPeer, *shellcmd.S
 	ws.NotificationIngest = ingestHandler
 
 	return ap, ws, nil
+}
+
+// DefaultIdentityName is the identity a persistent peer uses when the
+// operator named none.
+//
+// A plain name rather than a derived or hidden one, because it appears
+// in `identity ls`, in `~/.entity/identities/`, and in the derived
+// store path `~/.entity/peers/default/store.db`. An operator who never
+// asked for an identity should still be able to see the one they got,
+// name it in a later `-identity default`, and delete it.
+const DefaultIdentityName = "default"
+
+// ensureDefaultIdentity creates the default identity if it is absent,
+// and is a no-op when it exists.
+//
+// **Create-if-absent, never overwrite.** A keypair is the peer's
+// identity: regenerating one over an existing file would orphan every
+// entity written under the old peer-id — the same silent re-namespacing
+// this whole change exists to fix, made permanent. So an existing
+// identity is loaded, and only a genuine absence is filled.
+//
+// The 409-exists race is treated as success on purpose. Two shells
+// starting at once both see "absent" and both create; one wins, and the
+// loser must use the winner's keypair rather than fail. Returning an
+// error there would make concurrent startup a coin flip.
+func ensureDefaultIdentity() error {
+	if _, err := entitysdk.LoadIdentity(DefaultIdentityName); err == nil {
+		return nil
+	} else if !entitysdk.IsNotFound(err) {
+		// A bundle directory, a permissions problem, a corrupt file —
+		// anything that is not "absent" is a real failure, and creating
+		// over it is exactly what must not happen.
+		return fmt.Errorf("shellboot: load the default identity: %w", err)
+	}
+	if _, err := entitysdk.CreateIdentity(DefaultIdentityName); err != nil {
+		if entitysdk.IsConflict(err) {
+			return nil // lost the race; the winner's keypair is the one to use
+		}
+		return fmt.Errorf("shellboot: create the default identity: %w", err)
+	}
+	return nil
 }
