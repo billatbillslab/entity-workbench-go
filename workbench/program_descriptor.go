@@ -120,6 +120,39 @@ const (
 	TickEventDriven = "event-driven"
 )
 
+// Shard forms (proposal §4/§4a). `static-k` is the Option-B floor that lands now
+// (k frozen at authoring); `range` is the dynamic-k upgrade that waits on
+// `compute/range`. This host drives static-k only.
+const (
+	ShardStaticK = "static-k"
+	ShardRange   = "range"
+)
+
+// Orchestration models (proposal §4a). `host-managed` is the floor — the host
+// loops the k evals and drives the stitch, synchronous/bounded failure, any
+// peer. `continuation-managed` is the ceiling — fork/barrier/stitch as protocol
+// (join + deliver_to), which travels but needs ext/continuation and the
+// join-failure policy that is still open (§4b). This host drives host-managed
+// only; continuation-managed is item 2.
+const (
+	OrchestrationHostManaged         = "host-managed"
+	OrchestrationContinuationManaged = "continuation-managed"
+)
+
+// Stitch owners (proposal §4 Q4 — who authors the boundary bytes). This is the
+// descriptive owner the descriptor names per model; it is provably identical
+// across owners (parallel == serial == unsharded), but naming it is the ruling.
+//   - `compute-gather` — a program-owned compute expression (the concat-free
+//     gather), which returns the boundary to the program's own compute. This is
+//     what the generic host drives: the stitch is just another eval, so the host
+//     stays program-blind.
+//   - `host` — Go host code concatenates (Axis-1's original form); a generic host
+//     cannot do this without per-program knowledge, so it is not the host floor.
+const (
+	StitchOwnerComputeGather = "compute-gather"
+	StitchOwnerHost          = "host"
+)
+
 // ProgramPort is `app/program/port`.
 type ProgramPort struct {
 	Name    string `cbor:"name"`
@@ -158,6 +191,73 @@ type ProgramTick struct {
 	OpCost   uint64 `cbor:"op_cost,omitempty"`
 }
 
+// ProgramShard is `app/program/shard` — the sharding declaration (proposal
+// §2/§4/§4a). Absent (nil) means the program is unsharded and the base mount
+// contract applies (plain eval → put). Present means the host runs the sharded
+// tick: k evals with a fresh budget each, then a stitch.
+//
+// ─── The build finding: arch's schema declares POLICY, not the ARTIFACTS ────
+//
+// Arch's `app/program/shard` (proposal §2) is {form, orchestration, k, n_field,
+// stitch_owner}. Building the host against it surfaced the same gap the base
+// descriptor already hit with step (the path-vs-hash finding): those five fields
+// say *how* to shard and *who* owns the boundary, but not *what the host evals*.
+// A host cannot eval a policy. The static-k floor is a family of k pre-authored
+// shard expressions plus a stitch expression (proposal §4 "k hashes, k frozen at
+// authoring"), and the host needs their evaluable PATHS — none of which the
+// schema carries. So, exactly as with Step/InitialState, we add the addressable
+// artifacts alongside the policy:
+//
+//	Shards       — the k shard expression paths (each a self-wrapping fragment)
+//	FragmentBase — where the host writes fragment j before the stitch reads it
+//	Stitch       — the stitch expression path (reads k fragments → state entity)
+//
+// Reported to arch as a descriptor finding (see docs/architecture/reviews/). It
+// is additive; the policy fields are unchanged.
+//
+// ─── Why the shard expressions self-wrap into fragment entities ─────────────
+//
+// The host's whole falsifiable claim is that it names no program symbol. Its one
+// rule is `put(path, eval(expr))` — it relocates whatever entity an eval
+// produces, never decoding it. A sharded tick keeps that rule intact ONLY if the
+// shard expression itself Constructs a field-accessible fragment entity (so the
+// gather stitch can `lookup/tree` + `field` it): the host writes the fragment
+// verbatim, exactly as it already writes the step result. If the host had to wrap
+// a bare array into a fragment, it would need the field name — program knowledge.
+// So self-wrapping is not an authoring nicety; it is what keeps the host blind.
+type ProgramShard struct {
+	// Form — "static-k" (the floor) or "range" (dynamic-k upgrade). Host drives
+	// static-k only.
+	Form string `cbor:"form"`
+
+	// Orchestration — "host-managed" (the floor) or "continuation-managed" (the
+	// ceiling, item 2). Host drives host-managed only.
+	Orchestration string `cbor:"orchestration"`
+
+	// K — the frozen shard count (static-k form). len(Shards) MUST equal K.
+	K uint64 `cbor:"k"`
+
+	// NField — the state field giving N, for the dynamic-k (range) form. Unused
+	// by static-k (k is frozen, boundaries baked into the shard/stitch exprs).
+	NField string `cbor:"n_field,omitempty"`
+
+	// StitchOwner — who authors the boundary bytes (§4 Q4). "compute-gather" is
+	// the program-owned form this host drives; "host" is the Go-concat form.
+	StitchOwner string `cbor:"stitch_owner,omitempty"`
+
+	// Shards — the k shard expression paths (the build finding). Each evals to a
+	// self-wrapping fragment entity the host writes under FragmentBase.
+	Shards []string `cbor:"shards"`
+
+	// FragmentBase — the path prefix the host writes fragment j to
+	// (`{FragmentBase}/frag{j}`), where the stitch reads them. The build finding.
+	FragmentBase string `cbor:"fragment_base"`
+
+	// Stitch — the stitch expression path: reads the k fragments and produces the
+	// whole state entity, which the host writes to StatePath. The build finding.
+	Stitch string `cbor:"stitch"`
+}
+
 // ProgramDescriptor is `app/program/interface` — the whole manifest.
 //
 // Step and InitialState are evaluable/readable PATHS, not hashes — see the
@@ -180,6 +280,10 @@ type ProgramDescriptor struct {
 	InputPorts  []ProgramPort `cbor:"input_ports"`
 	OutputPorts []ProgramPort `cbor:"output_ports"`
 	Tick        ProgramTick   `cbor:"tick"`
+
+	// Shard is the optional sharding declaration (proposal §2). Absent = the base
+	// mount contract (plain eval → put). Present = the host runs the sharded tick.
+	Shard *ProgramShard `cbor:"shard,omitempty"`
 }
 
 // Validate checks the descriptor is self-consistent before a host acts on it.
@@ -225,6 +329,49 @@ func (d *ProgramDescriptor) Validate() error {
 		if err := p.validate("output"); err != nil {
 			return err
 		}
+	}
+	if d.Shard != nil {
+		if err := d.Shard.validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validate checks the shard block is self-consistent. It does NOT reject forms
+// or orchestration models this host cannot drive — a descriptor may declare a
+// range/continuation-managed shard and still be valid; whether a given host can
+// mount it is the host's admission call (program_host.go), not the descriptor's.
+// The descriptor's job is only structural integrity.
+func (s *ProgramShard) validate() error {
+	switch s.Form {
+	case ShardStaticK:
+		if s.K == 0 {
+			return fmt.Errorf("descriptor: static-k shard needs k >= 1")
+		}
+		if uint64(len(s.Shards)) != s.K {
+			return fmt.Errorf("descriptor: static-k shard declares k=%d but %d shard paths", s.K, len(s.Shards))
+		}
+		if s.Stitch == "" {
+			return fmt.Errorf("descriptor: static-k shard needs a stitch path")
+		}
+		if s.FragmentBase == "" {
+			return fmt.Errorf("descriptor: static-k shard needs a fragment_base")
+		}
+	case ShardRange:
+		// The dynamic-k form is declarable but this host cannot drive it yet
+		// (waits on compute/range). Structural check only: it names no static k.
+	case "":
+		return fmt.Errorf("descriptor: shard block has no form")
+	default:
+		return fmt.Errorf("descriptor: unknown shard form %q", s.Form)
+	}
+	switch s.Orchestration {
+	case OrchestrationHostManaged, OrchestrationContinuationManaged:
+	case "":
+		return fmt.Errorf("descriptor: shard block has no orchestration")
+	default:
+		return fmt.Errorf("descriptor: unknown shard orchestration %q", s.Orchestration)
 	}
 	return nil
 }

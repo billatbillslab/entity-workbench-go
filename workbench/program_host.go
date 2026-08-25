@@ -21,14 +21,23 @@ package workbench
 //	     eval(d.step) → put d.state_path                          # plain; NO shard
 //	     refresh each output port                                 # projections
 //
-// **The base contract does not shard.** Arch ruled (§1) that telling a harness
-// to derive k and shard an opaque IR was a compiler pass in a harness's clothes:
-// a shard is a distinct baked expression (the range lowers to a literal index
-// array), the instantiated size is baked into the IR as literals, and there is
-// no `range` primitive to make N a runtime quantity. Sharding returns as the
-// opt-in shard-range-port extension when `compute/range` lands. Phase 1 needs
-// none of it — Snake 8×8, Life 16×16 and Asteroids ~24 slots are all under the
-// 100k budget. Do not add sharding here speculatively.
+// **The base contract does not shard** — an unsharded descriptor is plain
+// eval → put. Arch's original §1 ruling forbade the host deriving k and rewriting
+// an opaque IR, and that still holds: the host never rewrites a `map`. But the
+// Q5 reversal (HANDOFF-2026-07-18-…-rulings §2) cleared the *static-k Option-B
+// floor* to land now, un-gated from `range`: a sharded descriptor carries a
+// pre-authored family of k shard expressions plus a stitch expression (all baked
+// at authoring, k frozen), and the host only LOOPS them — k evals + one stitch
+// eval + one put. No IR rewriting, no derived k, no `range`. That is the sharded
+// tick below (tickShardedOnce). Phase-1's three product programs (Snake 8×8,
+// Life 16×16, Asteroids ~24 slots) are all under the 100k budget and mount
+// unsharded; sharding is exercised by a deliberately-oversized program past the
+// budget cliff (AuthorLifeSharded at 32×32).
+//
+// The host drives the FLOOR only: static-k form, host-managed orchestration, a
+// program-owned (compute-gather) stitch. A descriptor that declares the `range`
+// form or the continuation-managed model is refused at admission with the reason
+// — those are the dynamic-k upgrade and item 2, declared but not yet driven here.
 
 import (
 	"fmt"
@@ -92,6 +101,14 @@ type Host struct {
 	doneCh chan struct{}
 
 	tickInterval time.Duration
+
+	// parallelShards selects concurrent shard evaluation for a sharded program.
+	// Defaults to true — parallelism is the whole point of the floor, and shard
+	// evals are pure reads (Axis-1 §4.3: live frames make them side-effect-free),
+	// so they fan out deterministically (each fragment lands in its own path;
+	// the stitch reads them in declared order). The serial path exists so a test
+	// can pin parallel == serial. Ignored for an unsharded program.
+	parallelShards bool
 }
 
 // Mount reads the descriptor at descriptorPath and returns a stopped, seeded
@@ -117,10 +134,11 @@ func Mount(ap *entitysdk.AppPeer, descriptorPath string) (*Host, error) {
 	}
 
 	h := &Host{
-		ap:     ap,
-		desc:   desc,
-		ports:  make(map[string]PortValue, len(desc.OutputPorts)),
-		status: HostStopped,
+		ap:             ap,
+		desc:           desc,
+		ports:          make(map[string]PortValue, len(desc.OutputPorts)),
+		status:         HostStopped,
+		parallelShards: true,
 	}
 	if desc.Tick.Mode == TickClockDriven {
 		h.tickInterval = time.Second / time.Duration(desc.Tick.RateHint)
@@ -137,14 +155,33 @@ func Mount(ap *entitysdk.AppPeer, descriptorPath string) (*Host, error) {
 	return h, nil
 }
 
-// admit checks every declared shape against the shapes this host can drive.
-// A host that lacks a shape refuses the whole program rather than half-render
-// it — the openness of the vocabulary is only transfer-safe because of this.
+// admit checks every declared shape against the shapes this host can drive, and
+// — if the program is sharded — that the shard mode is one this host drives.
+// A host that lacks a shape or a shard mode refuses the whole program rather than
+// half-render it: the openness of the vocabulary is only transfer-safe because of
+// this, and the same rule extends to sharding (never a half-mount).
 func (h *Host) admit() error {
 	for _, p := range append(append([]ProgramPort{}, h.desc.InputPorts...), h.desc.OutputPorts...) {
 		if !DriverSupports(p.Shape) {
 			return fmt.Errorf("unsupported shape %q on port %q (this host drives: %v)",
 				p.Shape, p.Name, SupportedShapes())
+		}
+	}
+	if s := h.desc.Shard; s != nil {
+		// The floor this host drives: static-k, host-managed, program-owned
+		// stitch. Anything else is declared-but-not-driven-here — refuse with the
+		// reason, don't half-mount.
+		if s.Form != ShardStaticK {
+			return fmt.Errorf("shard form %q not driven by this host (drives: %q — %q is the dynamic-k upgrade, waits on compute/range)",
+				s.Form, ShardStaticK, ShardRange)
+		}
+		if s.Orchestration != OrchestrationHostManaged {
+			return fmt.Errorf("shard orchestration %q not driven by this host (drives: %q — %q is the transferable ceiling, waits on the join-failure policy)",
+				s.Orchestration, OrchestrationHostManaged, OrchestrationContinuationManaged)
+		}
+		if s.StitchOwner != "" && s.StitchOwner != StitchOwnerComputeGather {
+			return fmt.Errorf("shard stitch_owner %q not driven by this host (drives: %q — a generic host cannot own a %q stitch without per-program code)",
+				s.StitchOwner, StitchOwnerComputeGather, StitchOwnerHost)
 		}
 	}
 	return nil
@@ -210,11 +247,24 @@ func (h *Host) eval(path string) (string, cbor.RawMessage, error) {
 	return resp.Type, resp.Data, nil
 }
 
-// tickOnce runs one tick: eval the step, put the new state, refresh the
-// projections. Plain eval → put, per the §1 ruling. Returns false to stop the
-// loop (a fault).
+// tickOnce runs one tick and writes the new state, then refreshes the
+// projections. Two shapes, selected by the descriptor:
+//   - unsharded (Shard == nil): plain eval(step) → put(state), the base contract.
+//   - sharded (Shard != nil): k shard evals + a stitch eval → put(state), the
+//     host-managed floor (tickShardedOnce).
+//
+// Both bottom out on the same host rule — put an entity an eval produced, never
+// decode it — so the sharded path adds no program knowledge to the host.
+// Returns false to stop the loop (a fault).
 func (h *Host) tickOnce() bool {
-	typ, data, err := h.eval(h.desc.Step)
+	var typ string
+	var data cbor.RawMessage
+	var err error
+	if h.desc.Shard != nil {
+		typ, data, err = h.tickShardedOnce()
+	} else {
+		typ, data, err = h.eval(h.desc.Step)
+	}
 	if err != nil {
 		h.fault(err)
 		return false
@@ -237,6 +287,109 @@ func (h *Host) tickOnce() bool {
 	h.mu.Unlock()
 	h.notify()
 	return true
+}
+
+// tickShardedOnce runs one host-managed static-k sharded generation and returns
+// the stitched state entity's (type, data) — NOT yet written; tickOnce writes it,
+// so the sharded and unsharded paths share the one put.
+//
+//	for j in 0..k:  put(fragment_base/frag{j}, eval(shards[j]))   # fresh budget each
+//	stitch:         eval(stitch)                                   # program-owned gather
+//
+// Each shard eval gets a fresh 100k budget (the budget boundary is the handler
+// invocation, not the expression tree — Axis-1 §4.1), which is the whole point:
+// a step that busts the budget unsharded ticks when split into k that each fit.
+// The k evals fan out in parallel when parallelShards is set — safe because a
+// shard eval performs no writes (side-effect-free, Axis-1 §4.3), and each
+// fragment is written to its OWN path, so completion order cannot reach the
+// output. The stitch reads the k fragments in declared order, so the boundary is
+// deterministic by construction (the parallel == serial == unsharded bar).
+//
+// The host writes each fragment verbatim (the shard expression self-wraps into a
+// fragment entity — program_descriptor.go's ProgramShard header) and never
+// decodes it. The stitch is just another eval, so the host stays program-blind.
+func (h *Host) tickShardedOnce() (string, cbor.RawMessage, error) {
+	s := h.desc.Shard
+	if err := h.evalShardFragments(s); err != nil {
+		return "", nil, err
+	}
+	// The program-owned stitch reads the k fragments and produces the whole state
+	// entity. Its result IS the new state — one more eval, no host stitching.
+	typ, data, err := h.eval(s.Stitch)
+	if err != nil {
+		return "", nil, fmt.Errorf("stitch: %w", err)
+	}
+	return typ, data, nil
+}
+
+// evalShardFragments evaluates the k shards and writes each fragment to its path.
+// Serial or parallel per parallelShards; both write the identical fragments, so
+// the stitch that follows is deterministic either way.
+func (h *Host) evalShardFragments(s *ProgramShard) error {
+	if !h.parallelShards {
+		for j, path := range s.Shards {
+			if err := h.evalShardFragment(s, j, path); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Parallel: eval the k shards concurrently (pure reads), collect the fragment
+	// entities, then write them in index order. Writing is serialized after the
+	// fan-out so the store sees the same put sequence as the serial path — the
+	// eval is what parallelizes, not the put.
+	type frag struct {
+		typ  string
+		data cbor.RawMessage
+		err  error
+	}
+	frags := make([]frag, len(s.Shards))
+	var wg sync.WaitGroup
+	for j, path := range s.Shards {
+		wg.Add(1)
+		go func(j int, path string) {
+			defer wg.Done()
+			frags[j].typ, frags[j].data, frags[j].err = h.eval(path)
+		}(j, path)
+	}
+	wg.Wait()
+	for j := range frags {
+		if frags[j].err != nil {
+			return fmt.Errorf("shard %d: %w", j, frags[j].err)
+		}
+	}
+	for j := range frags {
+		if err := h.putFragment(s, j, frags[j].typ, frags[j].data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// evalShardFragment evals one shard and writes its fragment (the serial path).
+func (h *Host) evalShardFragment(s *ProgramShard, j int, path string) error {
+	typ, data, err := h.eval(path)
+	if err != nil {
+		return fmt.Errorf("shard %d: %w", j, err)
+	}
+	return h.putFragment(s, j, typ, data)
+}
+
+// putFragment writes fragment j verbatim to {fragment_base}/frag{j}. The host
+// does not construct or decode the fragment — the shard expression produced a
+// self-wrapping entity; the host only relocates it, exactly as it relocates the
+// step result in the unsharded path.
+func (h *Host) putFragment(s *ProgramShard, j int, typ string, data cbor.RawMessage) error {
+	ent, err := entity.NewEntity(typ, data)
+	if err != nil {
+		return fmt.Errorf("shard %d: %w", j, err)
+	}
+	fragPath := fmt.Sprintf("%s/frag%d", s.FragmentBase, j)
+	if _, err := h.ap.PutEntity(fragPath, ent); err != nil {
+		return fmt.Errorf("shard %d: put fragment %s: %w", j, fragPath, err)
+	}
+	return nil
 }
 
 // refreshPorts materializes every output port. A port with a Source is a

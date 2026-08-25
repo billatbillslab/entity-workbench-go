@@ -201,6 +201,14 @@ public class App : Application
             (handle, _) => new ProgramPanel(handle, "snake"));
         PanelRegistry.Register("program-asteroids", "Asteroids (generic host)",
             (handle, _) => new ProgramPanel(handle, "asteroids"));
+
+        // The sharding floor on a screen: 64×64 Life, past the single-eval budget
+        // cliff, mounting only because the host runs the static-k shard family.
+        // Same ProgramPanel class as above — it never learns the program is
+        // sharded (the descriptor's shard block is the host's concern). This is
+        // the visual validation of the host-as-compute-kernel floor.
+        PanelRegistry.Register("program-life-big", "Life 64×64 (sharded host)",
+            (handle, _) => new ProgramPanel(handle, "life-big"));
     }
 
     public override void OnFrameworkInitializationCompleted()

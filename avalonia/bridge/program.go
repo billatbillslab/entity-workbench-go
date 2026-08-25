@@ -73,8 +73,16 @@ func programAuthorDispatch(name string, ap *entitysdk.AppPeer, root string) (str
 		return wb.AuthorSnake(ap, root, 0x5eed2)
 	case "asteroids":
 		return wb.AuthorAsteroids(ap, root, 0x5eed3)
+	case "life-big":
+		// The sharded floor, end to end to a screen: 64×64 arith Life — ~16× past
+		// the ~24×24 single-eval budget cliff, so it CANNOT mount unsharded. It
+		// mounts here only because the host runs the static-k host-managed shard
+		// family (k=8, program-owned gather stitch). Same ProgramPanel, same shape
+		// driver (text) — the panel never learns it is sharded; the descriptor's
+		// shard block is the host's concern alone.
+		return wb.AuthorLifeSharded(ap, root, 0x5eed4, 64, 64, 8)
 	default:
-		return "", fmt.Errorf("unknown program %q (have: life, snake, asteroids)", name)
+		return "", fmt.Errorf("unknown program %q (have: life, snake, asteroids, life-big)", name)
 	}
 }
 
