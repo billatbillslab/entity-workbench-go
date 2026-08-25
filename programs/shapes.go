@@ -151,14 +151,51 @@ func (d DisplayList) Verts(i int) [4][2]int64 {
 // actor's centre wraps around the world seam but its outline must be tiled at
 // the edge, and no renderer can infer that from vertices alone.
 
+// Input-shape wire field names — the Layer-2 ABI for what an input port's
+// payload entity is keyed by. A shape owns its field name (not the program, not
+// the port instance), so a blind host derives the field from the shape and
+// never hardcodes it (InputField below). Both impls MUST agree on these — they
+// are part of the byte-identical contract, the same as the direction enum.
+//
+// ─── Why these are pinned, and to THESE values ─────────────────────────────
+//
+// This bit us: the shipped programs, their seeds, and the browser host all
+// key a held-key snapshot as `keys` (asteroids.go's step reads
+// Field(input, "keys"); authoring.go seeds {"keys":0}; the browser hardcodes
+// "keys" and even documents the split in program_host/shapes.rs). But the
+// KeySet struct + EncodeKeySet below emitted `bits` — so the Avalonia bridge,
+// which is the one caller of EncodeKeySet, wrote a field the Asteroids step
+// never reads: its input silently did nothing. Pinned to the incumbent wire
+// truth, `keys`, which repairs Avalonia and makes the struct match reality.
+const (
+	KeySetField    = "keys" // app/shape/key-set payload field
+	DirectionField = "dir"  // app/shape/direction payload field
+)
+
+// InputField returns the canonical payload field name for an input shape, or ""
+// for a shape that is not a host-writable input. A host writes/reads THIS field;
+// deriving it from the shape is what keeps the field name out of per-host code.
+func InputField(shape string) string {
+	switch shape {
+	case ShapeKeySet:
+		return KeySetField
+	case ShapeDirection:
+		return DirectionField
+	default:
+		return ""
+	}
+}
+
 // KeySet is what a `key-set` port carries: a held-key bitmask snapshot.
 //
 // Lineage: the keyboard — but the HELD half of it. Typed characters are a
 // stream; held keys are a snapshot. Two shapes, one device, which is why the §8
 // input row wanted splitting: discrete events and held state are different
 // things and held state belongs on the snapshot side.
+//
+// The field is `keys` (KeySetField), not `bits`: see the field-name note above.
 type KeySet struct {
-	Bits uint64 `cbor:"bits" json:"bits"`
+	Keys uint64 `cbor:"keys" json:"keys"`
 }
 
 // Direction is what a `direction` port carries: a latched enum snapshot.
@@ -262,6 +299,48 @@ func DecodeDisplayList(pv PortValue) (DisplayList, error) {
 	return dl, nil
 }
 
+// ─── The display-list PRESENTATION contract ────────────────────────────────
+//
+// `display-list` carries geometry (quads) + a `kind` per quad (a colour index).
+// But whether a host STROKES the quads (a wireframe — Asteroids ran on a literal
+// vector display) or FILLS them (solid cells — a Life/Snake grid) is
+// presentation the geometry cannot express. Left to the host, it becomes a
+// guess: the browser hardcoded `fill:none`, so a grid of cells rendered as hollow
+// outlines. That is the same "host guesses presentation" gap the input
+// control-role work closed, one shape over.
+//
+// So a display-list port DECLARES its render mode in `scene.render`. The palette
+// (kind → colour) stays host-owned and themeable — a kind is an index into the
+// host's pen set, not a colour literal, so light/dark themes stay the host's
+// call. Only the fill/stroke intent, which the program knows and the host cannot
+// infer, is declared.
+const (
+	RenderStroke = "stroke" // wireframe — the default (vector-display lineage, Asteroids)
+	RenderFill   = "fill"   // solid quads — a filled grid (Life, Snake)
+
+	// DisplayKindBackground is the reserved "empty / nothing here" kind. A host
+	// MUST NOT draw it. The grid projections are DENSE (a quad per cell, empty
+	// cells carried as kind 0 — dense constant-geometry is what keeps them as
+	// cheap as the old text projection; see authoring.go), so kind 0 DOES reach
+	// the wire and skipping it is a required part of the contract, not an
+	// optimisation. (Asteroids, which is sparse, never emits kind 0, so the rule
+	// costs it nothing.)
+	DisplayKindBackground = uint64(0)
+)
+
+// DisplayRender returns a display-list port's declared render mode, defaulting
+// to RenderStroke (wireframe) when unset — so a port authored before this
+// contract (and Asteroids, which is wireframe) needs no `render` field. This is
+// the reference accessor a generic host mirrors.
+func DisplayRender(scene map[string]interface{}) string {
+	switch SceneString(scene, "render", RenderStroke) {
+	case RenderFill:
+		return RenderFill
+	default:
+		return RenderStroke
+	}
+}
+
 // SceneBool reads a bool scene field, with a default when absent.
 func SceneBool(scene map[string]interface{}, key string, def bool) bool {
 	if scene == nil {
@@ -284,9 +363,10 @@ func SceneString(scene map[string]interface{}, key, def string) string {
 	return def
 }
 
-// EncodeKeySet encodes a held-key bitmask for an input port write.
-func EncodeKeySet(bits uint64) (string, cbor.RawMessage, error) {
-	raw, err := ecf.Encode(KeySet{Bits: bits})
+// EncodeKeySet encodes a held-key bitmask for an input port write. The payload
+// is keyed by KeySetField (`keys`) — the field the step reads.
+func EncodeKeySet(keys uint64) (string, cbor.RawMessage, error) {
+	raw, err := ecf.Encode(KeySet{Keys: keys})
 	if err != nil {
 		return "", nil, err
 	}

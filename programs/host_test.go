@@ -110,10 +110,11 @@ func TestMount_LifeMatchesHardCodedModel(t *testing.T) {
 	}
 }
 
-// TestMount_LifeTextPortIsDriverReadable proves the `text` binding: the host
-// materializes a character grid a blind driver can render, with no idea what
-// Life is.
-func TestMount_LifeTextPortIsDriverReadable(t *testing.T) {
+// TestMount_LifeDisplayPortIsDriverReadable proves the `display-list` binding:
+// the host materializes a filled-grid display list a blind driver can render,
+// with no idea what Life is. (Life was rebound from `text` — a terminal `<pre>`
+// in the generic host — to filled cell quads; §2 revisit routed to arch.)
+func TestMount_LifeDisplayPortIsDriverReadable(t *testing.T) {
 	ap := newTestPeer(t)
 	descPath, err := AuthorLife(ap, LifeRoot, 12345)
 	if err != nil {
@@ -130,35 +131,45 @@ func TestMount_LifeTextPortIsDriverReadable(t *testing.T) {
 	if !ok {
 		t.Fatalf("no display port in frame; ports=%v", frame.Ports)
 	}
-	if pv.Shape != ShapeText {
-		t.Fatalf("display port shape = %q, want %q", pv.Shape, ShapeText)
+	if pv.Shape != ShapeDisplayList {
+		t.Fatalf("display port shape = %q, want %q", pv.Shape, ShapeDisplayList)
 	}
-	tf, err := DecodeTextFrame(pv)
+	// The presentation contract: a grid declares a filled render.
+	if got := DisplayRender(pv.Scene); got != RenderFill {
+		t.Fatalf("scene.render = %q, want %q — a grid must declare fill", got, RenderFill)
+	}
+	dl, err := DecodeDisplayList(pv)
 	if err != nil {
-		t.Fatalf("DecodeTextFrame: %v", err)
-	}
-	if tf.Cols != lifeWidth || tf.Rows != lifeHeight {
-		t.Fatalf("text frame %dx%d, want %dx%d", tf.Cols, tf.Rows, lifeWidth, lifeHeight)
-	}
-	if SceneString(pv.Scene, "mode", "") != TextModeGrid {
-		t.Fatalf("scene.mode = %q, want %q", SceneString(pv.Scene, "mode", ""), TextModeGrid)
+		t.Fatalf("DecodeDisplayList: %v", err)
 	}
 
-	// Every cell must be a glyph the projection emits — nothing else can leak
-	// through, or the driver would be rendering program internals.
+	// The list is dense — one quad per cell — so its length is exactly the grid,
+	// every kind is a colour index the projection emits (alive or background —
+	// nothing else may leak), and each quad is a unit cell inside the bounds.
+	if uint64(len(dl.Kinds)) != lifeWidth*lifeHeight {
+		t.Fatalf("display list has %d quads, want one per cell (%d)", len(dl.Kinds), lifeWidth*lifeHeight)
+	}
 	alive := 0
-	for _, ch := range tf.Cells {
-		switch ch {
-		case glyphAlive:
+	for i, k := range dl.Kinds {
+		switch k {
+		case lifeKindAlive:
 			alive++
-		case glyphDead:
+		case DisplayKindBackground:
 		default:
-			t.Fatalf("text frame carries non-glyph code point %d — the projection leaked state", ch)
+			t.Fatalf("quad %d kind %d — Life emits only alive (%d) or background (%d); a leaked "+
+				"kind reached the wire", i, k, lifeKindAlive, DisplayKindBackground)
+		}
+		v := dl.Verts(i)
+		for _, pt := range v {
+			if pt[0] < 0 || pt[0] > int64(lifeWidth) || pt[1] < 0 || pt[1] > int64(lifeHeight) {
+				t.Fatalf("quad %d vertex %v outside the %dx%d grid", i, pt, lifeWidth, lifeHeight)
+			}
 		}
 	}
-	// Anti-vacuity: an all-dead frame would pass the glyph check trivially.
+	// Anti-vacuity: a live seed must actually have live cells, or "renders Life"
+	// proves nothing.
 	if alive == 0 {
-		t.Fatal("VACUOUS: text frame has no live cells; the glyph assertion proves nothing")
+		t.Fatal("VACUOUS: no live cells in the display list; the projection proves nothing")
 	}
 }
 
@@ -214,9 +225,9 @@ func TestMount_AllThreeMountThroughOneHost(t *testing.T) {
 		wantInputs int
 	}{
 		{"life", AuthorLife, LifeRoot,
-			map[string]string{"display": ShapeText}, 0},
+			map[string]string{"display": ShapeDisplayList}, 0},
 		{"snake", AuthorSnake, SnakeRoot,
-			map[string]string{"display": ShapeText}, 1},
+			map[string]string{"display": ShapeDisplayList}, 1},
 		{"asteroids", AuthorAsteroids, AsteroidsRoot,
 			map[string]string{"display": ShapeDisplayList}, 1},
 	}
@@ -416,7 +427,11 @@ func TestShape_PayloadsCarryJSONFieldNames(t *testing.T) {
 		v    interface{}
 		want string
 	}{
-		{"KeySet", KeySet{Bits: 3}, `"bits"`},
+		// The key-set payload is keyed `keys` (KeySetField), NOT `bits`: the
+		// step, the seed, and the browser host all read `keys`, so the shape
+		// struct must too — the old `bits` here was the field-name split that
+		// silently broke the Avalonia bridge's Asteroids input.
+		{"KeySet", KeySet{Keys: 3}, `"keys"`},
 		{"Direction", Direction{Dir: 2}, `"dir"`},
 	} {
 		b, err := json.Marshal(tc.v)
@@ -439,8 +454,8 @@ func TestShape_PayloadsCarryJSONFieldNames(t *testing.T) {
 // nastiest possible failure: no error, just a game that misbehaves.
 func TestShape_DirectionEnumIsTheShapeContract(t *testing.T) {
 	cases := []struct {
-		name             string
-		shape, program   uint64
+		name           string
+		shape, program uint64
 	}{
 		{"up", DirUp, SnakeUp},
 		{"right", DirRight, SnakeRight},

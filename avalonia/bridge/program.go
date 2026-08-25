@@ -81,8 +81,10 @@ func programAuthorDispatch(name string, ap *entitysdk.AppPeer, root string) (str
 		// driver (text) — the panel never learns it is sharded; the descriptor's
 		// shard block is the host's concern alone.
 		return pg.AuthorLifeSharded(ap, root, 0x5eed4, 64, 64, 8)
+	case "life-edit":
+		return pg.AuthorLifeInteractive(ap, root, 0x5eed5)
 	default:
-		return "", fmt.Errorf("unknown program %q (have: life, snake, asteroids, life-big)", name)
+		return "", fmt.Errorf("unknown program %q (have: life, snake, asteroids, life-big, life-edit)", name)
 	}
 }
 

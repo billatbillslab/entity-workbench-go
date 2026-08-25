@@ -606,11 +606,12 @@ public static class SmokeDriver
             "life" => "program-life",
             "snake" => "program-snake",
             "asteroids" => "program-asteroids",
+            "life-edit" => "program-life-edit",
             _ => null,
         };
         if (slot == null)
         {
-            Log($"WB_SMOKE_PROGRAM={program} is not one of life|snake|asteroids");
+            Log($"WB_SMOKE_PROGRAM={program} is not one of life|snake|asteroids|life-edit");
             return false;
         }
 

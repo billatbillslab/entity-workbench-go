@@ -115,10 +115,10 @@ func AuthorLifeSharded(ap *entitysdk.AppPeer, root string, rngSeed uint64, w, h,
 		return "", fmt.Errorf("AuthorLifeSharded: build stitch: %w", err)
 	}
 
-	// The text projection — identical to unsharded Life: it reads the stitched
+	// The display projection — identical to unsharded Life: it reads the stitched
 	// grid at statePath, which is an ordinary app/life/grid.
-	if _, err := buildLifeTextExpr(ap, w, h, statePath).Build(context.Background(), p.displayExpr); err != nil {
-		return "", fmt.Errorf("AuthorLifeSharded: build text projection: %w", err)
+	if _, err := buildLifeDisplayExpr(ap, w, h, statePath).Build(context.Background(), p.displayExpr); err != nil {
+		return "", fmt.Errorf("AuthorLifeSharded: build display projection: %w", err)
 	}
 
 	d := &ProgramDescriptor{
@@ -135,14 +135,13 @@ func AuthorLifeSharded(ap *entitysdk.AppPeer, root string, rngSeed uint64, w, h,
 			Name:    "display",
 			Path:    p.display,
 			Source:  p.displayExpr,
-			TypeRef: TextFrameType,
+			TypeRef: DisplayListType,
 			Kind:    KindSnapshot,
 			Role:    RoleDisplay,
-			Shape:   ShapeText,
+			Shape:   ShapeDisplayList,
 			Scene: map[string]interface{}{
-				"mode": TextModeGrid,
-				"cols": uint64(w),
-				"rows": uint64(h),
+				"render": RenderFill,
+				"bounds": uint64(w),
 			},
 		}},
 		Tick: ProgramTick{

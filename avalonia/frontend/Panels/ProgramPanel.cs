@@ -51,6 +51,7 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
     private readonly TextBlock _statusLine;
     private readonly Panel _stage;
     private readonly Button _startPause;
+    private DockPanel _dock = null!;
 
     // Shape name -> the view driving it. Built lazily from the frame's declared
     // shapes, never from the program's identity.
@@ -144,6 +145,7 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
         dock.Children.Add(buttons);
         dock.Children.Add(_stage);
         Content = dock;
+        _dock = dock;
 
         Focusable = true;
         KeyDown += OnKeyDown;
@@ -252,25 +254,68 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
         _statusLine.Text = $"tick {dto.Ticks}  ·  {state}  ·  shapes: {shapes}";
         if (dto.Err is { Length: > 0 }) _statusLine.Foreground = Brushes.OrangeRed;
 
-        if (dto.Ports == null) return;
-        foreach (var port in dto.Ports.Values)
+        if (dto.Ports != null)
         {
-            if (!_views.TryGetValue(port.Shape, out var view))
+            foreach (var port in dto.Ports.Values)
             {
-                view = MakeView(port.Shape);
-                if (view == null)
+                // Keyed by PORT NAME, not shape: a program has a `display` port
+                // and a `status` port, both needing their own view even when
+                // they share a shape (both `text` for Life/Snake's status +
+                // legacy grids) — keying by shape collapsed them into one slot,
+                // so the status caption drew on top of the board (RESPONSE-
+                // PROGRAM-CHROME §3).
+                if (!_views.TryGetValue(port.Name, out var view))
                 {
-                    // No driver for a declared shape. Admission should have
-                    // caught this at Mount, so reaching here means the bridge
-                    // and this panel disagree about what is supported.
-                    _statusLine.Text = $"no driver for shape {port.Shape}";
-                    _statusLine.Foreground = Brushes.IndianRed;
-                    continue;
+                    view = MakeView(port.Shape);
+                    if (view == null)
+                    {
+                        // No driver for a declared shape. Admission should have
+                        // caught this at Mount, so reaching here means the bridge
+                        // and this panel disagree about what is supported.
+                        _statusLine.Text = $"no driver for shape {port.Shape}";
+                        _statusLine.Foreground = Brushes.IndianRed;
+                        continue;
+                    }
+                    _views[port.Name] = view;
+                    if (port.Name == "status")
+                    {
+                        // The program's OWN status line (score/state), a caption
+                        // docked above the board — distinct from _statusLine,
+                        // which is this host's run-state (tick N · running).
+                        //
+                        // Wrapped in a fixed-height Panel: view.Control is a
+                        // custom-drawn Control with no MeasureOverride, so its
+                        // own DesiredSize is (0,0) — a bare DockPanel.Top child
+                        // would get a 0-height band and never paint. A Panel
+                        // arranges every child to its OWN bounds regardless of
+                        // the child's DesiredSize (the same reason _stage works
+                        // for the board views below), so this reserves real
+                        // height and the caption actually appears.
+                        var captionHost = new Panel { Height = 28 };
+                        captionHost.Children.Add(view.Control);
+                        DockPanel.SetDock(captionHost, Dock.Top);
+                        _dock.Children.Insert(_dock.Children.IndexOf(_stage), captionHost);
+                    }
+                    else
+                    {
+                        _stage.Children.Add(view.Control);
+                    }
                 }
-                _views[port.Shape] = view;
-                _stage.Children.Add(view.Control);
+                view.SetPort(port);
             }
-            view.SetPort(port);
+        }
+
+        if (dto.Inputs != null)
+        {
+            foreach (var input in dto.Inputs)
+            {
+                if (input.Shape != "key-set") continue;
+                if (_inputControls.ContainsKey(input.Name)) continue;
+                var controller = BuildController(input);
+                _inputControls[input.Name] = controller;
+                DockPanel.SetDock(controller, Dock.Bottom);
+                _dock.Children.Insert(_dock.Children.IndexOf(_stage), controller);
+            }
         }
     }
 
@@ -298,6 +343,20 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
         ["fire"] = Key.Space,
         ["up"] = Key.Up,
         ["down"] = Key.Down,
+        ["toggle"] = Key.T,
+        ["regen"] = Key.G,
+        ["pause"] = Key.P,
+    };
+
+    // Standard-action default glyphs — mirrors programs/controls.go's
+    // StandardActionGlyph, used when a roled action binding declares none.
+    private static readonly Dictionary<string, string> StandardActionGlyph = new()
+    {
+        ["fire"] = "\U0001F525",
+        ["start"] = "▶",
+        ["select"] = "◉",
+        ["pause"] = "⏸",
+        ["restart"] = "↻",
     };
 
     // The `direction` shape's enum is fixed BY THE SHAPE (wb DirUp/Right/Down/
@@ -327,8 +386,7 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
                     var bit = BitForKey(input, e.Key);
                     if (bit >= 0)
                     {
-                        _heldKeys |= 1UL << bit;
-                        Bridge.TakeString(Bridge.ProgramInputKeys(_handle, input.Name, (long)_heldKeys));
+                        SetHeldBit(input, bit, true);
                         e.Handled = true;
                     }
                     break;
@@ -345,15 +403,29 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
             var bit = BitForKey(input, e.Key);
             if (bit >= 0)
             {
-                _heldKeys &= ~(1UL << bit);
-                Bridge.TakeString(Bridge.ProgramInputKeys(_handle, input.Name, (long)_heldKeys));
+                SetHeldBit(input, bit, false);
                 e.Handled = true;
             }
         }
     }
 
+    // SetHeldBit ORs/clears a bit in the held-key mask and writes it through the
+    // bridge. The one seam both the physical keyboard (OnKeyDown/Up) and the
+    // on-screen standard controller (BuildController) drive.
+    private void SetHeldBit(InputDto input, int bit, bool down)
+    {
+        if (_handle < 0) return;
+        if (down) _heldKeys |= 1UL << bit;
+        else _heldKeys &= ~(1UL << bit);
+        Bridge.TakeString(Bridge.ProgramInputKeys(_handle, input.Name, (long)_heldKeys));
+    }
+
     // BitForKey resolves a physical key to a bit via the port's declared keymap.
-    // Returns -1 when the key is not bound.
+    // Returns -1 when the key is not bound. Accepts both scene.keymap entry
+    // forms (programs/controls.go ParseKeymap): a bare legacy action-name string,
+    // or a roled object ({role:"axis",axis:...} / {role:"action",action:...}) —
+    // in both cases resolving to the same NAME an ActionKeys lookup binds to a
+    // physical key, mirroring ControlBinding.Name().
     private static int BitForKey(InputDto input, Key key)
     {
         if (input.Scene == null) return -1;
@@ -362,8 +434,8 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
         {
             foreach (var entry in kmEl.EnumerateObject())
             {
-                var action = entry.Value.GetString();
-                if (action != null && ActionKeys.TryGetValue(action, out var k) && k == key
+                var name = KeymapEntryName(entry.Value);
+                if (name != null && ActionKeys.TryGetValue(name, out var k) && k == key
                     && int.TryParse(entry.Name, out var bit))
                 {
                     return bit;
@@ -372,6 +444,148 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
         }
         catch { }
         return -1;
+    }
+
+    // KeymapEntryName resolves one scene.keymap entry to the Name a source
+    // presses/releases (controls.go ControlBinding.Name()): a legacy string is
+    // itself the name; a roled object's name is its axis (axis role) or its
+    // action (action role).
+    private static string? KeymapEntryName(JsonElement entry)
+    {
+        if (entry.ValueKind == JsonValueKind.String) return entry.GetString();
+        if (entry.ValueKind != JsonValueKind.Object) return null;
+        if (!entry.TryGetProperty("role", out var roleEl) || roleEl.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+        return roleEl.GetString() switch
+        {
+            "axis" => entry.TryGetProperty("axis", out var axisEl) ? axisEl.GetString() : null,
+            "action" => entry.TryGetProperty("action", out var actionEl) ? actionEl.GetString() : null,
+            _ => null,
+        };
+    }
+
+    // --- The standard controller: a d-pad + labelled action buttons, parsed
+    // from scene.keymap (mirrors programs/controls.go::ParseKeymap). Built once
+    // per key-set input the first time it is seen (RerenderFromBridge); each
+    // control holds its bit on pointer-press and clears on release, same as a
+    // physical key, so one click is one edge for the program's step to detect.
+    private readonly Dictionary<string, Control> _inputControls = new();
+
+    private Control BuildController(InputDto input)
+    {
+        var axisButtons = new Dictionary<string, Button>();
+        var actionButtons = new List<Button>();
+
+        if (input.Scene != null && input.Scene.TryGetValue("keymap", out var kmEl))
+        {
+            var entries = new List<(int Bit, JsonElement Value)>();
+            try
+            {
+                foreach (var entry in kmEl.EnumerateObject())
+                {
+                    if (int.TryParse(entry.Name, out var bit)) entries.Add((bit, entry.Value));
+                }
+            }
+            catch { }
+            entries.Sort((a, b) => a.Bit.CompareTo(b.Bit));
+
+            foreach (var (bit, value) in entries)
+            {
+                string? role = null, axis = null, action = null, label = null, glyph = null;
+                if (value.ValueKind == JsonValueKind.String)
+                {
+                    role = "action";
+                    action = value.GetString();
+                }
+                else if (value.ValueKind == JsonValueKind.Object
+                    && value.TryGetProperty("role", out var roleEl) && roleEl.ValueKind == JsonValueKind.String)
+                {
+                    role = roleEl.GetString();
+                    if (role == "axis" && value.TryGetProperty("axis", out var axisEl)) axis = axisEl.GetString();
+                    if (role == "action" && value.TryGetProperty("action", out var actionEl)) action = actionEl.GetString();
+                    if (value.TryGetProperty("label", out var labelEl)) label = labelEl.GetString();
+                    if (value.TryGetProperty("glyph", out var glyphEl)) glyph = glyphEl.GetString();
+                }
+                if (role == "axis" && axis != null)
+                {
+                    var btn = new Button
+                    {
+                        Content = axis,
+                        MinWidth = 40,
+                        MinHeight = 32,
+                        FontFamily = new FontFamily("monospace"),
+                    };
+                    HookPressRelease(btn, input, bit);
+                    axisButtons[axis] = btn;
+                }
+                else if (role == "action" && action != null)
+                {
+                    // Pair glyph + label text rather than glyph alone: the
+                    // runtime's font set may lack colour-emoji coverage (tofu
+                    // boxes), and a bare tofu button is unreadable. The label
+                    // stays legible either way; the glyph is a bonus when the
+                    // font renders it.
+                    var text = label ?? action;
+                    var face = glyph ?? (StandardActionGlyph.TryGetValue(action, out var g) ? g : null);
+                    var btn = new Button
+                    {
+                        Content = face != null ? $"{face} {text}" : text,
+                        MinWidth = 40,
+                        MinHeight = 32,
+                        [ToolTip.TipProperty] = text,
+                    };
+                    HookPressRelease(btn, input, bit);
+                    actionButtons.Add(btn);
+                }
+            }
+        }
+
+        var root = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 16, Margin = new Thickness(0, 8, 0, 0) };
+
+        if (axisButtons.Count > 0)
+        {
+            var dpad = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto"),
+                RowDefinitions = new RowDefinitions("Auto,Auto,Auto"),
+            };
+            void Place(string axis, int row, int col)
+            {
+                if (!axisButtons.TryGetValue(axis, out var b)) return;
+                Grid.SetRow(b, row);
+                Grid.SetColumn(b, col);
+                dpad.Children.Add(b);
+            }
+            Place(AxisUp, 0, 1);
+            Place(AxisLeft, 1, 0);
+            Place(AxisRight, 1, 2);
+            Place(AxisDown, 2, 1);
+            root.Children.Add(dpad);
+        }
+
+        if (actionButtons.Count > 0)
+        {
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
+            foreach (var b in actionButtons) actions.Children.Add(b);
+            root.Children.Add(actions);
+        }
+
+        return root;
+    }
+
+    // Axis position names — controls.go's AxisUp/Down/Left/Right.
+    private const string AxisUp = "up";
+    private const string AxisDown = "down";
+    private const string AxisLeft = "left";
+    private const string AxisRight = "right";
+
+    private void HookPressRelease(Button btn, InputDto input, int bit)
+    {
+        btn.PointerPressed += (_, _) => SetHeldBit(input, bit, true);
+        btn.PointerReleased += (_, _) => SetHeldBit(input, bit, false);
+        btn.PointerCaptureLost += (_, _) => SetHeldBit(input, bit, false);
     }
 
     // --- smoke-driver hooks (mirrors the legacy panels' StartForTests) ---
@@ -510,6 +724,7 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
         {
             double bounds = 0;
             bool wrap = false;
+            string render = "stroke";
             if (port.Scene != null)
             {
                 if (port.Scene.TryGetValue("bounds", out var b) && b.TryGetDouble(out var bv)) bounds = bv;
@@ -518,8 +733,12 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
                 {
                     wrap = w.GetBoolean();
                 }
+                if (port.Scene.TryGetValue("render", out var r) && r.ValueKind == JsonValueKind.String)
+                {
+                    render = r.GetString() ?? "stroke";
+                }
             }
-            _ctl.SetFrame(port.DisplayList, bounds, wrap);
+            _ctl.SetFrame(port.DisplayList, bounds, wrap, render == "fill");
         }
 
         private sealed class VectorControl : Control
@@ -527,6 +746,7 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
             private DisplayListDto? _dl;
             private double _bounds;
             private bool _wrap;
+            private bool _fill;
 
             private static readonly IBrush BgBrush = new SolidColorBrush(Color.FromRgb(10, 12, 16));
             // Kind tags are colour indices. The driver does not know what kind 0
@@ -539,9 +759,19 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
                 new Pen(new SolidColorBrush(Color.FromRgb(255, 120, 140)), 1.4),
             };
 
-            public void SetFrame(DisplayListDto? dl, double bounds, bool wrap)
+            // Fill counterpart to KindPens — same 4 colours, as brushes for solid
+            // quads (a Life/Snake grid cell), indexed the same way by kind.
+            private static readonly IBrush[] KindBrushes =
             {
-                _dl = dl; _bounds = bounds; _wrap = wrap;
+                new SolidColorBrush(Color.FromRgb(140, 220, 255)),
+                new SolidColorBrush(Color.FromRgb(200, 200, 210)),
+                new SolidColorBrush(Color.FromRgb(255, 210, 120)),
+                new SolidColorBrush(Color.FromRgb(255, 120, 140)),
+            };
+
+            public void SetFrame(DisplayListDto? dl, double bounds, bool wrap, bool fill)
+            {
+                _dl = dl; _bounds = bounds; _wrap = wrap; _fill = fill;
                 InvalidateVisual();
             }
 
@@ -574,7 +804,15 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
 
                 for (int i = 0; i < d.Kinds.Length; i++)
                 {
-                    var pen = KindPens[d.Kinds[i] % (ulong)KindPens.Length];
+                    var kind = d.Kinds[i];
+                    // DisplayKindBackground (shapes.go): the reserved "empty"
+                    // kind. Dense grids (Life/Snake) carry a quad per cell,
+                    // empty cells as kind 0 — a fill-mode host MUST NOT draw it,
+                    // or the whole board paints as one solid colour 0 block.
+                    // Stroke mode (Asteroids) is sparse and never emits kind 0,
+                    // so the skip costs it nothing.
+                    if (_fill && kind == 0) continue;
+
                     var quad = new[]
                     {
                         new Point(ox + d.X0[i] * scale, oy + d.Y0![i] * scale),
@@ -582,7 +820,17 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
                         new Point(ox + d.X2![i] * scale, oy + d.Y2![i] * scale),
                         new Point(ox + d.X3![i] * scale, oy + d.Y3![i] * scale),
                     };
-                    DrawClosed(ctx, pen, quad, 0, 0);
+
+                    if (_fill)
+                    {
+                        var brush = KindBrushes[kind % (ulong)KindBrushes.Length];
+                        DrawFilled(ctx, brush, quad, 0, 0);
+                    }
+                    else
+                    {
+                        var pen = KindPens[kind % (ulong)KindPens.Length];
+                        DrawClosed(ctx, pen, quad, 0, 0);
+                    }
 
                     // scene.wrap: the world is a TORUS. An actor's centre wraps
                     // but its outline is centre+offsets and is deliberately NOT
@@ -594,7 +842,16 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
                     if (!_wrap) continue;
                     foreach (var (dx, dy) in Tiles)
                     {
-                        DrawClosed(ctx, pen, quad, dx * span, dy * span);
+                        if (_fill)
+                        {
+                            var brush = KindBrushes[kind % (ulong)KindBrushes.Length];
+                            DrawFilled(ctx, brush, quad, dx * span, dy * span);
+                        }
+                        else
+                        {
+                            var pen = KindPens[kind % (ulong)KindPens.Length];
+                            DrawClosed(ctx, pen, quad, dx * span, dy * span);
+                        }
                     }
                 }
             }
@@ -609,6 +866,21 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
                         new Point(a.X + dx, a.Y + dy),
                         new Point(b.X + dx, b.Y + dy));
                 }
+            }
+
+            private static void DrawFilled(DrawingContext ctx, IBrush brush, Point[] pts, double dx, double dy)
+            {
+                var geo = new StreamGeometry();
+                using (var gc = geo.Open())
+                {
+                    gc.BeginFigure(new Point(pts[0].X + dx, pts[0].Y + dy), true);
+                    for (int k = 1; k < pts.Length; k++)
+                    {
+                        gc.LineTo(new Point(pts[k].X + dx, pts[k].Y + dy));
+                    }
+                    gc.EndFigure(true);
+                }
+                ctx.DrawGeometry(brush, null, geo);
             }
 
             // The eight neighbours; (0,0) is drawn separately as the real one.

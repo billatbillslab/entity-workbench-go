@@ -228,6 +228,12 @@ public class App : Application
         // the visual validation of the host-as-compute-kernel floor.
         PanelRegistry.Register("program-life-big", "Life 64×64 (sharded host)",
             (handle, _) => new ProgramPanel(handle, "life-big"));
+
+        // Interactive Life: a d-pad cursor + toggle/regen/pause action buttons,
+        // one key-set input port — the standard controller (controls.go),
+        // mounted through the SAME generic ProgramPanel as every other program.
+        PanelRegistry.Register("program-life-edit", "Life (interactive)",
+            (handle, _) => new ProgramPanel(handle, "life-edit"));
     }
 
     public override void OnFrameworkInitializationCompleted()

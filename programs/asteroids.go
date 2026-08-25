@@ -326,7 +326,7 @@ func astStateEntity(s astWireState) (entity.Entity, error) {
 
 // putInput is the snapshot-input-port write (last-write-wins tree put).
 func (m *AsteroidsGameModel) putInput(keys uint64) error {
-	raw, err := ecf.Encode(map[string]interface{}{"keys": keys})
+	raw, err := ecf.Encode(map[string]interface{}{KeySetField: keys})
 	if err != nil {
 		return fmt.Errorf("AsteroidsGameModel: encode input: %w", err)
 	}
@@ -1045,7 +1045,7 @@ func buildAsteroidsStepExpr(ap *entitysdk.AppPeer, statePath, inputPath string) 
 	return c.Let(map[string]*entitysdk.Builder{
 		"s": c.LookupTreeLocal(statePath),
 	}, c.Let(map[string]*entitysdk.Builder{
-		"keys":   c.Field(c.LookupTreeLocal(inputPath), "keys"),
+		"keys":   c.Field(c.LookupTreeLocal(inputPath), KeySetField),
 		"kinds":  c.Field(sc("s"), "kinds"),
 		"rng":    c.Field(sc("s"), "rng"),
 		"rots":   c.Field(sc("s"), "rots"),
