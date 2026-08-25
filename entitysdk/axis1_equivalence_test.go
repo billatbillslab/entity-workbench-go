@@ -1,0 +1,460 @@
+package entitysdk_test
+
+// AXIS-1 EQUIVALENCE HARNESS — the admission gate for an alternate execution
+// engine (exploration §13.8, handoff §5).
+//
+// This is a first-class deliverable, not a test afterthought: it is the
+// reusable, empirical definition of "an alternate engine is conformant," and
+// it is what lets every future rung of the compile ladder be trusted.
+//
+//	An alternate engine is conformant iff, for the same IR, it produces
+//	materialized-boundary-equivalent results to the Stage-1 reference.
+//
+// Stage-1 (entity-core-go ext/compute) is the reference BY CONSTRUCTION: any
+// divergence is an Axis-1 bug, never a Stage-1 bug. That asymmetry is what
+// makes the oracle usable — there is nothing to adjudicate.
+//
+// WHY PROPERTY-BASED RATHER THAN VECTOR-BASED
+//
+// Handoff §5 asks for "the existing compute conformance vectors" run through
+// both engines. Those do not exist — no portable compute corpus exists anywhere
+// in the cohort, and compute's only tests are per-impl and in-package (see
+// docs/architecture/reviews/COMPUTE-AXIS1-ORACLE-GAPS-2026-07-16.md §1). So the
+// substitution is a generator.
+//
+// It is stronger than a fixed corpus for THIS job. Axis-1 re-derives ~1,200
+// lines of Stage-1 semantics (arithmetic, comparison, casts, canonical
+// ordering) because none of it is exported, and reimplementation drift is the
+// risk. Life and Snake exercise none of those corners — no NumericCast, no
+// wraparound, no float, no unsigned — so the probe suites are blind exactly
+// where the risk is. A generator reaches them, cannot go vacuous the way a
+// hand-authored example can, and every failure is a minimizable reproducer.
+//
+// It is NOT a substitute for the cohort-level thing a corpus does: pinning
+// go/rust/py agreement. That gap is arch's and is routed.
+//
+// WHAT "EQUIVALENT" MEANS HERE (§13.5 — the boundary contract)
+//
+// Only the MATERIALIZED BOUNDARY is compared. The interior is deliberately
+// free: Axis-1 holds closures as pointers and environments as live frames,
+// where Stage-1 builds content-addressed compute/scope entities. So a Stage-1
+// run leaves entities in the content store that an Axis-1 run does not, and
+// comparing store CONTENTS would fail for exactly the reason the rung exists.
+// Comparing boundary hashes is the contract.
+//
+// Both sides are reduced through compute.CaptureScope — Stage-1's OWN
+// materialization path (buildScopeBinding materializes a constructed value,
+// stores it, and yields its content hash). Using the reference's code for the
+// final reduction means the boundary hash is authoritative rather than
+// something this file re-derives and could get wrong in the same direction as
+// the engine under test.
+
+import (
+	"context"
+	hexpkg "encoding/hex"
+	"fmt"
+	"math/rand"
+	"strings"
+	"testing"
+
+	"go.entitychurch.org/entity-core-go/core/ecf"
+	"go.entitychurch.org/entity-core-go/core/entity"
+	"go.entitychurch.org/entity-core-go/core/store"
+	"go.entitychurch.org/entity-core-go/core/types"
+	"go.entitychurch.org/entity-core-go/ext/compute"
+
+	"entity-workbench-go/entitysdk"
+	"entity-workbench-go/entitysdk/axis1"
+)
+
+// --- The boundary reduction ---
+
+// boundary reduces an engine result to a comparable string describing the
+// materialized boundary form.
+//
+// Routing through compute.CaptureScope is deliberate (see the file header): it
+// is Stage-1's own materialization, reached with exported API, so the answer for
+// an in-flight constructed value is the reference's answer rather than this
+// file's opinion of it.
+//
+// Value-kind bindings are compared by their CANONICAL CBOR BYTES, not by Go
+// formatting. That is the only comparison that catches Rule 10: int64(5) and
+// uint64(5) format identically but encode as different CBOR major types, and
+// telling them apart is the whole point of the signed/unsigned model.
+func boundary(v interface{}, cs store.ContentStore) (string, error) {
+	s := compute.NewScope()
+	s.Set("r", v)
+	ent, err := compute.CaptureScope(s, cs)
+	if err != nil {
+		return "", fmt.Errorf("capture: %w", err)
+	}
+	var d types.ComputeScopeData
+	if err := ecf.Decode(ent.Data, &d); err != nil {
+		return "", fmt.Errorf("decode scope: %w", err)
+	}
+	b, ok := d.Bindings["r"]
+	if !ok {
+		return "", fmt.Errorf("binding r missing")
+	}
+	switch b.Kind {
+	case types.ScopeBindingKindEntity:
+		return "entity:" + b.EntityHash.String(), nil
+	case types.ScopeBindingKindValue:
+		raw, err := ecf.Encode(b.Value)
+		if err != nil {
+			return "", fmt.Errorf("encode value: %w", err)
+		}
+		return fmt.Sprintf("value:%T:%s", b.Value, hexpkg.EncodeToString(raw)), nil
+	default:
+		return "", fmt.Errorf("unknown binding kind %q", b.Kind)
+	}
+}
+
+// axisOutcome is the full comparable result of one eval on one engine: either an
+// error (code + message) or a materialized boundary form.
+//
+// Errors are compared as rigorously as values. Error-as-value propagation is
+// part of the contract (§13.5) — a compute/error poisons its consumers and can
+// end up materialized in the tree, so an engine that raises the right code with
+// the wrong message, or the right error for the wrong reason, is not conformant.
+type axisOutcome struct {
+	err  string
+	form string
+}
+
+func (o axisOutcome) String() string {
+	if o.err != "" {
+		return "error(" + o.err + ")"
+	}
+	return o.form
+}
+
+func errString(err error) string {
+	if ce, ok := err.(*compute.ComputeError); ok {
+		return ce.Code + ": " + ce.Message
+	}
+	return "non-compute-error: " + err.Error()
+}
+
+// runStage1 evaluates on the reference engine.
+func runStage1(ent entity.Entity, root map[string]interface{}, ctx *compute.EvalContext, ops int) axisOutcome {
+	s := compute.NewScope()
+	for k, v := range root {
+		s.Set(k, v)
+	}
+	v, err := compute.Evaluate(ent, s, compute.NewBudget(ops, compute.DefaultMaxDepth), ctx)
+	if err != nil {
+		return axisOutcome{err: errString(err)}
+	}
+	form, ferr := boundary(v, ctx.ContentStore)
+	if ferr != nil {
+		return axisOutcome{err: "boundary: " + ferr.Error()}
+	}
+	return axisOutcome{form: form}
+}
+
+// runAxis1 evaluates on the engine under test.
+//
+// The Axis-1 result is materialized before the shared reduction because its
+// in-flight constructed value is a distinct (necessarily — Stage-1's is
+// unexported) type that CaptureScope cannot recognize. Materialize first, then
+// both sides reduce through identical reference code.
+func runAxis1(eng *axis1.Engine, ent entity.Entity, root map[string]interface{}, ctx *compute.EvalContext, ops int) axisOutcome {
+	v, err := eng.Evaluate(ent, root, compute.NewBudget(ops, compute.DefaultMaxDepth), ctx)
+	if err != nil {
+		return axisOutcome{err: errString(err)}
+	}
+	mv, err := axis1.Materialize(v, ctx.ContentStore)
+	if err != nil {
+		return axisOutcome{err: "materialize: " + err.Error()}
+	}
+	form, ferr := boundary(mv, ctx.ContentStore)
+	if ferr != nil {
+		return axisOutcome{err: "boundary: " + ferr.Error()}
+	}
+	return axisOutcome{form: form}
+}
+
+// --- The generator ---
+
+// exprGen builds random well-formed expression graphs over a small typed
+// grammar. Typed generation (int / bool / array) keeps most programs meaningful
+// rather than degenerating into a type_mismatch corpus — but the grammar
+// deliberately still emits div/mod (division_by_zero, and F-D1's float-poisoning
+// non-exact quotient), index (index_out_of_range), and casts (cast_out_of_range),
+// so error paths are covered on purpose rather than by accident.
+type exprGen struct {
+	c   *entitysdk.ComputeBuilder
+	rnd *rand.Rand
+}
+
+func (g *exprGen) intExpr(depth int) *entitysdk.Builder {
+	return g.intExprOpt(depth, true)
+}
+
+// intExprOpt generates an integer-valued expression. allowCast=false forbids a
+// bare numeric-cast at the ROOT of the generated expression.
+//
+// That is not a generator convenience — it is the S1 builder enforcing Rule 11
+// at build time: `compute.Let` rejects a NumericCast binding value outright
+// ("the cast effect does not flow through let; inline the cast at the use site
+// instead"). The toolkit already encodes the F-E-series lesson as a guard, so
+// the generator has to respect it or it cannot build at all. Casts still appear
+// freely under arithmetic/compare operands, which is the position where Rule 11
+// says the hint is actually consumed — i.e. exactly the position the decoder
+// hoists (decode.go::castIntent), which is what needs testing.
+func (g *exprGen) intExprOpt(depth int, allowCast bool) *entitysdk.Builder {
+	c := g.c
+	if depth <= 0 {
+		switch g.rnd.Intn(4) {
+		case 0:
+			return c.Literal(int64(g.rnd.Intn(21) - 10))
+		case 1:
+			return c.Literal(uint64(g.rnd.Intn(10)))
+		case 2:
+			return c.LookupScope("n")
+		default:
+			return c.LookupScope("m")
+		}
+	}
+	n := 8
+	if !allowCast {
+		n = 7
+	}
+	switch g.rnd.Intn(n) {
+	case 0, 1, 2:
+		ops := []string{"add", "sub", "mul", "div", "mod"}
+		return c.Arithmetic(ops[g.rnd.Intn(len(ops))], g.intExpr(depth-1), g.intExpr(depth-1))
+	case 3:
+		return c.If(g.boolExpr(depth-1), g.intExpr(depth-1), g.intExpr(depth-1))
+	case 4:
+		// Names chosen to sort in dependency order — the S1 builder normalizes
+		// let bindings to sorted name order, so "a" is visible to "b" but not
+		// vice versa (the F-E-series footgun, exercised here on purpose).
+		return c.Let(map[string]*entitysdk.Builder{
+			"a": g.intExprOpt(depth-1, false),
+			"b": c.Arithmetic("add", c.LookupScope("a"), g.intExpr(depth-1)),
+		}, c.Arithmetic("mul", c.LookupScope("a"), c.LookupScope("b")))
+	case 5:
+		return c.Index(g.arrExpr(depth-1), g.intExpr(depth-1))
+	case 6:
+		return c.Length(g.arrExpr(depth - 1))
+	default:
+		// Rule 11: an eager cast at the operand position flips div/mod/compare
+		// unsigned. The cast is generated directly under the op so the hint is
+		// actually consumed — that is the semantic the decoder hoists.
+		t := []string{"primitive/int", "primitive/uint", "primitive/float"}[g.rnd.Intn(3)]
+		return c.NumericCast(g.intExpr(depth-1), t)
+	}
+}
+
+func (g *exprGen) boolExpr(depth int) *entitysdk.Builder {
+	c := g.c
+	if depth <= 0 {
+		return c.Compare([]string{"eq", "neq", "lt", "gt", "lte", "gte"}[g.rnd.Intn(6)],
+			g.intExpr(0), g.intExpr(0))
+	}
+	switch g.rnd.Intn(3) {
+	case 0:
+		return c.Compare([]string{"eq", "neq", "lt", "gt", "lte", "gte"}[g.rnd.Intn(6)],
+			g.intExpr(depth-1), g.intExpr(depth-1))
+	case 1:
+		return c.Logic([]string{"and", "or"}[g.rnd.Intn(2)], g.boolExpr(depth-1), g.boolExpr(depth-1))
+	default:
+		return c.Logic("not", g.boolExpr(depth-1), nil)
+	}
+}
+
+func (g *exprGen) arrExpr(depth int) *entitysdk.Builder {
+	c := g.c
+	if depth <= 0 {
+		n := g.rnd.Intn(4)
+		vals := make([]interface{}, n)
+		for i := range vals {
+			vals[i] = int64(g.rnd.Intn(10))
+		}
+		return c.Literal(vals)
+	}
+	switch g.rnd.Intn(3) {
+	case 0:
+		// map with a closure capturing an enclosing binding — the F-D2 shape,
+		// and the case where Axis-1's live frames diverge most from Stage-1's
+		// CaptureScope/LoadScope round-trip.
+		return c.BuiltinsCall("map", map[string]*entitysdk.Builder{
+			"collection": g.arrExpr(depth - 1),
+			"fn": c.Lambda([]string{"e"},
+				c.Arithmetic("add", c.LookupScope("e"), g.intExpr(depth-1))),
+		})
+	case 1:
+		return c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
+			"collection": g.arrExpr(depth - 1),
+			"fn":         c.Lambda([]string{"e"}, c.Compare("gt", c.LookupScope("e"), g.intExpr(0))),
+		})
+	default:
+		return c.LookupScope("arr")
+	}
+}
+
+// rootBindings are the free variables every generated expression may reference.
+// Both engines receive the same values; Stage-1 as a *compute.Scope built from
+// this map, Axis-1 as the map itself.
+func rootBindings() map[string]interface{} {
+	return map[string]interface{}{
+		"n":   int64(7),
+		"m":   int64(-3),
+		"arr": []interface{}{int64(1), int64(2), int64(3), int64(4)},
+	}
+}
+
+// TestAxis1Equivalence_Differential is the sweep: N random graphs, both
+// engines, identical outcomes required.
+//
+// A failure prints the seed and the case index. Both are deterministic, so
+// `-run ...  -args` re-running with the same seed reproduces the exact graph —
+// which is the property a fixed corpus cannot give you for free.
+func TestAxis1Equivalence_Differential(t *testing.T) {
+	ap, err := entitysdk.CreatePeer(entitysdk.PeerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ap.Close() })
+
+	ctx := ap.TestEvalContext()
+	eng := axis1.NewEngine()
+	root := rootBindings()
+
+	const seed = 20260716
+	const cases = 300
+	rnd := rand.New(rand.NewSource(seed))
+	g := &exprGen{c: ap.Compute(), rnd: rnd}
+
+	var errs, vals int
+	codes := map[string]int{}
+	for i := 0; i < cases; i++ {
+		// Wrap every case in a construct: it forces the result across the
+		// materialized boundary (the only thing the contract binds), and it is
+		// the shape every real program's step ends in.
+		expr := g.c.Construct("app/axis1/probe", map[string]*entitysdk.Builder{
+			"value": g.intExpr(3),
+			"tag":   g.c.Literal(int64(i)),
+		})
+		h, err := expr.Build(context.Background(), fmt.Sprintf("app/axis1/diff/%d", i))
+		if err != nil {
+			t.Fatalf("case %d: build: %v", i, err)
+		}
+		ent, ok := ap.TestContentStore().Get(h)
+		if !ok {
+			t.Fatalf("case %d: root entity %s not in store", i, h)
+		}
+
+		s1 := runStage1(ent, root, ctx, compute.DefaultMaxOps)
+		a1 := runAxis1(eng, ent, root, ctx, compute.DefaultMaxOps)
+
+		if s1.String() != a1.String() {
+			t.Fatalf("case %d DIVERGED (seed %d)\n  stage1: %s\n  axis1:  %s\n  ir:     %s",
+				i, seed, s1, a1, h)
+		}
+		if s1.err != "" {
+			errs++
+			if idx := strings.Index(s1.err, ":"); idx > 0 {
+				codes[s1.err[:idx]]++
+			}
+		} else {
+			vals++
+		}
+	}
+
+	// Everything below guards against the sweep AGREEING VACUOUSLY — passing
+	// while proving nothing. That is not a hypothetical failure mode in this
+	// track: it is F-D3 (D3 compared two dead grids and passed) and it is the
+	// cohort's ECF F30 (tag_reject vectors rejecting for the wrong reason —
+	// keystone's own note calls it "a vacuous pass"). Three instances in one
+	// track; this oracle does not get to be the fourth.
+	st := eng.Stats()
+
+	if vals < cases/4 {
+		t.Fatalf("sweep was mostly errors (%d values / %d errors of %d) — "+
+			"the generator is producing garbage and the agreement is vacuous",
+			vals, errs, cases)
+	}
+	if errs == 0 {
+		t.Fatalf("sweep produced no errors at all of %d cases — error-as-value "+
+			"propagation is part of the contract and went untested", cases)
+	}
+	// The live-frame closure path (§13.4) is the whole F-D2 fix and the most
+	// likely place for Axis-1 to diverge. If no closure was ever built, the
+	// sweep agreed about everything EXCEPT the thing this rung changes.
+	if st.Closures == 0 {
+		t.Fatalf("sweep built no closures — map/filter never ran, so the " +
+			"live-frame path (the entire point of the rung) went untested")
+	}
+	// A fallback silently routes to Stage-1, which would make Axis-1 agree with
+	// Stage-1 by BEING Stage-1. On this grammar every node is in the fast set,
+	// so any fallback means the decoder stopped recognizing something.
+	if st.Fallbacks != 0 {
+		t.Fatalf("sweep hit %d fallbacks — those cases compared Stage-1 against "+
+			"itself and prove nothing about Axis-1", st.Fallbacks)
+	}
+	// At least three distinct error codes: one code repeated 143 times would
+	// mean the error paths are covered on paper only.
+	if len(codes) < 3 {
+		t.Fatalf("only %d distinct error codes (%v) — the error surface is "+
+			"barely covered", len(codes), codes)
+	}
+
+	t.Logf("differential sweep: %d cases, %d values / %d errors, engines agree\n"+
+		"  error codes: %v\n  axis1 stats: %+v", cases, vals, errs, codes, st)
+}
+
+// TestAxis1Equivalence_DecodeOnce asserts the premise of the whole rung: the
+// step is decoded ONCE and reused across ticks.
+//
+// Without this, a passing equivalence sweep would prove correctness while the
+// engine quietly re-decoded every eval — i.e. it would be conformant and
+// pointless, and the cost numbers in the report would be measuring nothing.
+func TestAxis1Equivalence_DecodeOnce(t *testing.T) {
+	ap, err := entitysdk.CreatePeer(entitysdk.PeerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ap.Close() })
+
+	c := ap.Compute()
+	expr := c.Construct("app/axis1/probe", map[string]*entitysdk.Builder{
+		"value": c.Arithmetic("add", c.LookupScope("n"), c.Literal(int64(1))),
+	})
+	h, err := expr.Build(context.Background(), "app/axis1/decode-once")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ent, _ := ap.TestContentStore().Get(h)
+
+	ctx := ap.TestEvalContext()
+	eng := axis1.NewEngine()
+	root := rootBindings()
+
+	for i := 0; i < 10; i++ {
+		if _, err := eng.Evaluate(ent, root, compute.DefaultBudget(), ctx); err != nil {
+			t.Fatalf("tick %d: %v", i, err)
+		}
+	}
+
+	st := eng.Stats()
+	if st.Evals != 10 {
+		t.Fatalf("expected 10 evals, got %d", st.Evals)
+	}
+	// The graph has several nodes; each unique IR entity decodes once, and the
+	// count must not grow with tick count.
+	first := st.Decodes
+	for i := 0; i < 10; i++ {
+		if _, err := eng.Evaluate(ent, root, compute.DefaultBudget(), ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := eng.Stats().Decodes; got != first {
+		t.Fatalf("decode count grew across ticks: %d → %d — the §13.7 cache "+
+			"keyed by IR content hash is not working, so the rung is untested",
+			first, got)
+	}
+	t.Logf("decode-once holds: %d decodes for 20 evals (%+v)", first, eng.Stats())
+}
