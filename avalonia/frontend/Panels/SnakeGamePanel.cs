@@ -25,8 +25,15 @@ namespace EntityAvalonia.Panels;
 // custom-drawn control (BoardControl.Render — 12×12 = 144 rects,
 // bounded by the program itself, so P4 is satisfied structurally; no
 // per-cell UIElement churn, P2 not applicable).
-public sealed class SnakeGamePanel : UserControl, IDisposable
+public sealed class SnakeGamePanel : UserControl, IDisposable, IPanelPreferredHeight
 {
+    // The board is a SQUARE grid, so cell size scales with
+    // min(width/cols, height/rows). In a default three-slot stack the row is
+    // wide but short, so the board collapsed to the slot's leftover height and
+    // threw away all the width. Ask for enough to be legible without a splitter
+    // drag; the stack still star-shares above this floor.
+    public double PreferredSlotMinHeight => 520;
+
     private readonly long _handle;
     private readonly TextBlock _statusLine;
     private readonly BoardControl _board;

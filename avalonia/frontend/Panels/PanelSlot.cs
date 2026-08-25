@@ -43,6 +43,17 @@ public sealed class PanelSlot : UserControl, IDisposable
     // because the parent may want to refuse (e.g. last-slot guard).
     public event Action<PanelSlot>? RequestClose;
 
+    // PanelChanged fires after SwitchTo swaps the mounted panel. PanelStack
+    // listens so a slot's row can re-pin its MinHeight to the new panel's
+    // declared need (IPanelPreferredHeight) — a text panel and a game board do
+    // not want the same amount of vertical space.
+    public event Action<PanelSlot>? PanelChanged;
+
+    // PreferredSlotMinHeight is the mounted panel's declared minimum, or 0 when
+    // it declares none (the overwhelming majority — they take the stack default).
+    internal double PreferredSlotMinHeight =>
+        (_currentPanel as IPanelPreferredHeight)?.PreferredSlotMinHeight ?? 0;
+
     // Smoke-test surface: the live panel control hosted by this slot.
     // Used by SmokeDriver to drive a panel without going through the
     // user-facing slot picker. Null if the slot is empty.
@@ -145,6 +156,7 @@ public sealed class PanelSlot : UserControl, IDisposable
 
         _currentPanel = PanelRegistry.Create(panelName, _peerHandle, _host);
         _contentBorder.Child = _currentPanel;
+        PanelChanged?.Invoke(this);
     }
 
     private void OnCloseClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

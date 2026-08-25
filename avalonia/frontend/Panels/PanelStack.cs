@@ -190,6 +190,9 @@ public sealed class PanelStack : UserControl, IDisposable
     {
         var slot = new PanelSlot(_peerHandle, _host, panelName);
         slot.RequestClose += OnSlotRequestClose;
+        // The slot's ctor already ran SwitchTo, so the INITIAL pin comes from
+        // AppendRowsForSlot; this covers every later swap-in-place.
+        slot.PanelChanged += OnSlotPanelChanged;
         _slots.Add(slot);
     }
 
@@ -198,6 +201,7 @@ public sealed class PanelStack : UserControl, IDisposable
         if (_disposed) return;
         if (!_slots.Remove(slot)) return;
         slot.RequestClose -= OnSlotRequestClose;
+        slot.PanelChanged -= OnSlotPanelChanged;
         slot.Dispose();
         // Rebuild on close — simpler than splicing rows out, and
         // close-loses-drag-state is an acceptable trade-off for the
@@ -262,11 +266,41 @@ public sealed class PanelStack : UserControl, IDisposable
         // SIGSEGV (see class doc).
         _grid.RowDefinitions.Add(new RowDefinition(GridLength.Star)
         {
-            MinHeight = SlotMinHeight,
+            MinHeight = SlotMinHeightFor(_slots[i]),
             MaxHeight = SlotMaxHeight,
         });
         Grid.SetRow(_slots[i], _grid.RowDefinitions.Count - 1);
         _grid.Children.Add(_slots[i]);
+    }
+
+    // SlotMinHeightFor resolves a slot's row MinHeight: the stack default,
+    // raised to whatever the mounted panel declares it needs
+    // (IPanelPreferredHeight), clamped to SlotMaxHeight.
+    //
+    // The clamp is what keeps the class-doc invariant intact: the result is
+    // always in [SlotMinHeight, SlotMaxHeight] and therefore always > 0, so a
+    // panel cannot talk a row into the zero-size layout recursion.
+    private static double SlotMinHeightFor(PanelSlot slot)
+    {
+        var want = Math.Max(SlotMinHeight, slot.PreferredSlotMinHeight);
+        return Math.Min(want, SlotMaxHeight);
+    }
+
+    // OnSlotPanelChanged re-pins a slot's row when its panel is swapped in
+    // place: switching a text panel to a game board (or back) changes what the
+    // row needs, and without this the row keeps the old panel's floor.
+    private void OnSlotPanelChanged(PanelSlot slot)
+    {
+        if (_disposed) return;
+        var i = _slots.IndexOf(slot);
+        if (i < 0) return;
+        var row = _grid.RowDefinitions[i == 0 ? 0 : 2 * i];
+        var want = SlotMinHeightFor(slot);
+        if (Math.Abs(row.MinHeight - want) > 0.5)
+        {
+            row.MinHeight = want;
+            UpdateGridHeight();
+        }
     }
 
     // UpdateGridHeight rebinds Grid.Height to max(viewport, content_min).
@@ -283,8 +317,14 @@ public sealed class PanelStack : UserControl, IDisposable
             if (!double.IsNaN(_grid.Height)) _grid.Height = double.NaN;
             return;
         }
-        var contentMin = _slots.Count * SlotMinHeight
-            + (_slots.Count - 1) * SplitterHeight;
+        // Sum the slots' ACTUAL minimums, not count * SlotMinHeight — a slot
+        // holding a panel that declared a larger floor contributes that floor,
+        // and the stack has to grow (and scroll) to honour it.
+        var contentMin = (_slots.Count - 1) * SplitterHeight;
+        foreach (var s in _slots)
+        {
+            contentMin += SlotMinHeightFor(s);
+        }
         var viewport = _scroll.Bounds.Height;
         var target = Math.Max(viewport, contentMin);
         // Guard against rebinding to the same value — keeps the
@@ -328,6 +368,7 @@ public sealed class PanelStack : UserControl, IDisposable
         foreach (var s in _slots)
         {
             s.RequestClose -= OnSlotRequestClose;
+            s.PanelChanged -= OnSlotPanelChanged;
             s.Dispose();
         }
         _slots.Clear();

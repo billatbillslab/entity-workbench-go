@@ -183,6 +183,8 @@ public class App : Application
             (handle, _) => new SnakeGamePanel(handle));
         PanelRegistry.Register("life", "Life (compute)",
             (handle, _) => new LifeGamePanel(handle));
+        PanelRegistry.Register("asteroids", "Asteroids (compute)",
+            (handle, _) => new AsteroidsGamePanel(handle));
     }
 
     public override void OnFrameworkInitializationCompleted()

@@ -87,6 +87,12 @@ public static class SmokeDriver
             return StartLife(window, peer);
         }
 
+        var asteroidsMode = Environment.GetEnvironmentVariable("WB_SMOKE_ASTEROIDS");
+        if (!string.IsNullOrEmpty(asteroidsMode))
+        {
+            return StartAsteroids(window, peer);
+        }
+
         var siteMode = Environment.GetEnvironmentVariable("WB_SMOKE_SITE_NAVIGATE");
         if (!string.IsNullOrEmpty(siteMode))
         {
@@ -371,6 +377,116 @@ public static class SmokeDriver
             if ((_iteration % 8) == 0)
             {
                 Log($"iter {_iteration}/{_cyclePaths} dir={dir} — {sp.StatusTextForTests}");
+            }
+            _iteration++;
+        };
+        _cycleTimer.Start();
+    }
+
+    // --- ASTEROIDS mode (WB_SMOKE_ASTEROIDS) ----------------------------
+    //
+    // Drives the heterogeneous-actor compute-program panel end-to-end under
+    // real X11: switch the middle slot to the asteroids panel, start the host
+    // tick clock, then fly — holding SETS of keys (thrust+turn together) and
+    // firing, so the run exercises the two things this panel exists to prove:
+    //
+    //   - the HELD-KEY SET input port. Snake's driver writes one direction per
+    //     step; this one writes a BITMASK, and the sets below deliberately hold
+    //     multiple keys at once — the case Snake's port structurally cannot
+    //     express.
+    //   - the DISPLAY-LIST output port. The frames are the proof: if the panel
+    //     paints actors it never received actor state for, the display list is
+    //     carrying the whole render contract.
+    //
+    // The status line reports the live drawable count, so a run that spawns
+    // bullets and splits asteroids shows the actor set CHANGING LENGTH in the
+    // log — the variable-set result, visible from the UI. Honors
+    // WB_SMOKE_CYCLE_PATHS (input changes, default 40) and
+    // WB_SMOKE_CYCLE_GAP_MS (gap, default 400ms).
+    private static bool StartAsteroids(MainWindow window, PeerView peer)
+    {
+        _window = window;
+        _peer = peer;
+        _cyclePaths = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_PATHS"), out var n) ? n : 40;
+        _cycleGapMs = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_GAP_MS"), out var g) ? g : 400;
+        Log($"asteroids mode: inputs={_cyclePaths} gap={_cycleGapMs}ms");
+
+        try
+        {
+            peer.SwitchMiddleSlotForSmoke("asteroids");
+            Log("middle slot -> asteroids");
+        }
+        catch (Exception ex)
+        {
+            Log($"failed to switch middle slot: {ex.Message}");
+            return false;
+        }
+
+        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        settle.Tick += (_, _) =>
+        {
+            settle.Stop();
+            StartAsteroidsCycle();
+        };
+        settle.Start();
+        return true;
+    }
+
+    private static void StartAsteroidsCycle()
+    {
+        if (_peer == null) return;
+        var ast = _peer.AsteroidsForSmoke;
+        if (ast == null)
+        {
+            Log("middle slot is not asteroids; asteroids cycle aborted");
+            return;
+        }
+        ast.StartForTests();
+        Log("asteroids started (host tick clock running)");
+
+        // Held-key SETS. Bits: 0 left, 1 right, 2 thrust, 3 fire.
+        // Note the combinations — 0b1100 is thrust+fire held together, 0b1010 is
+        // right+fire, 0b0110 is right+thrust. A single-value port cannot say any
+        // of these, which is the whole reason the port is a bitmask.
+        var sets = new long[]
+        {
+            0b1000, // fire
+            0b0110, // right + thrust
+            0b1100, // thrust + fire
+            0b0000, // coast
+            0b1001, // left + fire
+            0b0101, // left + thrust
+            0b1010, // right + fire
+            0b0100, // thrust
+        };
+        _iteration = 0;
+        _cycleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_cycleGapMs) };
+        _cycleTimer.Tick += (_, _) =>
+        {
+            if (_peer == null)
+            {
+                _cycleTimer?.Stop();
+                return;
+            }
+            var ap = _peer.AsteroidsForSmoke;
+            if (ap == null)
+            {
+                _cycleTimer?.Stop();
+                Log("asteroids panel disappeared mid-cycle; aborting");
+                return;
+            }
+            if (_iteration >= _cyclePaths)
+            {
+                _cycleTimer?.Stop();
+                Log($"asteroids cycle complete ({_iteration} inputs) — final: {ap.StatusTextForTests}");
+                return;
+            }
+            var keys = sets[_iteration % sets.Length];
+            ap.InputForTests(keys);
+            if ((_iteration % 4) == 0)
+            {
+                Log($"iter {_iteration}/{_cyclePaths} keys=0b{Convert.ToString(keys, 2).PadLeft(4, '0')} " +
+                    $"drawables={ap.DrawableCountForTests} — {ap.StatusTextForTests}");
             }
             _iteration++;
         };

@@ -316,6 +316,47 @@ public static class Bridge
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "SnakeClose")]
     public static extern void SnakeClose(long snakeHandle);
 
+    // --- Asteroids game panel --------------------------------------------
+    //
+    // Display driver for the Asteroids hostable compute program
+    // (wb.AsteroidsGameModel) — the first heterogeneous, variable-actor-set
+    // program, and the first to bind a DISPLAY-LIST output port.
+    //
+    // Two things differ from Snake, and both are the point:
+    //   - AsteroidsInput takes a held-key SET as a bitmask (bit 0 = left,
+    //     1 = right, 2 = thrust, 3 = fire), not one direction. Snake's port
+    //     is a single last-write-wins value and cannot express "thrust +
+    //     rotate + fire at once"; a bitmask can, and it is still a SNAPSHOT
+    //     port — no new port kind was needed.
+    //   - AsteroidsRender returns a DISPLAY LIST (world-space quads + kind
+    //     tags), not game state. The panel draws polylines and knows nothing
+    //     about asteroids.
+    // See docs/architecture/reviews/COMPUTE-ASTEROIDS-PORT-TAXONOMY-2026-07-16.md.
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsOpen")]
+    public static extern IntPtr AsteroidsOpen(long peerHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsRegisterWake")]
+    public static extern IntPtr AsteroidsRegisterWake(long asteroidsHandle, IntPtr callback);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsInput")]
+    public static extern IntPtr AsteroidsInput(long asteroidsHandle, long keyBitmask);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsStart")]
+    public static extern IntPtr AsteroidsStart(long asteroidsHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsStop")]
+    public static extern IntPtr AsteroidsStop(long asteroidsHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsRestart")]
+    public static extern IntPtr AsteroidsRestart(long asteroidsHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsRender")]
+    public static extern IntPtr AsteroidsRender(long asteroidsHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsClose")]
+    public static extern void AsteroidsClose(long asteroidsHandle);
+
     // --- Life game panel -------------------------------------------------
     //
     // Display driver for the Conway's Life hostable compute program

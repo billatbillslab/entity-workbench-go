@@ -15,7 +15,7 @@ IMAGE    := entity-avalonia:dev
 # below is fenced with $(PODMAN_BUILD_CAPS) / $(PODMAN_RUN_CAPS).
 include $(WB_DIR)/caps.mk
 
-.PHONY: help build run extract host-run up test smoke-xvfb smoke-xvfb-driver smoke-xvfb-site smoke-xvfb-snake smoke-xvfb-life crash clean
+.PHONY: help build run extract host-run up test smoke-xvfb smoke-xvfb-driver smoke-xvfb-site smoke-xvfb-snake smoke-xvfb-life smoke-xvfb-asteroids crash clean
 
 help:
 	@echo "avalonia — podman build targets for the Avalonia desktop renderer"
@@ -30,6 +30,8 @@ help:
 	@echo "  make smoke-xvfb-site   drive SITE panel: cycle Navigate across the demo site"
 	@echo "  make smoke-xvfb-snake  drive SNAKE compute panel: tick clock + input-port steering"
 	@echo "  make smoke-xvfb-life   drive LIFE compute panel: tick clock, display-only"
+	@echo "  make smoke-xvfb-asteroids drive ASTEROIDS compute panel: held-key SET input +"
+	@echo "                         display-list output (heterogeneous actors)"
 	@echo "  make crash      decode the most recent libbridge.so coredump"
 	@echo "  make run        run the container with X11 forwarded from host"
 	@echo "  make extract    copy /app out of the image to ./dist-native/"
@@ -335,6 +337,33 @@ smoke-xvfb-life: build extract
 	  if [ $$status -ne 0 ]; then \
 	    echo ""; \
 	    echo "==> smoke-xvfb-life FAILED (exit $$status)"; \
+	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
+	    exit $$status; \
+	  fi
+	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
+
+# ASTEROIDS — the heterogeneous-actor compute program. Drives the held-key SET
+# input port (bitmasks with several keys down at once — the case Snake's
+# single-direction port cannot express) and the display-list output port.
+smoke-xvfb-asteroids: build extract
+	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
+	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh
+	@echo "==> ASTEROIDS Xvfb smoke (timer=$(DRIVER_SECS)s inputs=$(DRIVER_CYCLES))"
+	@cd $(APP_DIR)/dist-native && \
+	  podman run --rm $(PODMAN_RUN_CAPS) \
+	    --userns=keep-id \
+	    -v $(APP_DIR)/dist-native:/app:Z \
+	    -e WB_SMOKE_ASTEROIDS=1 \
+	    -e WB_SMOKE_CYCLE_PATHS=$(DRIVER_CYCLES) \
+	    -e WB_SMOKE_CYCLE_GAP_MS=$(DRIVER_GAP_MS) \
+	    -w /app \
+	    --entrypoint bash \
+	    $(IMAGE) \
+	    /app/run-xvfb-smoke.sh $(DRIVER_SECS); \
+	  status=$$?; \
+	  if [ $$status -ne 0 ]; then \
+	    echo ""; \
+	    echo "==> smoke-xvfb-asteroids FAILED (exit $$status)"; \
 	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
 	    exit $$status; \
 	  fi
