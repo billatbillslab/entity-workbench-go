@@ -82,7 +82,7 @@ type SignedRoot struct {
 // the §5.2 invariant pointer path, the publisher self-tag, and the
 // binding order. Routed to core-go as an ask for a seeding option
 // (2026-08-18); when it lands this collapses back to two calls.
-func mintSignedRoot(ap *entitysdk.AppPeer, prefix string) (SignedRoot, error) {
+func mintSignedRoot(ap *entitysdk.AppPeer, prefix string, at time.Time) (SignedRoot, error) {
 	cs := ap.RawContentStore()
 	li := ap.RawLocationIndex()
 	peerID := ap.PeerID()
@@ -95,7 +95,7 @@ func mintSignedRoot(ap *entitysdk.AppPeer, prefix string) (SignedRoot, error) {
 		return SignedRoot{}, fmt.Errorf("publish: prefix %q has no bindings, so there is no root to sign", prefix)
 	}
 
-	prevSeq, prevHash := priorPublishedRoot(cs, li, peerID)
+	prevSeq, prevHash := priorPublishedRoot(cs, li)
 
 	data := types.PublishedRootData{
 		PeerID:   peerID,
@@ -105,7 +105,7 @@ func mintSignedRoot(ap *entitysdk.AppPeer, prefix string) (SignedRoot, error) {
 		// concatenate into a wrong path rather than fail.
 		Prefix:      publishedPrefix(prefix),
 		Seq:         prevSeq + 1,
-		PublishedAt: uint64(time.Now().UnixMilli()),
+		PublishedAt: uint64(at.UnixMilli()),
 		Predecessor: prevHash,
 	}
 	rootEnt, err := data.ToEntity()
@@ -149,7 +149,7 @@ func mintSignedRoot(ap *entitysdk.AppPeer, prefix string) (SignedRoot, error) {
 	if err := bindTagged(li, ctx, types.LocalSignaturePath(rootEnt.ContentHash), sigEnt.ContentHash); err != nil {
 		return SignedRoot{}, err
 	}
-	if err := bindTagged(li, ctx, types.PublishedRootStoragePath(peerID), rootEnt.ContentHash); err != nil {
+	if err := bindTagged(li, ctx, types.PublishedRootStoragePath(), rootEnt.ContentHash); err != nil {
 		return SignedRoot{}, err
 	}
 
@@ -166,8 +166,8 @@ func mintSignedRoot(ap *entitysdk.AppPeer, prefix string) (SignedRoot, error) {
 // there is none (the first publish) or when what is bound does not
 // decode — a corrupt predecessor is not a reason to refuse to publish,
 // but it IS a reason not to claim a chain we cannot substantiate.
-func priorPublishedRoot(cs store.ContentStore, li store.LocationIndex, peerID string) (uint64, *hash.Hash) {
-	h, ok := li.Get(types.PublishedRootStoragePath(peerID))
+func priorPublishedRoot(cs store.ContentStore, li store.LocationIndex) (uint64, *hash.Hash) {
+	h, ok := li.Get(types.PublishedRootStoragePath())
 	if !ok {
 		return 0, nil
 	}
@@ -292,7 +292,7 @@ func emitSignedRoot(outDir string, sr SignedRoot) (int64, error) {
 	peerID := sr.Data.PeerID
 	routes := map[string]hash.Hash{
 		types.LocalSignaturePath(sr.Root.ContentHash): sr.Signature.ContentHash,
-		types.PublishedRootStoragePath(peerID):        sr.Root.ContentHash,
+		types.PublishedRootStoragePath():              sr.Root.ContentHash,
 	}
 	for bare, target := range routes {
 		body, err := encodeHashPointer(target)

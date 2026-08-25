@@ -2,6 +2,10 @@
 
 _Updated: 2026-08-18 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
 
+**Latest arch packet read: `ROUTING-2026-08-18-q`** (arch `cf6871e`). D21 — this line is the
+subtraction that tells the next session what it has not opened. Read *every* document naming this
+repo, `cc` included: `grep -ril 'workbench-go' ../entity-system-architecture/docs/status/`.
+
 ## Where it is
 
 The Go **reference application** built on the Entity Core Protocol — an opinionated,
@@ -179,7 +183,7 @@ Where the six steps stand:
 | **3a** | **Consumer-side `published-root` reader** | **done** — `entitysdk/published_root.go` |
 | **3** | **Target prefix on the sync surface (source ≠ target)** | **done** — `MirrorSinceLastSeen` + `InstallRevisionMirrorChain` + `revision mirror` |
 | 4 | Follow vocabulary settled with browser-rust | **open — needs browser-rust.** Arch confirms the two pieces (one follow verb with a `strategy` field; a per-follow minted capability) need no arch ruling |
-| 5 | The first `app/share/*` record | blocked on 4, and on `APP-CONVENTION-SHARE` — **unauthored, #4 on arch's release slice**, and they say plainly it is not fast. They will re-order if our step 5 is otherwise ready; it is not (4 comes first) |
+| 5 | The first `app/share/*` record | **arch half DELIVERED, our half STARTED (`146f9a4`).** `APP-CONVENTION-SHARE` v0.1 authored (`bb86cd1`, `ROUTING-i` §4); `entitysdk/share.go` ships the `app/share/*` type vocabulary, the tagged target union, `ShareGrants` (with `peers` omitted), `ValidateShareGrants` (the §1.1 MUST as a refusal), `AuthorShare` and `ShareWithdrawalNotice`. Vectors **SHARE-4** and **SHARE-6** pass, plus three shape pins. The authoring/validation layer is pure, so it is green **through** the kernel block; persisting the record + delivering tokens is the half that waits. `strategy` still open on browser-rust (step 4) |
 | 6 | `APP-CONVENTION-CHAT` review as a consumer | open, competes with nothing |
 
 **What 3a/3 mean in practice.** A peer can now read another peer's signed
@@ -331,8 +335,7 @@ chain happened to be local-only).
 - **The catch-all MUST be local-only** (§4.1 step 2 — "the primary privacy mechanism"). We
   **refuse** rather than normalize: §11.1 permits either, but silently rewriting an operator's
   privacy config into a different one means they never learn they did not get what they asked for.
-- Two cohort observations, inert today, routed: §4.1a names backend kind `did-key` while core-go's
-  only self-certifying constant is `self-certifying`; and `pinned` has no constant anywhere.
+- Two cohort observations we filed as inert. **They were not** — see §6b.
 
 **Operator surface:** `peer status` (new) renders the tree's lifecycle record —
 connected/suspect/disconnected, the transition reason, and a coarse age — deliberately a
@@ -343,31 +346,212 @@ blank table that reads as "nothing is connected". The SINCE column shows `failin
 `connected_at` and **never `last_seen`** — rendering a transition snapshot as "last heard from"
 would tell an operator a healthy peer had gone quiet for hours.
 
-### 6. BLOCKED — `make test` is red across the tree, and it is core-go's (2026-08-18)
+### 6. CLEARED — the tree was red across 6 of 9 suites, and it was core-go's (2026-08-18)
 
-**Not ours, not worked around, routed.** The sibling `entity-core-go` working tree carries an
-uncommitted change to `core/protocol/local.go` removing resource inheritance in sub-dispatch, per
-arch `ROUTING-2026-08-18-g` §5 (**ruled, normative** — `ENTITY-CORE-PROTOCOL` §5.2 at arch
-`980ddf1`). The ruling is right. Removing the inheritance also removed the only channel by which
+> **RESOLVED same day. core-go `7593618` — `DispatchLocalExecute` now passes
+> `handler.WithResource(req.Resource)`.** Re-run here against it: **`make test` exit 0, zero
+> failures** across its eight suites (`entitysdk`, `shell`, `shellboot`, `shellcmd`, `shellpanel`,
+> `workbench`, `programs`, `inspect`), plus **`make test-publish` green** separately — `publish` is
+> not in the `make test` target. `make lint` clean. **323 → 0.** Our call sites were correct the
+> whole way down and nothing here changed to accommodate the defect — the decision not to work
+> around it in the app repo is what kept the fix a one-liner in the right tree.
+>
+> *(Per AP15: the count above is from a run that completed. A first attempt exited 2 on a transient
+> `cd: can't cd to shell` while other container jobs were touching the tree concurrently; re-run
+> clean with nothing else running, `shell` passes in 2.27s. Reported rather than quietly dropped.)*
+>
+> **The reproducer became their regression test.** `TestDispatchLocalExecute_CarriesResourceToHandler`
+> is our kernel-level shape landed in `core/protocol/local_entry_resource_test.go` — red pre-fix at
+> status 200 with `Resource == nil`, green after.
+>
+> **Their ratchet, worth carrying here too:** `dispatch_equivalence_test.go` asserted *result*
+> equality between the wire and in-process entry paths but never the handler-visible *context*, and
+> `subdispatch_resource_dimension_test.go` drove both sub-dispatch directions without ever entering
+> through `DispatchLocalExecute`. **Two entry paths claiming equivalence need a test that asserts
+> the handler-visible context, not just the result.** The SDK path exercised it; theirs did not.
+> Folded as **AP17**.
+
+The history below is kept because the *shape* is the lesson, not the outage.
+
+### 6 (historical). BLOCKED — `make test` is red across the tree, and it is core-go's (2026-08-18)
+
+**Not ours, not worked around, routed — and it has LANDED in core-go (`0b9e261`), not merely
+in-flight.** The change removes resource inheritance in sub-dispatch per arch
+`ROUTING-2026-08-18-g` §5 (**ruled, normative** — `ENTITY-CORE-PROTOCOL` §5.2 at arch `980ddf1`). The ruling is right. Removing the inheritance also removed the only channel by which
 the in-process **entry point** delivered a resource it was explicitly given:
 `DispatchLocalExecute` sets `rootCtx.Resource` and then dispatches with `WithCapability` alone.
 
-Every one of the 100+ tests in `programs/` fails with one message —
-`resource target path is required` from `core/tree/handler.go` on `tree:put`. **The radius grew
-while we worked**: `entitysdk`'s `TestResolveChain_*` (four tests, failing at their *setup* step)
-and `TestEnsureResolverConfig_InstallsOnceAndDoesNotOverwrite` went red as more of the change landed,
-and then `shellcmd` went from green to **71 failures**. It is every in-process dispatched write
-that names a resource.
+**Measured tree-wide in the 2026-08-18 audit — 323 failures across 6 of 9 suites**, which is
+substantially worse than first reported. `make test` stops at the first failing package, so the
+earlier per-suite numbers were taken through a keyhole; each suite must be run on its own
+(`make test-sdk`, `test-shellcmd`, …) to see the radius:
+
+| suite | failures | |
+|---|---:|---|
+| `entitysdk` | **171** | first reported as 5 |
+| `shellcmd` | **71** | |
+| `programs` | **46** | 52 with subtests |
+| `shell` | **14** | first reported green — it was not |
+| `shellboot` | **12** | first reported green — it was not |
+| `inspect` | **9** | not previously reported |
+| `workbench`, `shellpanel`, `publish` | 0 | genuinely green |
 
 **It wears five faces, and that is the part worth remembering** — the same defect will not present
 the same way twice, because each handler validates its resource independently and says so in its
-own words: `resource target path is required` (tree, 45), `bind_cap` (31, downstream of a failed
-put), `resource target is required for subscription` (10), `ambiguous_resource: install requires
-exactly one resource` (10), `missing_resource_path` (role, 1). Do not diagnose these separately.
+own words: `resource target path is required` (tree, 306), `bind_cap` (37, downstream of a failed
+put), `resource target is required for subscribe` (17), `ambiguous_resource: install requires
+exactly one resource` (17), `missing_resource_path` (role, 5). Do not diagnose these separately.
+The rest are **cascade** — a test whose setup `Put` was refused then reads an empty tree and
+reports a wrong count, a missing path, a surviving roster entry. All one defect.
 
-Full packet, including the one-line fix and the coverage gap that let it through:
+**The mechanism is now isolated, not just argued** (the measurement the previous handoff flagged as
+owed). A kernel-level reproducer — `protocol.NewDispatcher` + `DispatchLocalExecute` with a
+wildcard grant and a handler that records `req.Context.Resource`, **no workbench code in the
+path** — shows the handler running at status 200 and seeing `Resource == nil`. It is in the packet
+verbatim, as the test core-go is missing.
+
+Full packet, including the one-line fix, the reproducer, and the coverage gap that let it through:
 `docs/architecture/reviews/CORE-GO-LOCAL-DISPATCH-RESOURCE-2026-08-18.md`.
 **Re-run `make test` once it lands.** Do not work around it here — the call sites are correct.
+
+**Still live at core-go `6ed6f95`** (re-verified in the audit): `git log 0b9e261..HEAD --
+core/protocol/local.go` is empty — nothing has touched the file. Six commits have shipped on top,
+including `88615f6` *"three-way release gate — go clean"*. That green is real for their suites and
+does not cover this path, which is the whole point of the coverage gap. **The packet is still
+unsent** — it does not reach them until `dev` is pushed.
+
+### 5a. The cross-impl publish/consume check — three surfaces align, the front door does not (2026-08-18)
+
+The ADR-0012 result: every signed-root result either arm holds is **same-language**, so ours and
+browser-rust's agreeing with themselves is cohort-consistent, not independent convergence.
+`publish/cmd/crossimpl-fixture` emits a deterministic Go site (pinned seed, so peer-id and every
+hash below it are stable) to hand their reader.
+
+Measured against browser-rust `a0145a7`'s `DirFetcher`:
+
+- **Aligned, with no shared code:** content sharded `{aa}/{bb}/{hex}` on the 66-char wire hex,
+  bare-hashable bodies, and the two-hop signature at `system/signature/{root_hex}.bin` keyed on the
+  published-root entity hash. Their doc calls the latter two *"divergences from upstream"* — they
+  are **not** divergences from us. That is the part worth keeping.
+- **Not aligned — and it is hop 0.** `DirFetcher::manifest()` reads
+  `{base}/{peer_id}/system/peer/published-root`. **Half of this is now FIXED in the kernel:**
+  core-go `2bd2380` (ruled by arch *from this run*) dropped the `/{base58_peer_id}` segment that
+  `PublishedRootStoragePath` appended — the qualified binding had named the peer twice, and
+  core-go's writer and reader shared the helper, so Go-on-Go passed deceptively. Adopted here in
+  `00b92c7`; the directory collision is gone.
+  **The remainder, re-measured:** we emit `…/published-root**.bin**` (our advertised
+  `tree_leaf_suffix`, since the head pointer *is* a tree leaf) holding a 2-key `system/hash`
+  pointer; their `manifest()` reads the suffix-less path and expects the 3-key wire entity, which
+  we emit at `{out}/manifest`. `ENOENT` now rather than `EISDIR` — still hop 0, and now a narrow
+  question about which artifact belongs at which path.
+
+**RULED 2026-08-18 in our favour — `ROUTING-2026-08-18-p` §3, `EXTENSION-NETWORK` 1.8.** The
+manifest's location is **discovered** from `manifest_url_prefix`, never derived by convention from
+the tree path, and *a consumer MUST NOT join `signed_pointer` onto an origin*. The two fields answer
+different questions: `manifest_url_prefix` is where to GET it, `signed_pointer` is what the origin
+is asserting. `{origin}/manifest` and `{origin}/{peer}/system/peer/published-root` are equally
+conformant; only the advertised one is findable. **`DirFetcher::manifest()` is the defect and the
+fix is browser-rust's.** Arch rejected "serve it at both paths" — *"two front doors is not
+compatibility; it is the divergence, ratified"* — and upheld the decision not to move our layout.
+Nothing owed here; our `manifest_url_prefix` advertisement was conformant throughout.
+
+**Fixture re-cut and handed over (`d940ce0`), and the re-cut found a defect of ours.** The packet
+told browser-rust the emission was byte-identical on their machine. It was not: `published_at` is a
+field **of** the published-root entity, so a fresh clock moved the root's content hash, the
+`system/signature/{root_hex}.bin` binding named after it, two content shards and `{out}/manifest` —
+every artifact their reader enters through. Only the trie root and the entities beneath it were ever
+stable. `publish.Opts.At` now pins the instant (zero still means `time.Now()`), the fixture pins it,
+and two fresh runs diff clean. **AP18** — a claim about emitted bytes settled by reading the emitter
+instead of emitting twice and diffing.
+
+Corrected fixture facts (core-go `7593618`): `peer_id 2KLv2nhwtPrL…`, trie
+`ecf-sha256:f567bfbd…`, published-root `00e0138dbeb374…`, signature `000ef5f255803…`.
+
+**Still not run end to end:** executing their reader against our fixture needs a test in *their*
+tree. Per D19/AP10 everything above except the emitted bytes ships as a prediction with a
+reproducer attached.
+Packet: `docs/architecture/reviews/CROSSIMPL-PUBLISH-CONSUME-2026-08-18.md` (UPDATE 2 carries the
+ruling and the corrected hashes).
+
+### 6a. CORRECTED — R3 shipped against a spec sentence arch withdrew 78 minutes later (2026-08-18)
+
+`24169b9` shipped the resolver-config against `EXTENSION-REGISTRY` **1.6** §4 (*"an ORDERED list,
+first-match-wins (MUST)"*). Arch withdrew that in `3670283` → **1.7**: the list is a **filter**, a
+name matching several entries is eligible at the **union**, and precedence is
+`resolver_chain[].priority`. The `#` column is reference numbering, not evaluation order.
+
+**One live defect came out of it and is fixed.** `ValidateResolverConfig` refused a config whose
+catch-all was not the final entry (`catchall_not_last`) — correct under 1.6, where everything below
+a catch-all was dead config; under 1.7 those entries stay eligible, so the refusal **rejected a
+deployment the spec permits**. Removed, with a regression pin naming the withdrawal
+(`TestValidateResolverConfig_CatchAllPositionIsNotADefect`). The order pin became
+`TestDefaultNameFormatDispatch_MatchesTheSpecTable` — it pins the six rows and their
+`backend_kinds`, not a sequence.
+
+**What did not change:** the six default rows, emitted verbatim in the table's sequence (now
+documented as presentational), and **§4.1 step 2's catch-all local-only MUST, still enforced at the
+write as a refusal**. 1.7 makes that the load-bearing rule explicitly — the same conclusion resting
+on the right sentence.
+
+Routed: `docs/architecture/reviews/RESOLVER-CONFIG-FILTER-CORRECTION-2026-08-18.md`, which also
+carries the two cohort observations (`did-key` vs `self-certifying`; `pinned` has no constant) and
+the `ROUTING-2026-08-18-i` acknowledgement.
+
+### 6b. REGISTRY v1.13 adopted — both "inert" observations were live defects (2026-08-18)
+
+`f79cc4a`. Arch's `-p` §5 came back on the two cohort observations §5 filed as inert: **they were
+dead config in every conformant peer**, because §4.2 makes an unknown `backend_kind` MUST-skip with
+a warning, so our shipped default list contained rows a conformant implementation is *required to
+discard*.
+
+| row | was | now (v1.13) |
+|---|---|---|
+| 2 `did:key:*` | `["did-key"]` | `["self-certifying"]` |
+| 6 `*` | `["local-name", "pinned"]` | `["local-name", "self-certifying", "out-of-band", "peer-issued"]` |
+
+Row 6 is **not** what `-p` said — v1.12 removed the undeclared `pinned` without naming the declared
+token that does the job, and `-q` §2 corrects it to `out-of-band` (§4.1.2: the kind a pin's
+synthesized binding carries; §6a.4 makes it dispatchable where `pinned` is not). The row moved three
+times in one day and browser-rust pinned the middle version. **Our pin now names the spec revision
+it was taken at**, so the next move presents as a red test with a version to compare.
+
+**The tell was in our own source: we had to invent both constants.** `BackendKindPinned` and
+`backendKindDIDKey` existed only because §4.1a named strings core-go's enum does not declare, each
+with a doc comment explaining the absence. We wrote that explanation twice and still filed it as an
+observation. **AP20** — a constant you have to invent locally to satisfy a spec table is a defect in
+one of the two documents, never a naming gap.
+
+**The catch-all MUST is re-keyed, and our guard had been refusing a legal config.** `-l` §1
+(REGISTRY 1.8) was cc'd to us and unopened: the banned property is **name transmission, not
+remoteness**. The two come apart exactly at `peer-issued`, which §6a.4 resolves by content address
+through a signed root so the queried name never appears in a request. Our allow-list was
+`{local-name, pinned}` — it refused `self-certifying` and `out-of-band`, which dial nobody, and once
+rows 2/6 were corrected `DefaultResolverConfig()` failed `ValidateResolverConfig()`: the helper that
+ships the default could no longer install it. Now a deny-list over the four disclosing kinds
+(`dns-txt`, `well-known-url`, `did-web`, `consensus-anchored`), because §4.2 makes an unrecognized
+kind inert and refusing on account of one rejects a config a newer vocabulary permits. Code renamed
+`catchall_not_local` → `catchall_transmits_name`.
+
+**The old pin passed under both rules** — it tried exactly one forbidden kind, `peer-issued`, which
+the re-key moved from forbidden to permitted. Green was our only evidence the guard was right and it
+was compatible with the guard being backwards. **AP19.** The replacement enumerates all four
+disclosing kinds and all four admitted ones.
+
+**Finding routed to arch:** §11.1's `REG-DISPATCH-CATCHALL-LOCAL-1` was **not** moved with §4.1
+step 2. It still says a catch-all naming *"a remote backend"* MUST be refused and that resolving a
+bare name MUST produce *"no read against any remote registry"* — both false against row 6, which now
+ships `peer-issued`. **An implementation passing that vector literally refuses the default list the
+same document tells it to ship.** Same failure as rows 2/6 one layer out: the rule was re-keyed and
+the artifact that tests it stayed on the old property. Nobody copies §11.1, so it drifted silently.
+
+Also pinned: REG-DISPATCH-GRAMMAR-1's refusal half (`-q` §1). The grammar is closed and every non-`*`
+byte is a literal, so **no pattern is invalid** and a registry MUST NOT reject one for `?`, `[`, `\`.
+We author patterns and never match them, so that is our whole exposure — pinned rather than assumed,
+because "closed grammar" has meant "reject at write" everywhere else in this corpus.
+
+Packet: `docs/architecture/reviews/REGISTRY-V113-ADOPTION-2026-08-18.md`.
+**D21 earned** (AP12 promoted): a *cc'd* packet is a packet. Session start now greps the arch repo
+for every document naming this repo, and STATUS carries the last letter read.
 
 ## Open bugs
 
@@ -491,6 +675,21 @@ generic-host copy of all three panels. Retiring them means re-pinning that oracl
 - **Cross-team:** the content-store GC / reachability contract.
 - **`entity-browser-rust`:** the follow vocabulary — one record + verb, `strategy` with a
   value that does not assume ordered delivery (share-review §3.2). Step 4 of the share arc,
-  and step 5 waits on it by construction.
-- **arch:** `APP-CONVENTION-SHARE` authored (their own named top item) — the last thing
-  between us and writing the first `app/share/*` record.
+  and step 5 waits on it by construction. **Also: the fixture run.** `DirFetcher::manifest()`
+  reads `manifest_url_prefix` per `-p` §3, then runs our re-cut fixture (`d940ce0`, byte-stable)
+  and tells us where it actually stops.
+- **arch:** `REG-DISPATCH-CATCHALL-LOCAL-1` re-keyed or explicitly scoped — §11.1's vector still
+  bans remoteness while §4.1 step 2 bans name transmission, so it contradicts §4.1a row 6's
+  `peer-issued` (§6b). Blocks nobody today; misleads everybody later.
+- ~~**arch:** `APP-CONVENTION-SHARE` authored~~ — **DELIVERED 2026-08-18.**
+  `specs/applications/APP-CONVENTION-SHARE.md` v0.1 exists (arch `bb86cd1`, routed as
+  `ROUTING-2026-08-18-i` §4). **`app/share/*` is no longer blocked by arch.** Four constraints to
+  build against: a share is a titled grant (`resources` = what is shared, audience = the minted
+  token's `grantee`); **`peers` MUST be omitted** (populating it 403s every cross-peer presentation
+  and still passes local testing, because our single-identity tests collapse root/grantee/granter);
+  type tags are `app/share/*` (the index key for cross-peer aggregation — a tag under our own
+  prefix breaks browser↔go interop); mirrors write the publisher's paths verbatim. Withdrawal is
+  asymmetric — `request`-minted tokens are **not** recallable and a UI **MUST NOT** imply otherwise.
+  Not ratifiable (zero vectors); `SHARE-4` and `SHARE-6` are the two owed vectors that fail loudly
+  on the intuitive-but-wrong reading, and are where we start.
+  **Step 5 is now blocked only on the core-go kernel defect (§6), not on arch.**

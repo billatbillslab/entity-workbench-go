@@ -81,13 +81,13 @@ L0-L3's actual behavior gets documented forensically.
 
 ---
 
-## 2. The 20 disciplines
+## 2. The 21 disciplines
 
 D1-D11 are inherited verbatim from the entity-OS discipline charter
 (originating in godot-entity-core-rust, ratified by egui-entity-core-rust).
 They are stack-agnostic; they govern how we use the substrate.
 
-D12-D20 are native to our stack (Avalonia + .NET + cgo + Go + the
+D12-D21 are native to our stack (Avalonia + .NET + cgo + Go + the
 two-renderer architecture). They are **earned** by shipped bugs and
 explicit feedback episodes. Each cites the commit or pin that proved
 we needed it.
@@ -108,7 +108,7 @@ we needed it.
 | D10 | Real-session coverage | Cross-boot + headed + real-store paths for load-bearing changes. Headless green is necessary, not sufficient. Eight crash-hunt commits proved this on the Avalonia side. |
 | D11 | Inventory-boundary declaration (meta) | At audit open: name what's in scope **and what's not.** Findings that surface outside the boundary extend the boundary for the next audit. |
 
-### Native to our stack — earned by shipped bugs (D12-D17, D19, D20) and feedback episodes (D18)
+### Native to our stack — earned by shipped bugs (D12-D17, D19, D20, D21) and feedback episodes (D18)
 
 **D12 — Cross-language lifetime accounting.**
 *Source:* the cgo + GCHandle FFI discipline.
@@ -342,6 +342,41 @@ rule: `publish/signed_root.go`'s note on `CollectNodeClosure`,
 imperative half), and `entitysdk/network.go`'s (the handler owns the
 reactive half).
 
+**D21 — Every packet that names this repo is inbound. The `To:` line is
+not the filter.**
+*Source:* AP12 promoted — two misses, a day apart, in different shapes.
+(1) `ROUTING-2026-08-17-l` §2 was addressed to us by name, sat unopened,
+and we shipped three commits past a live conformance finding against
+`publish/publish.go`. The enforcement we wrote for it said *"session
+start reads the sibling repo for packets **addressed to us**"* — and
+that sentence is precisely what let the second one through. (2)
+`ROUTING-2026-08-18-l` was **cc'd** to us with the note *"§1 changes the
+default dispatch table"*. It re-keyed `EXTENSION-REGISTRY` §4.1 step 2
+from remoteness to name transmission — a MUST we enforce as a refusal in
+`ValidateResolverConfig`. We did not open it, and our guard went on
+rejecting a config the spec permits until arch told us twice, in two
+later packets, in different words.
+*Why:* a routing header describes who **owes work**, not who is
+**affected**. The seat that has to change code is on the `To:` line; the
+seat whose landed behavior just became wrong is very often on the `cc`.
+Those are different questions and only one of them is answered by the
+header. A cc is also the cheaper miss to make — nothing is owed, so
+nothing chases it.
+*How:*
+- Session start greps the sibling `../entity-system-architecture` for
+  **every** document naming this repo, not the ones whose header names
+  us: `grep -ril 'workbench-go' ../entity-system-architecture/docs/status/`.
+  Read anything newer than the last one STATUS acknowledges.
+- STATUS records the **last packet letter read**, so the gap is a
+  subtraction rather than a judgement.
+- A packet that says it changes a table, a default, or a MUST is read
+  the same session regardless of header. Those three words are the
+  trigger.
+*Enforcement:* `AGENTS.md`'s session-start line names the grep and the
+letter-tracking; `docs/status/STATUS.md` §"Latest arch packet read"
+carries the letter. If a packet naming us is found unread again, the
+next step is a checked-in script, not a third prose rule.
+
 ---
 
 ## 3. The ten review questions (run on every diff)
@@ -374,7 +409,7 @@ Short enough to run on every change. Six inherited, four substrate-native.
 
 ---
 
-## 4. The anti-pattern catalog (AP1-AP14)
+## 4. The anti-pattern catalog (AP1-AP20)
 
 Each a real defect that shipped or a claim that was routed, diagnosed, and
 is now pinned by a regression test.
@@ -426,6 +461,13 @@ gets a row in `docs/status/STATUS.md` or `docs/architecture/reviews/` **in that 
 before feature work starts.** Added to `AGENTS.md`. If it bites a second time in a
 different shape, promote it.
 
+> **PROMOTED to D21 (2026-08-18).** It bit a second time the same week, in the shape the
+> enforcement sentence above left open: `ROUTING-2026-08-18-l` was **cc'd** rather than
+> addressed to us, re-keyed the §4.1 step 2 MUST our validator enforces, and went unread
+> while the validator went on refusing a legal config. *"Packets addressed to us"* was the
+> filter that let it through, which is why the discipline is keyed on the repo name
+> appearing anywhere in the document rather than on the header.
+
 **AP13 / AP14 — the publisher-conformance pair (2026-08-18).** From the Exit-B build in
 `publish/`. Both catalog-level; each has bitten once.
 
@@ -439,6 +481,53 @@ nothing is written before it), `TestPublish_SignedRootVerifiesFromTheEmittedFile
 closure completeness from the consumer's vantage point, and
 `TestPublish_SeqAdvancesAcrossRuns` pins the §6.5.6 republish MUST that the upstream engine
 does not hold on its own.
+
+**AP15 / AP16 — the audit pair (2026-08-18).** Both earned by the audit session that followed
+the publisher/connectivity work. Catalog-level; each has bitten once.
+
+| AP  | Source | Pattern (the name we use for it) | Discipline |
+|-----|--------|----------------------------------|------------|
+| AP15 | `HANDOFF-2026-08-18-b` §4 vs the audit's per-suite run | **A failure count read through a stopping build.** We reported the kernel block as *"all of `programs`, `shellcmd` (71), plus five in `entitysdk`"* and called `shell`/`shellboot` green. `make test` **stops at the first failing package**, so every number after the first was invisible: the real radius was **323 across 6 of 9 suites**, `entitysdk` alone was 171, and the two "green" suites had 26 failures between them. We then routed those numbers to another repo. **A blast-radius number from a fail-fast runner is a lower bound, not a measurement** — run each suite to completion (`make test-<pkg>`) before any count leaves the tree. | D9 (accounting), D17 |
+| AP16 | `entitysdk/resolver_config.go` `catchall_not_last` | **A refusal outliving the sentence that justified it.** We enforced "the catch-all must be last" as a 400 because §4 (1.6) said the dispatch list was first-match-wins. Arch withdrew that sentence 78 minutes after we shipped; under 1.7 the list is a filter and later entries stay eligible, so our refusal **rejected a config the spec permits**. A refusal is the most expensive thing to get wrong — it is the one behavior an operator cannot work around. **When the spec sentence a refusal rests on moves, the refusal is the first thing to re-derive**, and a refusal should cite the sentence in its error text so the coupling is greppable. | D8 (surface spec drift), D3 |
+
+*Enforcement:* AP15 — the STATUS §6 inventory is per-suite and any packet quoting a failure count
+names the command that produced it. AP16 — `TestValidateResolverConfig_CatchAllPositionIsNotADefect`
+pins the withdrawal by name, and every refusal in `ValidateResolverConfig` carries its spec citation
+(`§4.1 step 2`) in the error string, so `grep -rn "§4" entitysdk/*.go` enumerates what a spec change
+must be re-read against.
+
+**AP17 — equivalence asserted on the result, never on the context (2026-08-18).** Earned in
+core-go's tree, on our finding, and kept here because **we are the seat that exercises the path**.
+
+| AP  | Source | Pattern (the name we use for it) | Discipline |
+|-----|--------|----------------------------------|------------|
+| AP17 | core-go `0b9e261` → `7593618`, found from `entity-workbench-go` | **Two entry paths that claim equivalence, tested only on their return value.** `DispatchLocalExecute` is documented as *"the in-process equivalent of wire EXECUTE"*. `dispatch_equivalence_test.go` asserted the two paths returned equal **results**; `subdispatch_resource_dimension_test.go` drove both sub-dispatch directions from a hand-built parent context. Neither ever entered through the entry point, so when the resource stopped reaching the handler, **every result stayed equal and the handler-visible context was silently different** — 323 failures in our tree, zero in theirs. **When two paths claim equivalence, the test must assert what the callee SEES, not what the caller GETS.** The corollary for us: an app repo is the seat that walks the SDK path, so a kernel gap that only that path exercises is ours to find and route, never to work around. | D10, D19, D8 |
+
+*Enforcement:* the kernel-level reproducer shape (drive the real entry point, record
+`req.Context.*` inside the handler, assert on the recording) is the pattern for any future
+in-process/wire equivalence claim we depend on. It landed in core-go as
+`TestDispatchLocalExecute_CarriesResourceToHandler`; ours lives in the routing packet
+`reviews/CORE-GO-LOCAL-DISPATCH-RESOURCE-2026-08-18.md` rather than in our suites, because a test
+asserting kernel behavior belongs in the kernel's tree.
+
+**AP18 / AP19 / AP20 — the v1.13 adoption trio (2026-08-18).** Earned on one session: re-cutting
+the cross-impl fixture arch asked for, and adopting `EXTENSION-REGISTRY` 1.13. All three are
+catalog-level; each has bitten once. **AP18 and AP20 are the same family as AP13/AP10** — a claim
+about something outside our source, settled from inside it.
+
+| AP  | Source | Pattern (the name we use for it) | Discipline |
+|-----|--------|----------------------------------|------------|
+| AP18 | `publish/cmd/crossimpl-fixture/main.go` doc comment vs `diff -r` of two runs | **A claim about emitted bytes, verified by reading the code that emits them.** We told `entity-browser-rust` the fixture was *"byte-identical on your machine"* and wrote a doc comment naming `advertised_at` as the one unstable field, *"not part of the signed root's closure"*. We had read the source for fields that looked like clocks. `published_at` is a field **of the published-root entity**, so a fresh clock moved the root's content hash, the `system/signature/{root_hex}.bin` binding named after it, two content shards and `{out}/manifest` — everything a consumer's reader enters through. The check is one line of shell: **emit twice into different directories and diff.** A determinism claim is a claim about outputs and is only ever settled by comparing outputs. | D19, D9 |
+| AP19 | `entitysdk/resolver_config_test.go::TestValidateResolverConfig_CatchAllMustBeLocal` (now replaced) | **A pin that passes under both the rule it claims and the rule that replaced it.** The test asserted §4.1 step 2's catch-all MUST by trying exactly one forbidden kind — `peer-issued`. When arch re-keyed the rule from *remoteness* to *name transmission* (1.8), `peer-issued` moved from forbidden to **permitted**, and the test kept passing because it never distinguished the property from the example. A green pin was our only evidence the guard was right, and it was compatible with the guard being exactly backwards. **A test whose assertion cannot tell the old rule from the new one is evidence for neither** — enumerate the property's whole domain (all four disclosing kinds, all four admitted ones), not one member of it. | D10, D8 |
+| AP20 | `entitysdk/resolver_config.go` — the deleted `BackendKindPinned` and `backendKindDIDKey` | **The locally invented constant.** §4.1a's default list named `pinned` and `did-key`; core-go's `core/types` declares neither. To ship the table we defined both ourselves, each with a doc comment explaining why the spec's string had no referent — and filed the mismatch as an inert cohort observation. It was not inert: §4.2 makes a conformant peer **skip** an entry with an unknown `backend_kind`, so both rows were dead config in every peer that installed our default. **A constant you have to invent locally to satisfy a spec table is a defect in one of the two documents, never a naming gap to fill.** The doc comment explaining the absence is the tell; we wrote it twice. | D18, D8 |
+
+*Enforcement:* AP18 — `publish/publish_test.go::TestPublish_IsByteStableWithAPinnedInstant` emits
+twice and diffs the bytes on disk, and asserts `Opts.At` is load-bearing so a refactor that drops it
+fails here rather than in another implementation's test run. AP19 —
+`TestValidateResolverConfig_CatchAllMustNotTransmitTheName` enumerates all eight declared kinds
+across both columns. AP20 — `TestCatchAllClassification_CoversTheDeclaredVocabulary` requires the
+classification to be total and disjoint over `core/types`' eight `BackendKind*` constants and to
+contain nothing the enum does not carry; a string we would have to invent cannot pass it.
 
 ---
 
@@ -459,7 +548,12 @@ the boundary between substrate and presentation is structural, not
 stylistic). **D19 was earned by AP10 plus the watch-hub crash of
 `b3848c1`** — two arguments-from-source, a session apart, each correct
 about the function it read and wrong about the operation; different
-subsystems, same shape. Future D20 waits until it's earned the same way.
+subsystems, same shape. **D20 was earned by AP13 plus the connectivity
+scoping** — two estimates priced against our own tree instead of the
+substrate. **D21 is AP12 promoted**: a packet addressed to us went
+unopened, then a packet *cc'd* to us went unopened and took a landed
+refusal down with it — same lesson, and the second shape is the one the
+first fix's own wording excluded.
 
 ---
 

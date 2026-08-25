@@ -38,3 +38,6 @@ caps.local.mk
 # wiped on every `make publish-serve` run; never meant to be tracked.
 # If you override `-out`/`PUBLISH_OUT`, add that path yourself.
 publish-out/
+
+# Cross-impl fixture output (publish/cmd/crossimpl-fixture)
+.crossimpl-out/

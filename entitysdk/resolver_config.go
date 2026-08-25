@@ -21,68 +21,104 @@ import (
 // is a disclosure the moment it is not.
 //
 // The load-bearing rule here is one line of §4.1 step 2, and it is a
-// MUST: **the catch-all routes to local-only backends, never to a remote
-// registry.** Step 2 calls itself the primary privacy mechanism; a
-// catch-all bound to a remote backend discloses every unscoped name a
-// user types — the whole private namespace, one name per keystroke, to
-// a third party. InstallResolverConfig refuses such a config rather
-// than writing it (§11.1 vector REG-DISPATCH-CATCHALL-LOCAL-1: "a
-// resolver-config whose catch-all names a remote backend MUST be
-// refused or normalized at load").
+// MUST: **the catch-all MUST NOT name a backend whose consultation
+// transmits the queried name.** Step 2 calls itself the primary privacy
+// mechanism; a name-transmitting backend there discloses every unscoped
+// name a user types — the whole private namespace, one name per
+// keystroke, to a third party. InstallResolverConfig refuses such a
+// config rather than writing it.
+//
+// **The banned property is name transmission, not remoteness** (spec
+// 1.8, arch ROUTING-2026-08-18-l §1). We shipped the remoteness reading
+// first, which is what the rule's own text said before the re-key, and
+// it was too narrow in both directions that matter: it refused
+// `self-certifying` and `out-of-band`, which dial nobody, and it would
+// have refused `peer-issued`, which §6a.4 resolves through a signed
+// root by content address so the queried name never appears in a
+// request. See catchAllSafeBackendKinds for the full classification.
 
 // CatchAllPattern is the §4.1a catch-all — the entry every name that is
 // not explicitly scoped falls to.
 const CatchAllPattern = "*"
 
-// BackendKindPinned is the pinned-bindings pseudo-backend named by
-// §4.1a's catch-all row.
+// The §4.1 step 2 classification of every backend kind §2.4.1
+// declares, keyed on the property the MUST is actually about: does
+// consulting this backend transmit the queried name to another party?
 //
-// It has no constant in `entity-core-go/core/types` (which enumerates
-// local-name, dns-txt, well-known-url, did-web, peer-issued,
-// out-of-band, consensus-anchored, self-certifying) because pinned
-// bindings are resolved at §4.1 step 1, before dispatch runs at all —
-// so nothing ever registers a backend under this kind. Named here
-// because the interoperable default list names it, and shipping the
-// list means shipping it verbatim. Routed to arch as an observation.
-const BackendKindPinned = "pinned"
+// Both maps together are TOTAL over core-go's eight `BackendKind*`
+// constants, which is pinned by
+// TestCatchAllClassification_CoversTheDeclaredVocabulary. That pin
+// catches our own drift; it cannot catch core-go declaring a ninth
+// kind, because a Go test cannot enumerate constants that did not exist
+// when it was written. Stated rather than papered over — if the
+// vocabulary grows, the growth arrives through a core-go bump and the
+// classification below has to be revisited by hand.
+//
+// We deliberately do NOT invent local constants for either list. The
+// last version of this file carried two — `BackendKindPinned` and
+// `backendKindDIDKey` — because §4.1a's table named strings core-go's
+// enum did not declare. That was the tell, and we filed it as an inert
+// cohort observation: arch's ROUTING-2026-08-18-p §5 came back that
+// both were **dead config in every conformant peer**, since §4.2 makes
+// an unknown `backend_kind` MUST-skip with a warning. A constant we
+// have to define ourselves to satisfy a spec table means one of the two
+// documents is wrong; it is never a naming gap to fill locally.
+var (
+	// catchAllSafeBackendKinds — §4.1 step 2's MAY column.
+	//
+	// `out-of-band` is the kind a pin's synthesized binding carries
+	// (§4.1.2). It is name-blind, and §6a.4 makes it dispatchable in as
+	// many words: "a pin matches only if explicitly configured as its
+	// own chain entry". The `pinned` string is NOT a backend kind and
+	// cannot be reached from dispatch at all — §4.1 step 1 returns a
+	// pinned match before the step-2 filter runs, and §4.1.2 uses
+	// `pinned` as a `backend_id`, a result label rather than a dispatch
+	// target.
+	//
+	// `peer-issued` is safe because §6a.4 fixes the mechanism in the
+	// safe direction: signature, name-association and revocation are
+	// verified INSIDE the signed tree, §6a.3a forbids presenting a
+	// host-served listing as authoritative, and every fetch is by
+	// content hash. The residual is a hash-prefix oracle on a miss and
+	// a public binding's blob on a hit — categorically weaker than
+	// handing a private name to a third-party resolver, and neither
+	// reaches a name the registry does not carry.
+	catchAllSafeBackendKinds = map[string]bool{
+		types.BackendKindLocalName:      true,
+		types.BackendKindSelfCertifying: true,
+		types.BackendKindOutOfBand:      true,
+		types.BackendKindPeerIssued:     true,
+	}
 
-// backendKindDIDKey is the kind §4.1a's rule 2 routes `did:key:*` to.
-//
-// Note the cohort mismatch, deliberately preserved: the spec table says
-// `did-key`; core-go's enum has `BackendKindSelfCertifying =
-// "self-certifying"` and no `did-key`. Both are inert today (no such
-// backend is registered either way, and §4.1a says entries naming an
-// absent backend are inert rather than harmful), so this costs nothing
-// now — but an interoperable default is exactly the thing two
-// implementations are supposed to ship identically. We ship the spec's
-// string and routed the mismatch.
-const backendKindDIDKey = "did-key"
-
-// localOnlyBackendKinds is the set the catch-all may name. A backend is
-// local-only when answering from it involves no request to another
-// party: the local-name store, and pinned bindings that never leave
-// step 1.
-//
-// Deliberately NOT including `self-certifying` / `did-key`: resolving a
-// did:key is local computation, but it reaches the catch-all only for a
-// name that did not match rule 2, and admitting the kind here would
-// make the guard's meaning "backends that happen not to dial" rather
-// than "backends that cannot disclose". The narrow set is the one that
-// stays correct as backends are added.
-var localOnlyBackendKinds = map[string]bool{
-	types.BackendKindLocalName: true,
-	BackendKindPinned:          true,
-}
+	// nameTransmittingBackendKinds — §4.1 step 2's MUST NOT column.
+	// Consultation IS disclosure: the name goes to a third party as a
+	// query, a path segment, or a document name.
+	nameTransmittingBackendKinds = map[string]bool{
+		types.BackendKindDNSTXT:            true,
+		types.BackendKindWellKnownURL:      true,
+		types.BackendKindDIDWeb:            true,
+		types.BackendKindConsensusAnchored: true,
+	}
+)
 
 // DefaultNameFormatDispatch returns EXTENSION-REGISTRY §4.1a's
-// recommended default list (spec 1.7).
+// recommended default list (spec 1.13).
 //
 //  1. did:web:*   → did-web                        scheme-typed
-//  2. did:key:*   → did-key                        scheme-typed, self-certifying
+//  2. did:key:*   → self-certifying                scheme-typed, self-certifying
 //  3. *.eth       → consensus-anchored             scheme-typed by suffix
 //  4. *@*.*       → dns-txt, well-known-url        domain-scoped, DOTTED authority
 //  5. *@*         → peer-issued                    registry-scoped, undotted handle
-//  6. *           → local-name, pinned             catch-all, LOCAL ONLY (MUST)
+//  6. *           → local-name, self-certifying, out-of-band, peer-issued
+//     (catch-all — NO NAME-TRANSMITTING BACKEND, MUST)
+//
+// Rows 2 and 6 are corrected at 1.13 and both were live defects here:
+// we shipped `did-key` and `pinned`, neither of which §2.4.1 declares,
+// so §4.2's forward-compat rule made a conformant peer skip both rows
+// with a warning. Row 6 in particular moved three times in one day —
+// `pinned` → removed → `out-of-band` — and 1.13 is the settled form.
+// A pin against the middle revision loses a real capability, which is
+// why the reference below is to the version and not to "the table".
 //
 // **The list is a FILTER and expresses no precedence** (§4, spec 1.7).
 // A name matching several entries is eligible at the UNION of their
@@ -113,11 +149,16 @@ var localOnlyBackendKinds = map[string]bool{
 func DefaultNameFormatDispatch() []types.DispatchEntry {
 	return []types.DispatchEntry{
 		{Pattern: "did:web:*", BackendKinds: []string{types.BackendKindDIDWeb}},
-		{Pattern: "did:key:*", BackendKinds: []string{backendKindDIDKey}},
+		{Pattern: "did:key:*", BackendKinds: []string{types.BackendKindSelfCertifying}},
 		{Pattern: "*.eth", BackendKinds: []string{types.BackendKindConsensusAnchored}},
 		{Pattern: "*@*.*", BackendKinds: []string{types.BackendKindDNSTXT, types.BackendKindWellKnownURL}},
 		{Pattern: "*@*", BackendKinds: []string{types.BackendKindPeerIssued}},
-		{Pattern: CatchAllPattern, BackendKinds: []string{types.BackendKindLocalName, BackendKindPinned}},
+		{Pattern: CatchAllPattern, BackendKinds: []string{
+			types.BackendKindLocalName,
+			types.BackendKindSelfCertifying,
+			types.BackendKindOutOfBand,
+			types.BackendKindPeerIssued,
+		}},
 	}
 }
 
@@ -146,31 +187,49 @@ func DefaultResolverConfig() types.ResolverConfigData {
 // different one is the wrong half of that choice: the operator asked
 // for something and would not learn they did not get it.
 //
-//   - A catch-all naming a non-local backend. The disclosure case, and
-//     now the only one: under the filter reading (§4, spec 1.7) a broad
-//     pattern is bounded by what it may NAME, not by where it sits, so
-//     catch-all position is not a defect and is not refused here.
+//   - A catch-all naming a name-transmitting backend. The disclosure
+//     case, and now the only one: under the filter reading (§4, spec
+//     1.7) a broad pattern is bounded by what it may NAME, not by where
+//     it sits, so catch-all position is not a defect and is not refused
+//     here.
+//
+// The check is a DENY-list over nameTransmittingBackendKinds, not an
+// allow-list over the safe set, and the direction is deliberate. An
+// unrecognized kind is inert by §4.2 — a conformant peer skips the
+// entry with a warning, and nothing is registered under it to
+// disclose anything — so refusing the whole config on account of one
+// would reject a deployment authored against a newer vocabulary than
+// ours. We have now been bitten twice by a guard that was too strict
+// (the withdrawn `catchall_not_last`, and the remoteness keying this
+// commit replaces) and never once by one that was too loose. Refuse
+// what the spec names as disclosing; let the unknown stay inert.
+//
+// Patterns themselves are never rejected. §4's grammar is closed and
+// every non-`*` byte is a literal, so no pattern is malformed — a
+// registry MUST NOT reject one for containing `?`, `[`, or `\`
+// (REG-DISPATCH-GRAMMAR-1, spec 1.13). We author patterns and do not
+// match them; the matcher lives in the registry handler.
 func ValidateResolverConfig(cfg types.ResolverConfigData) error {
 	for _, d := range cfg.NameFormatDispatch {
 		if d.Pattern != CatchAllPattern {
 			continue
 		}
 		for _, kind := range d.BackendKinds {
-			if !localOnlyBackendKinds[kind] {
-				return NewError(400, "catchall_not_local",
-					fmt.Sprintf("resolver-config catch-all %q names backend kind %q, which is not local-only "+
-						"(EXTENSION-REGISTRY §4.1 step 2, MUST): every unscoped name a user types would be "+
-						"disclosed to it. Local-only kinds: %s",
-						CatchAllPattern, kind, strings.Join(sortedLocalKinds(), ", ")))
+			if nameTransmittingBackendKinds[kind] {
+				return NewError(400, "catchall_transmits_name",
+					fmt.Sprintf("resolver-config catch-all %q names backend kind %q, whose consultation "+
+						"transmits the queried name (EXTENSION-REGISTRY §4.1 step 2, MUST): every unscoped "+
+						"name a user types would be disclosed to it. Kinds the catch-all may name: %s",
+						CatchAllPattern, kind, strings.Join(sortedKinds(catchAllSafeBackendKinds), ", ")))
 			}
 		}
 	}
 	return nil
 }
 
-func sortedLocalKinds() []string {
-	out := make([]string, 0, len(localOnlyBackendKinds))
-	for k := range localOnlyBackendKinds {
+func sortedKinds(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
 		out = append(out, k)
 	}
 	// Small fixed set; insertion order is not stable across map

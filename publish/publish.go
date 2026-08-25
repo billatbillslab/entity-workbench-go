@@ -114,6 +114,20 @@ type Opts struct {
 	// emitted set, not just on what gets written.
 	IncludeType func(typeName string) bool
 
+	// At pins the wall-clock instant this publish stamps into
+	// `published_at` (§3.3a, inside the signed root's preimage) and
+	// `advertised_at` on the transport profile. Zero means
+	// time.Now(), which is what every operator run wants.
+	//
+	// It exists for REPRODUCIBLE emissions. A published root carries
+	// its timestamp inside the entity, so a fresh `time.Now()` moves
+	// the root's content hash, which moves the signature entity's
+	// name, which moves two content shards and {out}/manifest — a
+	// fixture handed to another implementation is not byte-stable
+	// without this, and the only stable parts are the ones below the
+	// trie root. Measured on the cross-impl fixture, not inferred.
+	At time.Time
+
 	// References, if non-nil, returns additional content hashes to
 	// walk for the given entity, beyond the built-in content-blob
 	// chunk walker. This is where revision-tree, capability-chain,
@@ -223,7 +237,11 @@ func Publish(ctx context.Context, opts Opts) (Result, error) {
 	// this run's own published-root / signature bindings are not inside
 	// the root they authenticate — an entity cannot appear in its own
 	// preimage.
-	signed, err := mintSignedRoot(opts.Peer, opts.Prefix)
+	at := opts.At
+	if at.IsZero() {
+		at = time.Now()
+	}
+	signed, err := mintSignedRoot(opts.Peer, opts.Prefix, at)
 	if err != nil {
 		return Result{}, err
 	}
@@ -259,7 +277,7 @@ func Publish(ctx context.Context, opts Opts) (Result, error) {
 	}
 	bytes += rootBytes
 
-	profile, err := writeTransportProfile(opts.OutputDir, opts.OriginURL, peerID)
+	profile, err := writeTransportProfile(opts.OutputDir, opts.OriginURL, peerID, at)
 	if err != nil {
 		return Result{}, err
 	}
@@ -647,7 +665,7 @@ func splitAbsPath(abs string) (peerID, bare string, ok bool) {
 //
 // If OriginURL is empty, all three are empty and the operator must
 // edit before upload.
-func writeTransportProfile(outDir, originURL, peerID string) (types.HTTPPollProfileData, error) {
+func writeTransportProfile(outDir, originURL, peerID string, at time.Time) (types.HTTPPollProfileData, error) {
 	if originURL == "" {
 		fmt.Println("  warn: -origin not set; manifest emitted with empty URL prefixes (operator must edit before upload)")
 	}
@@ -674,7 +692,7 @@ func writeTransportProfile(outDir, originURL, peerID string) (types.HTTPPollProf
 		CapFlow:        "egress",
 		PollIntervalMs: 60000,
 		SignedPointer:  "system/peer/published-root",
-		AdvertisedAt:   uint64(time.Now().UnixMilli()),
+		AdvertisedAt:   uint64(at.UnixMilli()),
 	}
 
 	// Validate before emit — §6.5.3 / §6.5.3.1 distinct-suffix invariant

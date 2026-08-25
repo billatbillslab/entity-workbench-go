@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fxamacker/cbor/v2"
 
@@ -507,7 +508,7 @@ func TestPublish_SignedRootVerifiesFromTheEmittedFiles(t *testing.T) {
 	// The published-root is also reachable by its advertised PATH, not
 	// only by the manifest URL — `signed_pointer` names a path.
 	prRoute := filepath.Join(out, peerID,
-		filepath.FromSlash(types.PublishedRootStoragePath(peerID))) + ".bin"
+		filepath.FromSlash(types.PublishedRootStoragePath())) + ".bin"
 	prPointerBody, err := os.ReadFile(prRoute)
 	if err != nil {
 		t.Fatalf("read published-root tree route %s: %v", prRoute, err)
@@ -625,4 +626,134 @@ func TestPublish_SeqAdvancesAcrossRuns(t *testing.T) {
 		}
 		prevRootEntity = res.SignedRoot.Root.ContentHash
 	}
+}
+
+// TestPublish_IsByteStableWithAPinnedInstant pins the property the
+// cross-impl fixture rests on: two runs of the same publish, from the
+// same seed and the same Opts.At, emit byte-identical directories.
+//
+// Tier: integration (TESTING-STRATEGY) — it drives the real emit path
+// end to end and asserts on the bytes on disk, because "byte-identical"
+// is a claim about the bytes and nothing weaker substantiates it.
+//
+// This is a regression pin with a source. The fixture handed to
+// entity-browser-rust was documented as byte-identical on their
+// machine and was not: `published_at` lives INSIDE the published-root
+// entity, so a fresh clock moved the root's content hash, the
+// `system/signature/{root_hex}.bin` binding named after it, two content
+// shards, and {out}/manifest. Only the trie root and the entities
+// beneath it were ever stable — which excludes every artifact a
+// consumer's reader enters through. The second half of the test is the
+// half that would have caught it: it asserts the instant is genuinely
+// load-bearing, so a future refactor that drops At on the floor fails
+// here rather than in another implementation's test run.
+func TestPublish_IsByteStableWithAPinnedInstant(t *testing.T) {
+	seed := [32]byte{
+		0x62, 0x79, 0x74, 0x65, 0x2d, 0x73, 0x74, 0x61,
+		0x62, 0x6c, 0x65, 0x2d, 0x70, 0x75, 0x62, 0x6c,
+		0x69, 0x73, 0x68, 0x2d, 0x70, 0x69, 0x6e, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	}
+	at := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC)
+
+	emit := func(t *testing.T, at time.Time) (string, hash.Hash) {
+		t.Helper()
+		kp := crypto.FromSeed(seed)
+		ap, err := entitysdk.CreatePeer(entitysdk.PeerConfig{Keypair: &kp})
+		if err != nil {
+			t.Fatalf("CreatePeer: %v", err)
+		}
+		defer ap.Close()
+
+		// Sorted, so the seeding order cannot be what makes the two
+		// runs agree.
+		pages := []struct{ path, body string }{
+			{"docs/deep/one", "nested one level"},
+			{"docs/deep/two/leaf", "nested two levels"},
+			{"docs/index", "home"},
+			{"docs/intro", "second page"},
+		}
+		for _, p := range pages {
+			if _, err := ap.Store().Put(p.path, "test/note", map[string]string{"body": p.body}); err != nil {
+				t.Fatalf("seed %s: %v", p.path, err)
+			}
+		}
+
+		out := t.TempDir()
+		res, err := publish.Publish(context.Background(), publish.Opts{
+			Peer:      ap,
+			Prefix:    "docs/",
+			OutputDir: out,
+			OriginURL: "https://go-arm.example",
+			At:        at,
+		})
+		if err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+		return out, res.SignedRoot.Root.ContentHash
+	}
+
+	dirA, rootA := emit(t, at)
+	dirB, rootB := emit(t, at)
+
+	digestA := dirDigest(t, dirA)
+	digestB := dirDigest(t, dirB)
+
+	for rel, sum := range digestA {
+		other, ok := digestB[rel]
+		if !ok {
+			t.Errorf("%s emitted by the first run and not the second", rel)
+			continue
+		}
+		if other != sum {
+			t.Errorf("%s differs between two identical runs: %s vs %s", rel, sum, other)
+		}
+	}
+	for rel := range digestB {
+		if _, ok := digestA[rel]; !ok {
+			t.Errorf("%s emitted by the second run and not the first", rel)
+		}
+	}
+	if rootA != rootB {
+		t.Errorf("published-root entity hash moved between identical runs: %s vs %s", rootA, rootB)
+	}
+
+	// The instant is load-bearing, not decoration: move it by one
+	// millisecond and the signed root's content address moves, which is
+	// exactly why a fixture cannot be reproducible without pinning it.
+	_, rootLater := emit(t, at.Add(time.Millisecond))
+	if rootLater == rootA {
+		t.Errorf("published-root entity hash %s is unchanged after moving Opts.At; "+
+			"published_at is inside the entity (§3.3a) and must be part of its content address", rootA)
+	}
+}
+
+// dirDigest maps every regular file under root to the sha256 of its
+// bytes, keyed by path relative to root.
+func dirDigest(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(b)
+		out[rel] = hex.EncodeToString(sum[:])
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	return out
 }

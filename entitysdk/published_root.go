@@ -172,7 +172,7 @@ func (a *AppPeer) ReadPublishedRoot(ctx context.Context, peerID string, opts ...
 		return PublishedRoot{}, err
 	}
 
-	path := "/" + peerID + "/" + types.PublishedRootStoragePath(peerID)
+	path := "/" + peerID + "/" + types.PublishedRootStoragePath()
 	ent, found, err := a.Get(path)
 	if err != nil {
 		return PublishedRoot{}, WrapError(StatusOf(err), "published_root_get_failed",

@@ -109,7 +109,7 @@ func bindRoot(t *testing.T, host *AppPeer, data types.PublishedRootData, signer 
 		}
 	}
 	if err := host.RawLocationIndex().Set(
-		types.PublishedRootStoragePath(host.PeerID()), ent.ContentHash,
+		types.PublishedRootStoragePath(), ent.ContentHash,
 	); err != nil {
 		t.Fatalf("bind published-root: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestReadPublishedRoot_SeqRollbackRejected(t *testing.T) {
 
 	// Roll the binding back to the first published-root.
 	if err := p.RawLocationIndex().Set(
-		types.PublishedRootStoragePath(p.PeerID()), oldEnt.ContentHash,
+		types.PublishedRootStoragePath(), oldEnt.ContentHash,
 	); err != nil {
 		t.Fatalf("rebind older root: %v", err)
 	}
