@@ -269,6 +269,8 @@ func BridgeInit(cConfig *C.char) *C.char {
 			cascadeSites(h)
 			cascadeShells(h)
 			cascadeConnections(h)
+			cascadeSnakes(h)
+			cascadeLives(h)
 		})
 	}
 

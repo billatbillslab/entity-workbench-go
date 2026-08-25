@@ -15,7 +15,7 @@ IMAGE    := entity-avalonia:dev
 # below is fenced with $(PODMAN_BUILD_CAPS) / $(PODMAN_RUN_CAPS).
 include $(WB_DIR)/caps.mk
 
-.PHONY: help build run extract host-run up test smoke-xvfb smoke-xvfb-driver smoke-xvfb-site crash clean
+.PHONY: help build run extract host-run up test smoke-xvfb smoke-xvfb-driver smoke-xvfb-site smoke-xvfb-snake smoke-xvfb-life crash clean
 
 help:
 	@echo "avalonia — podman build targets for the Avalonia desktop renderer"
@@ -28,6 +28,8 @@ help:
 	@echo "                         cycle through every doc in markdown-view"
 	@echo "  make smoke-xvfb-hidpi  driver variant at 2560x1440 to catch HiDPI scaling bugs"
 	@echo "  make smoke-xvfb-site   drive SITE panel: cycle Navigate across the demo site"
+	@echo "  make smoke-xvfb-snake  drive SNAKE compute panel: tick clock + input-port steering"
+	@echo "  make smoke-xvfb-life   drive LIFE compute panel: tick clock, display-only"
 	@echo "  make crash      decode the most recent libbridge.so coredump"
 	@echo "  make run        run the container with X11 forwarded from host"
 	@echo "  make extract    copy /app out of the image to ./dist-native/"
@@ -275,6 +277,64 @@ smoke-xvfb-site: build extract
 	  if [ $$status -ne 0 ]; then \
 	    echo ""; \
 	    echo "==> smoke-xvfb-site FAILED (exit $$status)"; \
+	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
+	    exit $$status; \
+	  fi
+	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
+
+# SNAKE smoke — drives the compute-program panel (SnakeGamePanel over
+# wb.SnakeGameModel) under real X11: panel mount, host tick clock,
+# input-port steering, wake→render, screenshots. The full
+# compute-program loop (output port → display driver, input driver →
+# input port) exercised headless.
+smoke-xvfb-snake: build extract
+	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
+	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh
+	@echo "==> SNAKE Xvfb smoke (timer=$(DRIVER_SECS)s steers=$(DRIVER_CYCLES))"
+	@cd $(APP_DIR)/dist-native && \
+	  podman run --rm $(PODMAN_RUN_CAPS) \
+	    --userns=keep-id \
+	    -v $(APP_DIR)/dist-native:/app:Z \
+	    -e WB_SMOKE_SNAKE=1 \
+	    -e WB_SMOKE_CYCLE_PATHS=$(DRIVER_CYCLES) \
+	    -e WB_SMOKE_CYCLE_GAP_MS=$(DRIVER_GAP_MS) \
+	    -w /app \
+	    --entrypoint bash \
+	    $(IMAGE) \
+	    /app/run-xvfb-smoke.sh $(DRIVER_SECS); \
+	  status=$$?; \
+	  if [ $$status -ne 0 ]; then \
+	    echo ""; \
+	    echo "==> smoke-xvfb-snake FAILED (exit $$status)"; \
+	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
+	    exit $$status; \
+	  fi
+	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
+
+# LIFE smoke — drives the display-only compute-program panel
+# (LifeGamePanel over wb.LifeGameModel) under real X11: panel mount,
+# host tick clock, wake→render, screenshots. The other half of the
+# snake proof: no input port, so this exercises the output-port →
+# display-driver path on its own.
+smoke-xvfb-life: build extract
+	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
+	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh
+	@echo "==> LIFE Xvfb smoke (timer=$(DRIVER_SECS)s samples=$(DRIVER_CYCLES))"
+	@cd $(APP_DIR)/dist-native && \
+	  podman run --rm $(PODMAN_RUN_CAPS) \
+	    --userns=keep-id \
+	    -v $(APP_DIR)/dist-native:/app:Z \
+	    -e WB_SMOKE_LIFE=1 \
+	    -e WB_SMOKE_CYCLE_PATHS=$(DRIVER_CYCLES) \
+	    -e WB_SMOKE_CYCLE_GAP_MS=$(DRIVER_GAP_MS) \
+	    -w /app \
+	    --entrypoint bash \
+	    $(IMAGE) \
+	    /app/run-xvfb-smoke.sh $(DRIVER_SECS); \
+	  status=$$?; \
+	  if [ $$status -ne 0 ]; then \
+	    echo ""; \
+	    echo "==> smoke-xvfb-life FAILED (exit $$status)"; \
 	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
 	    exit $$status; \
 	  fi

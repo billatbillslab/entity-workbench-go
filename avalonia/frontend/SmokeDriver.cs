@@ -75,6 +75,18 @@ public static class SmokeDriver
     // wants to log additional context.
     public static bool MaybeStart(MainWindow window, PeerView peer)
     {
+        var snakeMode = Environment.GetEnvironmentVariable("WB_SMOKE_SNAKE");
+        if (!string.IsNullOrEmpty(snakeMode))
+        {
+            return StartSnake(window, peer);
+        }
+
+        var lifeMode = Environment.GetEnvironmentVariable("WB_SMOKE_LIFE");
+        if (!string.IsNullOrEmpty(lifeMode))
+        {
+            return StartLife(window, peer);
+        }
+
         var siteMode = Environment.GetEnvironmentVariable("WB_SMOKE_SITE_NAVIGATE");
         if (!string.IsNullOrEmpty(siteMode))
         {
@@ -275,6 +287,176 @@ public static class SmokeDriver
         }
         site.NavigateForTests(target);
         _iteration++;
+    }
+
+    // --- SNAKE mode (WB_SMOKE_SNAKE) ------------------------------------
+    //
+    // Drives the compute-program panel end-to-end under real X11:
+    // switch the middle slot to the snake panel, start the host tick
+    // clock, then steer a clockwise box via the input port so the game
+    // survives the whole run (12x12 board, 6 ticks/s). Every surface a
+    // user touches — panel mount, Start, input-port writes, wake→render
+    // — runs for the full timer window; the run.log + frames carry the
+    // proof. Honors WB_SMOKE_CYCLE_PATHS (steer count, default 50) and
+    // WB_SMOKE_CYCLE_GAP_MS (steer gap, default 500ms ≈ one turn every
+    // 3 ticks).
+    private static bool StartSnake(MainWindow window, PeerView peer)
+    {
+        _window = window;
+        _peer = peer;
+        _cyclePaths = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_PATHS"), out var n) ? n : 50;
+        _cycleGapMs = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_GAP_MS"), out var g) ? g : 500;
+        Log($"snake mode: steers={_cyclePaths} gap={_cycleGapMs}ms");
+
+        try
+        {
+            peer.SwitchMiddleSlotForSmoke("snake");
+            Log("middle slot -> snake");
+        }
+        catch (Exception ex)
+        {
+            Log($"failed to switch middle slot: {ex.Message}");
+            return false;
+        }
+
+        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        settle.Tick += (_, _) =>
+        {
+            settle.Stop();
+            StartSnakeCycle();
+        };
+        settle.Start();
+        return true;
+    }
+
+    private static void StartSnakeCycle()
+    {
+        if (_peer == null) return;
+        var snake = _peer.SnakeForSmoke;
+        if (snake == null)
+        {
+            Log("middle slot is not snake; snake cycle aborted");
+            return;
+        }
+        snake.StartForTests();
+        Log("snake started (host tick clock running)");
+
+        // Clockwise box: right, down, left, up — safe forever from the
+        // seed (center of the board, heading right).
+        var steers = new long[] { 2, 3, 0, 1 };
+        _iteration = 0;
+        _cycleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_cycleGapMs) };
+        _cycleTimer.Tick += (_, _) =>
+        {
+            if (_peer == null)
+            {
+                _cycleTimer?.Stop();
+                return;
+            }
+            var sp = _peer.SnakeForSmoke;
+            if (sp == null)
+            {
+                _cycleTimer?.Stop();
+                Log("snake panel disappeared mid-cycle; aborting");
+                return;
+            }
+            if (_iteration >= _cyclePaths)
+            {
+                _cycleTimer?.Stop();
+                Log($"snake cycle complete ({_iteration} steers) — final: {sp.StatusTextForTests}");
+                return;
+            }
+            var dir = steers[_iteration % steers.Length];
+            sp.InputForTests(dir);
+            if ((_iteration % 8) == 0)
+            {
+                Log($"iter {_iteration}/{_cyclePaths} dir={dir} — {sp.StatusTextForTests}");
+            }
+            _iteration++;
+        };
+        _cycleTimer.Start();
+    }
+
+    // --- LIFE mode (WB_SMOKE_LIFE) --------------------------------------
+    //
+    // Drives the display-only compute-program panel end-to-end under
+    // real X11: switch the middle slot to the life panel, start the host
+    // tick clock, then sample the status line while it evolves (16x16
+    // soup, 6 ticks/s). There is no input port to drive — Life is a
+    // closed program — so the proof this run carries is the other half
+    // of Snake's: panel mount, Start, wake→render, screenshots. Honors
+    // WB_SMOKE_CYCLE_PATHS (status samples, default 20) and
+    // WB_SMOKE_CYCLE_GAP_MS (sample gap, default 500ms ≈ 3 generations).
+    private static bool StartLife(MainWindow window, PeerView peer)
+    {
+        _window = window;
+        _peer = peer;
+        _cyclePaths = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_PATHS"), out var n) ? n : 20;
+        _cycleGapMs = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_GAP_MS"), out var g) ? g : 500;
+        Log($"life mode: samples={_cyclePaths} gap={_cycleGapMs}ms");
+
+        try
+        {
+            peer.SwitchMiddleSlotForSmoke("life");
+            Log("middle slot -> life");
+        }
+        catch (Exception ex)
+        {
+            Log($"failed to switch middle slot: {ex.Message}");
+            return false;
+        }
+
+        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        settle.Tick += (_, _) =>
+        {
+            settle.Stop();
+            StartLifeCycle();
+        };
+        settle.Start();
+        return true;
+    }
+
+    private static void StartLifeCycle()
+    {
+        if (_peer == null) return;
+        var life = _peer.LifeForSmoke;
+        if (life == null)
+        {
+            Log("middle slot is not life; life cycle aborted");
+            return;
+        }
+        life.StartForTests();
+        Log("life started (host tick clock running)");
+
+        _iteration = 0;
+        _cycleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_cycleGapMs) };
+        _cycleTimer.Tick += (_, _) =>
+        {
+            if (_peer == null)
+            {
+                _cycleTimer?.Stop();
+                return;
+            }
+            var lp = _peer.LifeForSmoke;
+            if (lp == null)
+            {
+                _cycleTimer?.Stop();
+                Log("life panel disappeared mid-cycle; aborting");
+                return;
+            }
+            if (_iteration >= _cyclePaths)
+            {
+                _cycleTimer?.Stop();
+                Log($"life cycle complete ({_iteration} samples) — final: {lp.StatusTextForTests}");
+                return;
+            }
+            // A soup can legitimately reach a fixed point mid-run; the
+            // clock stopping is the model working, not a failure. Log it
+            // and keep sampling so the frames still cover the window.
+            Log($"iter {_iteration}/{_cyclePaths} — {lp.StatusTextForTests}");
+            _iteration++;
+        };
+        _cycleTimer.Start();
     }
 
     private static void Log(string msg) => PanelLog.Write("smoke-driver", msg);

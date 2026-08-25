@@ -3,6 +3,10 @@
 # `-o`. The Makefile always uses `-o`, but past invocations and habit
 # leave artifacts; keep this list aligned with the `clean-strays`
 # Makefile target.
+#
+# bin/ is where `make build` puts every shipped binary (see the root
+# Makefile's build target) — ~95MB of build output, never tracked.
+bin/
 entity-shell
 console/entity-console
 console/console

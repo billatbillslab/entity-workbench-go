@@ -179,6 +179,10 @@ public class App : Application
             (handle, host) => new ShellPanel(handle, host));
         PanelRegistry.Register("peer-connections", "Peer Connections",
             (handle, _) => new PeerConnectionsPanel(handle));
+        PanelRegistry.Register("snake", "Snake (compute)",
+            (handle, _) => new SnakeGamePanel(handle));
+        PanelRegistry.Register("life", "Life (compute)",
+            (handle, _) => new LifeGamePanel(handle));
     }
 
     public override void OnFrameworkInitializationCompleted()

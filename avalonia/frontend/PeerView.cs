@@ -180,6 +180,42 @@ public sealed class PeerView : UserControl, IDisposable, IPanelHost
         }
     }
 
+    // SNAKE smoke surface — same shape as SiteForSmoke, for the
+    // compute-program panel driver (WB_SMOKE_SNAKE).
+    internal Panels.SnakeGamePanel? SnakeForSmoke
+    {
+        get
+        {
+            for (int i = 0; i < _panelStack.SlotCountForTests; i++)
+            {
+                if (_panelStack.SlotAtForTests(i).CurrentPanelControlForSmoke
+                    is Panels.SnakeGamePanel sp)
+                {
+                    return sp;
+                }
+            }
+            return null;
+        }
+    }
+
+    // LIFE smoke surface — same shape as SnakeForSmoke, for the
+    // display-only compute-program panel driver (WB_SMOKE_LIFE).
+    internal Panels.LifeGamePanel? LifeForSmoke
+    {
+        get
+        {
+            for (int i = 0; i < _panelStack.SlotCountForTests; i++)
+            {
+                if (_panelStack.SlotAtForTests(i).CurrentPanelControlForSmoke
+                    is Panels.LifeGamePanel lp)
+                {
+                    return lp;
+                }
+            }
+            return null;
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
