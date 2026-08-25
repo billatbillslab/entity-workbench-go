@@ -572,7 +572,7 @@ Short enough to run on every change. Six inherited, four substrate-native.
 
 ---
 
-## 4. The anti-pattern catalog (AP1-AP42)
+## 4. The anti-pattern catalog (AP1-AP43)
 
 Each a real defect that shipped or a claim that was routed, diagnosed, and
 is now pinned by a regression test.
@@ -778,6 +778,28 @@ direction**; the subject test fired once out of twelve.
 | AP41 | `Makefile`'s `doctor` ↔ `build` gap, from the day `doctor` was written (`13c51ad`, "give the repo a front door") until 2026-08-24 | **A check nothing calls.** `make doctor` verified the sibling `entity-core-go` checkout — the one condition no target in this repo can survive without — and **no target ever invoked it.** A person who skipped the README got forty lines of module-resolution spew naming a Go module path, and nothing naming the cause or the fix. This is **D23 in a second domain**: we already hold that *a model with no shipped surface is not shipped*, and the same law binds diagnostics — **an instrument nothing calls is indistinguishable from an instrument you do not have**, and it is worse than absence because its existence reads as coverage. Two properties make the class invisible to every test we own. First, **the failure is a property of the checkout, not of the code**: no suite can observe it, because a suite that runs at all is running in a tree where the sibling resolved. Second, **everyone who could notice is disqualified by having noticed already** — every developer, every CI job and every sweep runs in a tree with siblings, so six weeks of green sign-offs could not have surfaced it and were never going to. It took an outsider cloning the published mirror alone (arch, `ROUTING-2026-08-23-d`), and even *their* first isolation run reported EXIT 0 because the scratch directory still had a copy of the sibling beside it. The tell is a **precondition documented in prose and verified by an opt-in target**: prose is not a gate and an opt-in check is not a gate. The repair is one prerequisite edge and one predicate shared with `doctor`, so the reporting path and the refusing path cannot drift. Generalize before the next one: when a target *requires* a condition some target *checks*, wire them — and when writing a check, name the thing that will call it in the same diff. | D19, D23 |
 | AP42 | `CANONICAL-DOCS.toml`, drifting from ~2026-07 to 2026-08-24 | **A manifest is published prose, and it goes false silently.** Our keep-list carried per-document blurbs advertising *"The 23 disciplines (D1–D23) … (AP1–AP27)"*, a *"six-boundary map"* and recipes *"P0–P6"*, while the documents they describe had reached **D1–D24, AP1–AP40, seven boundaries (A–G) and P0–P7**. The same file declared `github = ".../entity-systems/entity-workbench-go"` — an organisation that does not exist; every remote and the README's own link say `EntityChurch`. Nothing caught any of it, and nothing could: a `.toml` is read as configuration, so it is exempted by reflex from the review a document gets, and **its blurb is rendered to the public reader *instead of* the document**, which means a stale count is not a stale comment — it is a false published claim, and the one reader who could contradict it is the one who cannot see the source. The tell is a **declaration that restates a fact it does not own**: any count, version, URL or summary living somewhere other than its source will go false at a diff that never opens the file it lives in. Two repairs, and prefer the first — *don't restate* (describe the catalog, don't count it), and where a count genuinely helps, treat the manifest as a target of the same close-out that updates the doc. Corollary from the same pass: **a keep-list that drops a document cited by a published one ships a broken link** (`AGENTS.md` is public and instructs the reader to open `DOCTRINE-CRASH-FORENSICS.md`, which was undeclared) — so declaring a doc is part of adding it, not a later act of curation. | D9, D19, D23 |
 
+| AP43 | `entitysdk/axis1`'s error semantics — drifted 2026-08-21, diagnosed 2026-08-23, **un**-diagnosed 2026-08-24, fixed 2026-08-25 | **A refutation that does not reproduce the failing shape.** Our 300-case differential sweep diverged on three cases and we named the cause correctly the day we found it: Axis-1 had not adopted `EXTENSION-COMPUTE` v3.26's contained-error semantics, with the six core-go commits cited. A later session, correctly noting that nobody had *measured* it, ran two probes — index a 2-element array at 4, then at -3, bare and `Construct`-wrapped — got **byte-identical `index_out_of_range` from both engines**, and declared the explanation *"ruled out."* The probes were sound and irrelevant: **a bare index is a CONSUMED position, where both engines were already correct.** The divergence exists only at a *closure-result* position inside a collection primitive (`map`'s output element), which neither probe went near. All three cases were one shape — `length(map(arr, λe. e + <oob index>))` — where the reference contains four error values and answers 4. The asymmetry that makes this a catalog entry rather than a slip: *"nobody measured this"* is cheap and usually true, while *"I measured it and the explanation is dead"* is very expensive — it retires a correct diagnosis, replaces it with `cause unknown`, and **that phrase propagates faster than the original because it sounds more rigorous.** Ours reached a published CHANGELOG, a backlog row, an outbound release packet and every seat in the release inside a day, and it converted a scheduled piece of work into an unschedulable one. The tell is a **probe whose result is compatible with the hypothesis being true**: if the mechanism you are testing would not have fired under your probe, a clean run is evidence about the probe. Repair, in order: state which position/path/branch the hypothesis predicts will fail; show the probe *reaches* it (a failing run before the fix, not just a passing one after); only then let the refutation stand. Cross-check against AP38 — same family, different direction: there the *assertion* was too weak to fail, here the *probe* was. And the instrument that ended it in one run is the one to reach for first next time: regenerate the seed, dump the IR, **evaluate every subnode on both engines children-first, and print the deepest disagreement.** | D19, D24 |
+
+*AP43's second half, and it inverts the first — **the gate existed and we were not running it.***
+Repairing this **by position** rather than by symptom (CONSUMED short-circuits · CONTAINED becomes
+a value · BOUNDARY reduces to code-only) turned up a defect the 300-case sweep cannot reach:
+`filter` propagated a *minted* predicate error but ran a *value-form* one through `truthy()`,
+whose default arm returns `true`, so an element whose predicate had **failed** was silently
+**kept**. Looking for coverage of *that* is what surfaced the real finding. **arch's differential
+compute corpus already contains purpose-built vectors for this entire class, and names them in the
+vector IDs** — `cv8a-map-contains-minted-error`, `cv8c-filter-predicate-error-shortcircuit`,
+`cv9a-map-depth-exceeded-contains`, `cv9c-map-valueform-budget-exhausted-shortcircuits`, and eight
+`worked/value-error/*`. Re-run against the pre-fix engine it produces **five two-way divergences**.
+It would have named this bug on day one. We did not run it: `TestAxis1Admission_*` is gated on an
+env var and **skips by default**, so a green `make test-sdk` attested nothing, and no `make` target
+invokes it. Worse, even when run, 12 of those vectors record *no answer* rather than a divergence,
+because Axis-1's decoder routes a `compute/error` **leaf** to the Stage-1 fallback one node before
+reaching the semantics under test. So the finding generalizes past compute: **an opt-in gate is not
+a gate (AP41), and a deopt is not a pass — it is a silence that reads like one.** AE-6 says exactly
+this and we had not internalized it. The three sweep cases only needed `map` to contain, and that
+one-line patch passes every test we own; measured against the corpus it would still have been
+wrong in four places.
+
 *AP41, second instance — same day, and it is the sharper one.* The preflight was barely a day
 old when a case it does not cover turned up: building this repo from a **git worktree**.
 `IN_CONTAINER` hard-coded `-w /src/entity-systems/entity-workbench-go`, so the checkout had to
@@ -810,6 +832,30 @@ either the rule or a schedule. The local half is ours and is actionable today: *
 document changes what "internal" means about it.** `AGENTS.md` is written for an internal
 audience, so internal paths are what it is *made of* — the manifest edit that publishes it is
 not finished until the file has been re-read as a stranger.
+
+*AP15, second instance — and this one is INSIDE a test, which is why it survived the first fix.*
+`TestAxis1Equivalence_Differential` sweeps 300 generated cases across two engines and called
+`t.Fatalf` on the first divergence. So for three days this repo's status log, its published
+CHANGELOG and every report routed outward said **one** failing case. Removing the early exit
+showed **three** — 9, 28 and 79 — all the same class, and cases 28 and 79 had never once been
+evaluated because case 9 killed the run. Nothing was concealed and nobody was careless: the
+number came from a runner that stops.
+
+**AP15 already names this exactly** — *a blast-radius number from a fail-fast runner is a lower
+bound* — and we had enforced it at the `make` layer (`test-each` exists precisely so the correct
+thing is also the easy thing) while leaving the identical defect one level down, inside a test
+that is itself a sweep. **The rule is about fail-fast reporting, not about `make`**, and that is
+the correction: wherever a loop over N inputs reports on the first bad one, the count it yields
+is a lower bound and must be labelled as one. The tell is `Fatalf`/`break`/`return` inside a
+range over cases, corpora, fixtures or files.
+
+The sharper form, for a *known* defect: **a gate that stops at the first instance of a known
+problem cannot tell you how big the known problem is** — and a known problem whose extent is
+unmeasured is one nobody can size, schedule or notice growing. The repair pattern that came with
+it is in `axis1_equivalence_test.go`: collect all divergences, waive a *signature* rather than a
+case number, pin the instance set so a fourth is not absorbed as "the known bug", and fail when
+the set empties so the waiver reports its own obsolescence. All four branches were run and shown
+firing before commit.
 
 *Enforcement (AP41):* `Makefile`'s `preflight` target, a prerequisite of `build`, `test`,
 `test-each`, `lint`, `gui`, `gui-build` and `shell-build` (so also `run`, `demo`, `shell`). The

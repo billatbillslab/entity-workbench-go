@@ -22,10 +22,19 @@ which does not publish. What follows is what changed in this tree and why.
 `make test-each` to completion, run twice today, the second time on the release tip, against
 `entity-core-go` `13a42ea`:
 
-**9 PASS / 1 FAIL** — `shellcmd` 289s · `sdk` 208s (the failing one) · `programs` 159s ·
-`shellboot` 15s · `shell` 14s · `inspect`/`workbench`/`publish` ≤4s · `fetch`/`shellpanel` ≤2s.
+**ALL 10 SUITES GREEN, exit 0** — `shellcmd` 290s · `sdk` 206s · `programs` 155s ·
+`shellboot` 14s · `shell` 4s · `inspect`/`workbench`/`publish` ≤4s · `fetch`/`shellpanel` ≤2s.
+
+**Re-run 2026-08-25 on the Axis-1 fix (§0A), same result** — `sdk` 209s · `shellcmd` 290s ·
+`programs` 157s · `shellboot` 14s · rest ≤4s. `make lint` clean, `gofmt` clean. Green here now
+means the defect is gone, not waived.
 `make build` green (five binaries) · `make lint` clean · `gofmt` clean · `make reachability`
 clean · Avalonia headless **74/74**.
+
+**This is the first fully green `test-each` this tree has had**, and as of the Axis-1 fix below
+it is green because the defect is **gone**, not waived. The intermediate state — waived on blast
+radius with the cause recorded as unknown — lasted part of one day and is written up below,
+because how it got there is the reusable part.
 
 **The kernel moved 10 commits under us since the previous recorded sweep**, two of them
 load-bearing here — `e5b3efd` (§6.9's "all resources" narrowed to own-namespace, the rule
@@ -33,10 +42,79 @@ load-bearing here — `e5b3efd` (§6.9's "all resources" narrowed to own-namespa
 single failure, same seed, so neither reached us. **The green line was re-measured against what
 we actually ship on rather than inherited from yesterday.**
 
-The failure is `TestAxis1Equivalence_Differential` case 9 — unchanged disposition, backlog row
-**PR-B** (Axis-1 has not adopted `EXTENSION-COMPUTE` v3.26's contained-error semantics).
-`shellcmd` passed again, a fourth consecutive green on the burst-write row; per the standing
-note that is still not a fix and the row does not close on it.
+**The one failing suite is now green because the defect is fixed. Getting there took a wrong
+count, a wrong retraction, and finally an instrument. All three are worth recording.**
+
+`TestAxis1Equivalence_Differential` sweeps 300 generated graphs across the reference compute
+engine and the experimental Axis-1 engine.
+
+**First: the count was wrong.** The sweep ended at `t.Fatalf` on the first divergence, so for
+three days this file, the CHANGELOG and every number routed outward said **one** failing case.
+Removing the early exit shows **three** — 9, 28 and 79 — because 28 and 79 had never been
+evaluated. That is **AP15**, one level below where we had already fixed it. `t.Errorf` now.
+
+**Second: the diagnosis was right, and we retracted it on a probe that could not test it.**
+The row said *"Axis-1 has not adopted `EXTENSION-COMPUTE` v3.26's contained-error semantics"* —
+correct, and §0 below had even cited the six core-go commits that are the spec of the change.
+It was retracted on two probes that indexed a 2-element array out of range, bare and
+`Construct`-wrapped, and found both engines byte-identical. They are: **a bare index is a
+CONSUMED position, where both engines were already right.** The divergence lives only at a
+*closure-result* position inside a collection primitive. A probe that does not reproduce the
+shape refutes nothing — and reporting it as a refutation cost more than the original error,
+because it replaced a correct explanation with "cause unknown" in a published CHANGELOG.
+
+**Third: the instrument settled it in one run.** Regenerate the same seed, dump each diverging
+case's IR, then evaluate **every subnode on both engines, children first**, and print the
+deepest node where they disagree. All three cases turned out to be the same shape:
+
+```
+length( map(arr, λe. e + index(<2-elt literal>, <out-of-range>)) )
+```
+
+Every subnode agreed; `map` was the first that did not. **Stage-1 CONTAINS each element's error
+as a value and `length` answers 4; Axis-1 propagated and answered `index_out_of_range`.**
+
+### The fix — a position model, not a patch
+
+The real gap was that Axis-1 had **no notion of an error as a value**. §1.5 makes a
+`compute/error` an ordinary value, so every result site has two representations to handle
+(minted, and value-form) and the decision is keyed on the *position*, never on which
+representation showed up. `entitysdk/axis1/contain.go` is the transcription of all three
+position kinds, and each call site now names which one it is:
+
+- **CONSUMED** — the result is READ (arith/compare/logic operand, `if` condition, cast value,
+  field target, construct field, index and its array, any collection operand, a filter
+  predicate). Both representations short-circuit. New chokepoint `evaluator.operand`, mirroring
+  the reference's `evalOperand`.
+- **CONTAINED** — the result is PLACED without being read (`map`'s output element, `fold`'s
+  accumulator and `initial`). Both become a value in that slot — the §1.5 NaN model — except
+  `budget_exhausted` / `cascade_limit`, whose counters are not restored on unwind. `depth`
+  *is* restored, so `depth_exceeded` contains like anything else.
+- **BOUNDARY** — a contained error element materializes **code-only**, so two implementations
+  that word the same failure differently still produce the same array bytes.
+
+Three of those were outright wrong before; the filter predicate was half-right (it propagated a
+minted error but ran a value-form one through `truthy()`, whose default arm returns `true` — so
+an element whose predicate *failed* was silently **kept**). That one was never reachable in the
+sweep and is the kind of thing this class of bug hides.
+
+**Gate:** `TestAxis1Equivalence_ContainedErrorPositions` — five vectors, one per position, each
+asserting the *exact* outcome both engines must produce rather than merely that they agree (two
+engines can agree on the wrong answer, and before the fix several of these agreed on a
+propagated error), plus a structural check that a contained error materializes code-only with no
+`message`/`at`/`expression`. Verified to fail on the pre-fix engine before being kept. The
+generator reached this class by luck of the draw; the vectors do not depend on that.
+
+**What to carry.** Two things, and the second is the expensive one:
+
+1. **A wrong probe is worse than no probe.** "I measured it and the explanation is dead" is a
+   much stronger claim than "nobody has measured this", and it is the one that gets copied
+   forward. Before a refutation retires an explanation, show the probe *reproduces the failing
+   shape* — ours did not go anywhere near a closure-result position.
+2. **When two implementations disagree on generated input, the generated input is the evidence.**
+   Dump the graph, walk it bottom-up, evaluate every subnode on both engines. It took one
+   throwaway test file and one run to convert three days of "unknown" into a named position in
+   a spec. Reach for it first, not after a round of hypotheses.
 
 ### `make build` now refuses early when the sibling kernel is missing
 
@@ -71,9 +149,12 @@ None of this was in the code. `CANONICAL-DOCS.toml` is the declaration of what t
 publishes, and nobody had read it since the disciplines grew.
 
 - **Blurbs advertised counts that had gone false** — *"D1–D23"*, *"AP1–AP27"*, a *"six-boundary
-  map"*, *"P0–P6"*, against docs at **D1–D24, AP1–AP42, seven boundaries (A–G), P0–P7**. A blurb
-  is not a comment: it is the prose a reader is shown **instead of** the document. Rewritten to
-  describe rather than count, after the same blurb went stale again inside the same day's diff.
+  map"*, *"P0–P6"*, every one of them behind the document it described. A blurb is not a comment:
+  it is the prose a reader is shown **instead of** the document. Rewritten to describe rather
+  than count, after the same blurb went stale again inside the same day's diff. *(This bullet
+  used to restate the then-current numbers, which made it the very thing AP42 is about; a
+  catalog entry added on 2026-08-25 falsified it. The counts live in the charter and nowhere
+  else.)*
 - **The GitHub URL named an organisation that does not exist.** Fixed to match every remote and
   the README.
 - **`DOCTRINE-CRASH-FORENSICS.md` was undeclared** while public `AGENTS.md` instructs the reader
@@ -176,6 +257,85 @@ rewritten to say what they mean without naming machine-local or internal locatio
 in the git-ignored `AGENTS.local.md` / `.agents/` ([ADR-0020]). **Declaring a document changes
 what "internal" means about it; the manifest edit is not finished until the file has been re-read
 as a stranger.**
+
+## §0c NEW (2026-08-25) — the gate that would have named the bug on day one exists, is arch's, and we do not run it
+
+Written immediately after §0A, because looking for coverage of the `filter` half of that defect
+found something bigger than the defect.
+
+**`TestAxis1Admission_*` skips unless `AXIS1_ADMISSION_CORPUS` is set, and no `make` target sets
+it.** So it has skipped in every sweep since it was written, and a green `make test-sdk` has never
+attested anything about AE-5. That is **AP41 in a second domain** — an opt-in check is not a gate —
+and it is why §0's first correction paragraph could claim the admission was re-quotable without
+anyone noticing nothing had run.
+
+### What it says when you actually run it
+
+Corpus `8d2f55c8…`, profile `inproc`, **362 vectors**, generated from core-go `13a42ea`;
+reference emission from core-go in-process; Axis-1 emission at `6ab42c6`:
+
+| | |
+|---|---|
+| agree | **334** |
+| diverge | **0** |
+| INCOMPLETE (deopted to Stage-1) | **28** |
+| verdict | **NOT LOCKED** |
+
+Two readings, and both matter:
+
+- **The good half is genuinely good.** Every vector Axis-1 *answers* is byte-identical to the
+  reference — 334 of them, including the whole v3.26 contained-error family. That is far stronger
+  evidence for the §0A fix than the five vectors we hand-wrote, and it is independent of us.
+- **The bad half is that AE-5 is not green and has not been for some time.** §11's **AE-6** is
+  explicit: *"the alternate engine MUST run every vector; no per-vector fallback … deopt during an
+  admission run voids the evidence for that vector."* 28 deopts means 28 voided vectors. **Stop
+  quoting the 2026-07-23 admission as current** — it lapsed when the v3.24/v3.25 primitives landed
+  and nothing told us, because nothing ran.
+
+### The corpus would have named this bug on day one
+
+Re-run against the **pre-fix** engine, it produces **five two-way divergences**, and the vector IDs
+are the diagnosis:
+
+```
+cv8a-map-contains-minted-error
+cv8c-filter-predicate-error-shortcircuit
+cv9a-map-depth-exceeded-contains
+cv9c-map-valueform-budget-exhausted-shortcircuits
+sweep/0281
+```
+
+Our home-grown 300-case fuzz found three anonymous cases and cost three days plus a wrong
+retraction to explain. Arch's corpus **names the class in the vector ID**. It also carries eight
+`worked/value-error/*` vectors — one per consumed position — which is the exact table §0A's fix
+had to derive by reading core-go's source.
+
+### And 12 of those vectors cannot currently reach the code they test
+
+Of the 28 deopts, **12 are value-form-error vectors that fail one node too early**: Axis-1's
+decoder sends a `compute/error` **leaf** to the Stage-1 fallback (`decode.go`'s `default` arm —
+"value types … go to Stage-1"), so the vector never reaches the CONSUMED/CONTAINED logic it was
+written to test. Measured: adding a single `case types.TypeComputeError → litNode{value: ent}`
+takes deopts **28 → 16** and every recovered vector cross-blesses byte-identical. **That change is
+not in `6ab42c6`** — it is measured, not landed, because it wants its own diff and its own review.
+
+The remaining 16 are honest gaps, not a decode artifact: 11 are the v3.24/v3.25 primitives
+(`assoc` / `concat` / `group-by` / `range`) that Axis-1 has never implemented — that is backlog
+**PR-C**, whose real size this measures for the first time — and 5 are dispatch-mode `apply`,
+which is deopt **by design** (`doc.go`'s scope fence). Those 5 need arch's ruling, not code: AE-6
+admits no fallback, and Axis-1's declared scope excludes dispatch. Either the corpus profile grows
+a pure-only subset or the scope fence moves.
+
+### Rows this opens
+
+- **PR-D — wire the admission corpus into a `make` target.** The one-line runner is in `AGENTS.md`
+  now; a target that generates, emits, and cross-blesses is the actual fix. Deliberately not
+  `test-native`: it needs a buildable sibling, and a sweep that can go red for a neighbour's
+  reasons teaches people to ignore the sweep (same rule as `crossimpl-go`).
+- **PR-E — decode `compute/error` as a value leaf.** Measured above: 12 vectors, 0 divergences.
+- **PR-C is now sized** — 11 corpus vectors, named.
+- **Ask arch:** how does an engine with a declared scope fence satisfy AE-6? (§0c, routed in
+  `reviews/AXIS1-ADMISSION-LAPSED-2026-08-25.md`.)
 
 ## §0aa NEW (2026-08-23) — the re-sync against core-go's compute work found two live defects, neither of them in compute
 
@@ -288,6 +448,10 @@ contract* and a comment claiming a lapsed fidelity is worse than no comment.
 **Carry both rows together into the post-release backlog (PR-B + PR-3)** — they are one piece of work
 (Axis-1 catches up to COMPUTE v3.26 *and* to §5.2), not two.
 
+> **2026-08-25:** the v3.26 half (PR-B) is done — §0A. This half is not, and it turned out to be
+> genuinely separable: the fix was a position model over error *values*, and it does not go near
+> the constraint reader. The pairing was a good bet on shared context, not a real dependency.
+
 ## §0a NEW (2026-08-22) — Regen was sliding one fixed pattern, and the operator's phrasing was the measurement
 
 **Reported:** *"Regen should just basically pick a random seed… right now it just seems to
@@ -366,11 +530,24 @@ an assumption.**
   having been sent (pointer input) is delivered and sitting on arch's board as W-1.
 
 **Axis-1's drift does not touch the shipped surface.** `entitysdk/axis1` is imported by nothing
-outside its own package and tests — no binary, no bridge, no panel. So §0 is a **stale
+outside its own package and tests — no binary, no bridge, no panel. So §0 was a **stale
 conformance claim** (AE-5, `EXTENSION-COMPUTE` §11, LOCKED 2026-07-23), not a defect in anything
 a user runs. Per ADR-0012 that distinction is the whole point: **the release must not restate the
-AE-5 admission as current** until the engine adopts v3.26 contained-error semantics. It is
-correct to ship with it red and named; it would not be correct to ship with it red and quoted.
+AE-5 admission as current** until the engine adopts v3.26 contained-error semantics.
+
+***The v3.26 semantics are RESOLVED 2026-08-25 (§0A). The AE-5 admission is NOT, and the first
+version of this paragraph said it was.***
+
+**Correction.** This paragraph originally read *"the AE-5 corpus still runs byte-exact with the
+new semantics — `make test-sdk` green under `-race`, 330 vectors — so the admission is
+re-quotable."* Every clause of that is wrong, and it was written without running anything:
+`TestAxis1Admission_*` is **gated on `AXIS1_ADMISSION_CORPUS` and skips by default**, so
+`make test-sdk` green attests nothing about AE-5; the corpus is **362** vectors now, not 330; and
+when actually run, **the admission does not lock.** See §0c.
+
+The same reflex as AP43, one day later and pointed at a different fact: a green suite was read as
+covering a gate that suite does not run. **A skip counts as a failure** (AGENTS-STANDARD), and
+this one had been skipping in every sweep since the harness was written.
 
 **~~The one decision left: `dev` is ahead of `master`.~~ RETRACTED 2026-08-23 — there was never
 a decision here, and carrying one was the error.** `master` is the **public canonical mirror**
@@ -382,7 +559,14 @@ in our status file put a release-team act on our board and invited a future sess
 it. Nothing here is owed, and the row is closed rather than answered. The rule now lives in
 `AGENTS.md` under **Boundaries — do NOT modify**, which is where it can actually stop someone.
 
-## §0 (still open) — Axis-1 has drifted from COMPUTE v3.26, and our own differential gate caught it
+## §0 — CLOSED 2026-08-25. Axis-1 had drifted from COMPUTE v3.26, and our own differential gate caught it
+
+> **Closed by the fix in §0A above.** Kept verbatim because **this section was right**: it named
+> the cause and cited the six core-go commits that are the spec of the change, on 2026-08-23. It
+> was overturned on 2026-08-24 by a probe that could not reach the failing position, and the
+> retraction — not the original — is what had to be undone. If you are reading this because a
+> written-down explanation is being challenged, the question to ask is whether the challenge
+> *reproduces the shape*, not whether it ran cleanly.
 
 `TestAxis1Equivalence_Differential` (300-case fuzz, fixed seed 20260716) diverges at case 9:
 
@@ -406,6 +590,10 @@ admission is stale until it adopts the new semantics.
 collection primitive and the fold accumulator) and it was not this session's ask. Two things
 that will save the next session time:
 - The five core-go commits above are the spec of the change, and each names its arch ruling.
+  *(2026-08-25: this was the right pointer. The fix was transcribed from exactly these, and the
+  estimate above — "touches every collection primitive and the fold accumulator" — was accurate,
+  though it under-counted: the consumed positions outside the collection builtins needed the
+  matching short-circuit, and the boundary needed the code-only reduction.)*
 - **Do not read arch's "compute stays sequenced / deferred for you" as covering this.** That
   deferral is about the compute-floor research track (T5). This is an admitted engine drifting
   from a landed spec revision, surfaced by our own gate — a different thing that happens to
@@ -583,7 +771,15 @@ Headlines, so this doc stands alone:
 **Waiting on arch** for the subtree-state descriptor shape, the collection primitive
 (`concat`), and `PROPOSAL-CONTINUATION-STANDING-MODEL` §4. Nothing unblocked remains here.
 
-### 1a. AE-5 Axis-1 conformance admission — **GREEN (LOCKED)**, 2026-07-23
+### 1a. AE-5 Axis-1 conformance admission — ~~**GREEN (LOCKED)**, 2026-07-23~~ **LAPSED — re-measured 2026-08-25, NOT LOCKED**
+
+> **Do not quote this section as current.** Re-run on 2026-08-25 against the live corpus (362
+> vectors, `8d2f55c8…`): **334 agree, 0 diverge, 28 INCOMPLETE — NOT LOCKED.** The lock below was
+> real on 2026-07-23 and lapsed when the v3.24/v3.25 primitives landed. **Nothing told us, because
+> the harness skips unless `AXIS1_ADMISSION_CORPUS` is set and no target sets it** — so it has been
+> reported as a passing suite ever since. §0c has the full measurement and the resulting rows; the
+> withdrawal is routed in `reviews/AXIS1-ADMISSION-LAPSED-2026-08-25.md`. Kept below verbatim as
+> the record of what was true then.
 
 Core-go's AE-5 packet (`entity-core-go/docs/status/ROUTING-2026-07-23-ae5-axis1-inproc-admission.md`)
 asked workbench to run the frozen 330-vector inproc compute corpus in-process through **Axis-1** (the
@@ -2140,7 +2336,13 @@ through `system/query`. Enumerate the read paths (tree/location, query, revision
 tracking, published-root seq, discovery) and confirm each survives a reopen. Cheap, and it is how
 we find the *next* one of these instead of shipping it.
 
-**PR-3 — Axis-1's §5.2 constraint reader** (§0b). Fold into PR-B; they are one piece of work.
+**PR-3 — Axis-1's §5.2 constraint reader** (§0b). **Now stands alone** — PR-B, the other half of
+the pairing, is done (2026-08-25). Still open, still unreached by any binary, and the position
+model that closed PR-B does not touch it: this is the constraint *reader*, not the evaluator's
+error semantics. **Note for whoever takes it:** PR-B's cause was named correctly the day it was
+found and then talked out of existence — so treat §0b's diagnosis, which names
+`0e34e3e` and both replacement functions, as the strong starting point it is, and require any
+refutation to reproduce the failing shape.
 
 **PR-5 — 43 unresolvable commit pins in the canonical docs** ([ADR-0012] Amendment 1, landed
 2026-08-23 with the ADR injection). Published commits are authored fresh at the release boundary
@@ -2180,14 +2382,31 @@ in 8 runs"** rather than "74/74".
    stated decision. This is what upgrades the toggle interface from "clunky but works" to direct
    manipulation, and it is the honest blocker on shipping interactive Life anywhere as a
    showcase.
-2. **PR-B. Axis-1's COMPUTE v3.26 drift** (§0) — **plus §5.2 (PR-3)**. Ours to fix, nobody else's — a conformance-admitted
-   engine (AE-5, LOCKED) whose admission is stale until it adopts contained-error semantics.
-   Diagnosed with evidence and deliberately not started. **Do not confuse it with arch's compute
-   deferral** — that is the T5 research track and this is an admitted engine drifting from a
-   landed spec revision.
+2. ~~**PR-B. Three UNDIAGNOSED divergences between the two compute engines.**~~ **DONE
+   2026-08-25** — diagnosed and fixed, see §0A. All three were one shape:
+   `length(map(arr, λe. e + <out-of-range index>))`, where `map`'s output element is a
+   **CONTAINED** position and Axis-1 propagated instead of containing. The cause was
+   contained-error semantics after all; the 2026-08-24 refutation was the error, not the
+   original diagnosis. Fixed as a position model (`axis1/contain.go`) rather than a patch, which
+   also caught a filter predicate that **kept** elements whose predicate had failed. Gate:
+   `TestAxis1Equivalence_ContainedErrorPositions`, verified failing pre-fix. Sweep 300/300.
+   **§5.2 (PR-3) is still open and is now the whole of that pairing** — see below.
 3. **PR-C. The `programs/` ↔ `concat` catch-up.** `programs/` routes around `concat` in four places
    and **Axis-1 implements none of the four v3.24 primitives** against a 350-vector corpus.
    Nothing is waiting on anybody for this (core-go shipped them at `eb80750`).
+   **Sized 2026-08-25 (§0c): exactly 11 corpus vectors** — `cv1-group-by-shape`, `cv2-assoc-oob-*`,
+   `cv3-range-*`, `cv4a/4b-assoc-*`, `cv5-concat-error-transparent`, `cv6-group-by-error-key`,
+   `cv7a/7b/7c-*-collection-error-shortcircuit`. They are 11 of the 28 vectors currently voiding
+   AE-5, so PR-C is now on the admission's critical path rather than a nice-to-have.
+4. **PR-D. Wire arch's differential compute corpus into a `make` target** (§0c). The gate that
+   would have caught PR-B's defect on day one already exists and **skips by default**; the runner
+   is in `AGENTS.md`. Not in `test-native` — it needs a buildable sibling, same rule as
+   `crossimpl-go`. **Highest value-per-hour row on this list.**
+5. **PR-E. Decode `compute/error` as a value leaf** (§0c). One `case` arm in `axis1/decode.go`;
+   measured at 12 recovered vectors, 28 → 16 deopts, 0 divergences. Wants its own diff.
+6. **Waiting on arch — AE-6 vs a declared scope fence.** Routed as
+   `reviews/AXIS1-ADMISSION-LAPSED-2026-08-25.md` §3, with the "should this engine live here at
+   all" question in §4. Not blocking: Axis-1 ships in no binary.
 
 ### Coordination with `entity-browser-rust` — where we left it
 

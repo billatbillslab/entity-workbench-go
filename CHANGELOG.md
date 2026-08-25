@@ -69,6 +69,24 @@ and the CDN corridor gained its second end.
 - **`compute aggregate` could not read a numeric field written by the shell's own
   `put`** — JSON numbers decode as floats and the aggregate accepted only integer
   kinds. Non-integral values are now refused rather than truncated.
+- **An experimental alternate compute engine mishandled an error raised inside a
+  collection operation.** In this system an error is an ordinary value, and what
+  happens to one depends on where it lands: `map` *places* each result into its
+  output array, so a failing element becomes an error value there and the
+  operation succeeds; a filter predicate is *read*, so a failing one stops the
+  filter. The alternate engine stopped in both cases, which made
+  `length(map(items, f))` report a failure where the reference engine reports the
+  item count. The same distinction was missing for `fold`'s accumulator (a
+  function that ignores a failed accumulator is supposed to recover), for an error
+  read back out of a collection, and at the point where a contained error is
+  written out — it now reduces to its code alone, so two implementations that word
+  the same failure differently still agree on the bytes. Found by the 300-case
+  equivalence sweep, which is green for the first time; five new
+  position-by-position vectors pin it, since a generator reaches this shape only by
+  luck of the draw. *(Earlier releases of this file listed this as an open question
+  with one failing case and no known cause. All three parts of that were wrong: there
+  were three cases — the sweep stopped at the first — and the cause had in fact been
+  correctly identified before being retracted on a probe that could not test it.)*
 - A peer held ~20 MB for a delivery ring it never released.
 - A persistent store now yields a persistent peer identity across restarts.
 - The watch hub could send on a closed channel.
@@ -82,9 +100,6 @@ Stated because they are real and reproducible, not because they are comfortable:
   README § *Repository layout* has the shape, `make doctor` verifies it, and the build
   now refuses early with instructions. There is no published module path yet, so
   `go get` of the SDK is not available in this release.
-- **One differential test fails**: a compute equivalence case whose contained-error
-  semantics the Axis-1 engine has not yet adopted. It is a known, characterized
-  divergence, not a regression.
 - **A rare failure under full-suite load** in a bidirectional burst-write end-to-end
   test, traced to a terminal write loss below this layer and routed upstream; and one
   unidentified desktop-test flake observed once in eight runs.

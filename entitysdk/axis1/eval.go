@@ -91,6 +91,33 @@ func (e *evaluator) eval(n node, fr *frame, root map[string]interface{}) (interf
 	}
 }
 
+// operand evaluates a node in a CONSUMED position — one whose result is READ
+// rather than placed. Mirrors ext/compute/eval.go::evalOperand, which is
+// Stage-1's single chokepoint for the same job.
+//
+// The only thing it adds over eval is the VALUE-FORM arm: a compute/error that
+// arrives as an ordinary value short-circuits exactly as a minted one does
+// (§2.4 — is_error is kind-based, so the two representations cannot be allowed
+// to take different paths). Skipping it does not produce a clean failure, it
+// produces a WRONG ANSWER of the reference's own making: core-go used a bare
+// Evaluate for the `collection` operand and a value-form error there fell
+// through to the "not an array" branch and reported type_mismatch (see
+// ext/compute/builtins.go::resolveCollection's note; core-rust and core-py both
+// traced it back to that one slip).
+//
+// Use this at every position Stage-1 reaches through evalOperand, and NOT at
+// the contained positions — see contain.go for which is which.
+func (e *evaluator) operand(n node, fr *frame, root map[string]interface{}) (interface{}, error) {
+	v, err := e.eval(n, fr, root)
+	if err != nil {
+		return nil, err
+	}
+	if ce, isErr := errorFromValue(v); isErr {
+		return nil, ce
+	}
+	return v, nil
+}
+
 // evalInner dispatches one node. The switch mirrors Stage-1's evaluateInner
 // case for case; keep them aligned.
 func (e *evaluator) evalInner(n node, fr *frame, root map[string]interface{}) (interface{}, error) {
@@ -115,22 +142,22 @@ func (e *evaluator) evalInner(n node, fr *frame, root map[string]interface{}) (i
 		return e.evalHash(t, fr, root)
 
 	case arithNode:
-		left, err := e.eval(t.left, fr, root)
+		left, err := e.operand(t.left, fr, root)
 		if err != nil {
 			return nil, err
 		}
-		right, err := e.eval(t.right, fr, root)
+		right, err := e.operand(t.right, fr, root)
 		if err != nil {
 			return nil, err
 		}
 		return applyArithmetic(t.op, left, right, t.unsignedHint)
 
 	case cmpNode:
-		left, err := e.eval(t.left, fr, root)
+		left, err := e.operand(t.left, fr, root)
 		if err != nil {
 			return nil, err
 		}
-		right, err := e.eval(t.right, fr, root)
+		right, err := e.operand(t.right, fr, root)
 		if err != nil {
 			return nil, err
 		}
@@ -169,7 +196,7 @@ func (e *evaluator) evalInner(n node, fr *frame, root map[string]interface{}) (i
 		return int64(len(arr)), nil
 
 	case castNode:
-		val, err := e.eval(t.value, fr, root)
+		val, err := e.operand(t.value, fr, root)
 		if err != nil {
 			return nil, err
 		}
@@ -340,7 +367,10 @@ func isComputeType(ent entity.Entity) bool {
 // observable change (§13.5 forbids reordering evaluation): an operand that
 // poisons the eval under Stage-1 would silently stop doing so.
 func (e *evaluator) evalLogic(t logicNode, fr *frame, root map[string]interface{}) (interface{}, error) {
-	left, err := e.eval(t.left, fr, root)
+	// CONSUMED on both sides: the results are read by truthy(). A value-form
+	// error must short-circuit rather than reach truthy(), whose default arm
+	// returns true — an error operand would otherwise read as `and`'s identity.
+	left, err := e.operand(t.left, fr, root)
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +381,7 @@ func (e *evaluator) evalLogic(t logicNode, fr *frame, root map[string]interface{
 		return nil, newError(compute.ErrInvalidExpression,
 			"logic op "+t.op+" requires right operand")
 	}
-	right, err := e.eval(t.right, fr, root)
+	right, err := e.operand(t.right, fr, root)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +398,9 @@ func (e *evaluator) evalLogic(t logicNode, fr *frame, root map[string]interface{
 // evalIf mirrors ext/compute/eval.go::evalIf — lazy: only the taken branch is
 // evaluated, and it is tail-called so the metering matches.
 func (e *evaluator) evalIf(t ifNode, fr *frame, root map[string]interface{}) (interface{}, error) {
-	cond, err := e.eval(t.cond, fr, root)
+	// CONSUMED (ext/compute/eval.go::evalIf reaches the condition through
+	// evalOperand): an error condition short-circuits, it does not pick a branch.
+	cond, err := e.operand(t.cond, fr, root)
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +437,11 @@ func (e *evaluator) evalLet(t letNode, fr *frame, root map[string]interface{}) (
 // evalField mirrors ext/compute/eval_construct.go::evalField — dispatch on the
 // target's Go type (v3.19c Part A R3 / M3), never on a sniffed wire shape.
 func (e *evaluator) evalField(t fieldNode, fr *frame, root map[string]interface{}) (interface{}, error) {
-	target, err := e.eval(t.target, fr, root)
+	// CONSUMED: without the short-circuit a value-form error target would fall
+	// into the entity.Entity arm below and be NAVIGATED — decoding a
+	// compute/error's data map and answering not_found for the field name, i.e.
+	// the wrong code for the wrong reason.
+	target, err := e.operand(t.target, fr, root)
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +485,11 @@ func (e *evaluator) evalField(t fieldNode, fr *frame, root map[string]interface{
 func (e *evaluator) evalConstruct(t constructNode, fr *frame, root map[string]interface{}) (interface{}, error) {
 	fields := make(map[string]interface{}, len(t.fieldNames))
 	for i, name := range t.fieldNames {
-		v, err := e.eval(t.fieldVals[i], fr, root)
+		// A construct FIELD is CONSUMED, not contained (§4.1 is_error MUST + N1
+		// as corrected in v3.23 ruling B): the whole construct yields the error.
+		// An error materializes only where it is WRITTEN (§7.2 result_path /
+		// SA-9 store), never by being embedded in a field here.
+		v, err := e.operand(t.fieldVals[i], fr, root)
 		if err != nil {
 			return nil, err
 		}
@@ -464,7 +504,7 @@ func (e *evaluator) evalIndex(t indexNode, fr *frame, root map[string]interface{
 	if err != nil {
 		return nil, err
 	}
-	idxVal, err := e.eval(t.index, fr, root)
+	idxVal, err := e.operand(t.index, fr, root)
 	if err != nil {
 		return nil, err
 	}
@@ -495,8 +535,16 @@ func (e *evaluator) evalIndex(t indexNode, fr *frame, root map[string]interface{
 // "collection must be an array, got %T" (ext/compute/builtins.go::resolveCollection).
 // Error messages are compared by the differential harness, so the wording is
 // part of the contract, not decoration.
+// All three call sites are CONSUMED positions — index's and length's array
+// operands, and the collection operand of map/filter/fold, whose length and
+// elements are read to drive the loop. So this goes through e.operand: a
+// value-form error collection must short-circuit AS THAT ERROR, not fall
+// through to the "not an array" branch and be reported as type_mismatch. That
+// exact slip shipped in the reference (bare Evaluate in resolveCollection) and
+// its corpus locked 352/352 anyway, because no vector put an error in the
+// collection operand.
 func (e *evaluator) evalArray(n node, fr *frame, root map[string]interface{}, format string) ([]interface{}, error) {
-	v, err := e.eval(n, fr, root)
+	v, err := e.operand(n, fr, root)
 	if err != nil {
 		return nil, err
 	}
@@ -525,6 +573,18 @@ const (
 // half-translated; it is off every measured path (a lambda written inline
 // decodes to a lambdaNode) and correctness beats coverage at the seam.
 func (e *evaluator) resolveClosure(n node, fr *frame, root map[string]interface{}) (*closure, error) {
+	// e.eval, NOT e.operand — deliberately, and it is the one place in this file
+	// where that is worth arguing. `fn` is a consumed position, but the reference
+	// (ext/compute/builtins.go::resolveClosureArg) uses a bare Evaluate here, so a
+	// value-form compute/error reaches the type assertion below and is reported as
+	// "fn must resolve to a closure, got entity.Entity" rather than as the error.
+	//
+	// That is the SAME slip core-rust and core-py traced in resolveCollection, one
+	// argument over. Matching it is the right call anyway: this engine's contract
+	// is equivalence with Stage-1, and an alternate engine that succeeds where the
+	// reference fails hides the reference's defect in our tree instead of routing
+	// it. Routed as an observation; if the reference switches to evalOperand,
+	// switch this line with it and the differential sweep will say so either way.
 	v, err := e.eval(n, fr, root)
 	if err != nil {
 		return nil, err
@@ -564,7 +624,11 @@ func (e *evaluator) invokeClosure(cl *closure, args []interface{}, root map[stri
 // depth budget of 16 — it only reaches a value (rather than depth_exceeded) if
 // each self-apply continues the same eval() loop instead of nesting a new one.
 func (e *evaluator) evalApply(t applyNode, fr *frame, root map[string]interface{}) (interface{}, error) {
-	fnVal, err := e.eval(t.fn, fr, root)
+	// CONSUMED — the fn expression's result is read (it has to BE a closure).
+	// Without the short-circuit a value-form error here would take the fallback
+	// branch below and be settled by Stage-1: the right answer by accident, at
+	// the cost of a spurious Fallbacks++ that the sweep asserts is zero.
+	fnVal, err := e.operand(t.fn, fr, root)
 	if err != nil {
 		return nil, err
 	}
@@ -594,7 +658,11 @@ func (e *evaluator) evalApply(t applyNode, fr *frame, root map[string]interface{
 		if !ok {
 			return nil, newError(compute.ErrMissingArgument, "Missing argument: "+p)
 		}
-		av, err := e.eval(an, fr, root)
+		// CONSUMED (§4.1 is_error MUST, ruling B): an error reaching a closure ARG
+		// short-circuits rather than binding. Stage-1's reason transfers exactly —
+		// the scope-binding schema has no error variant (v3.23), so short-circuiting
+		// is what makes an error unrepresentable here instead of silently bound.
+		av, err := e.operand(an, fr, root)
 		if err != nil {
 			return nil, err
 		}
@@ -615,11 +683,22 @@ func (e *evaluator) evalMap(t mapNode, fr *frame, root map[string]interface{}) (
 	}
 	out := make([]interface{}, 0, len(arr))
 	for _, elt := range arr {
-		v, err := e.invokeClosure(cl, []interface{}{elt}, root)
-		if err != nil {
-			return nil, err
+		// The output element is a CONTAINED position: map never READS the
+		// closure's result, it places it. So a failing element becomes an error
+		// VALUE in the output array — the §1.5 NaN model, element-wise — and the
+		// map does not short-circuit. Only a limit code whose counter is not
+		// restored on unwind aborts (contain.go).
+		//
+		// This is the line the differential sweep's cases 9, 28 and 79 were
+		// failing on. All three are length(map(arr, λe. e + <out-of-range index>)):
+		// under the reference the map yields four contained errors and length is
+		// 4; propagating instead answered index_out_of_range for the whole
+		// program.
+		contained, perr := containClosureResult(e.invokeClosure(cl, []interface{}{elt}, root))
+		if perr != nil {
+			return nil, perr
 		}
-		out = append(out, v)
+		out = append(out, contained)
 	}
 	return out, nil
 }
@@ -641,6 +720,16 @@ func (e *evaluator) evalFilter(t filterNode, fr *frame, root map[string]interfac
 		if err != nil {
 			return nil, err
 		}
+		// Unlike map's, filter's closure result is CONSUMED — read for
+		// truthiness — so it short-circuits in BOTH representations. The minted
+		// arm is the return above; this is the value-form arm, and it is not
+		// optional: truthy() has no error case and falls to its default `true`,
+		// so without this an element whose predicate FAILED would be silently
+		// KEPT (§2.4: a minted predicate error already aborts, so containing the
+		// value form would make the outcome depend on provenance).
+		if ce, isErr := errorFromValue(v); isErr {
+			return nil, ce
+		}
 		if truthy(v) {
 			out = append(out, elt)
 		}
@@ -659,15 +748,24 @@ func (e *evaluator) evalFold(t foldNode, fr *frame, root map[string]interface{})
 	if err != nil {
 		return nil, err
 	}
-	acc, err := e.eval(t.initial, fr, root)
+	// The accumulator — `initial` included — is a CONTAINED position: fold binds
+	// it into the next invocation and never reads it, so a closure that ignores
+	// its accumulator RECOVERS from an error one. fold NEVER short-circuits on an
+	// ordinary error accumulator. The empty-collection case pins the shape:
+	// fold([], fn, E) = E, the error contained as the final accumulator.
+	//
+	// (`collection` above is the opposite — CONSUMED, short-circuited by
+	// evalArray/e.operand.)
+	acc, err := containClosureResult(e.eval(t.initial, fr, root))
 	if err != nil {
 		return nil, err
 	}
 	for _, elt := range arr {
-		acc, err = e.invokeClosure(cl, []interface{}{acc, elt}, root)
-		if err != nil {
-			return nil, err
+		next, ierr := containClosureResult(e.invokeClosure(cl, []interface{}{acc, elt}, root))
+		if ierr != nil {
+			return nil, ierr
 		}
+		acc = next
 	}
 	return acc, nil
 }

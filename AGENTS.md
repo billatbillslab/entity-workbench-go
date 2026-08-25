@@ -50,7 +50,7 @@ D12–D24 here are ours, earned on the eight crash-hunt commits, two feedback ep
 consume run, the 2026-08-20 reachability audit, and the 2026-08-21 crash hunt that found a
 month-old fatal bug the moment an instrument could reach it.
 - **Disciplines** (invariants — the *what*): `docs/architecture/DISCIPLINE-CHARTER.md` —
-  D1–D24, the ten review questions, the anti-pattern catalog AP1–AP42, and the promotion
+  D1–D24, the ten review questions, the anti-pattern catalog AP1–AP43, and the promotion
   criteria (§5) that the ecosystem ladder generalizes.
 - **Substrate model** (ground truth): `docs/architecture/MODEL-AVALONIA-RUNTIME.md` — what
   the Avalonia/.NET/Skia/X11 runtime actually does (stack diagram, lifecycle matrix, the
@@ -137,6 +137,28 @@ them — name the recurring cycle first, then let each step own one lever of it)
   failed. ~12 min.
 - `make test` — full sweep (`-race -count=1`); `entitysdk`/`shellcmd` slowest; pin tests
   live in `entitysdk`.
+- **AP15 is about fail-fast REPORTING, not about `make`** — the same defect lives inside any
+  test that loops. `TestAxis1Equivalence_Differential` swept 300 cases and `t.Fatalf`'d on the
+  first divergence, so the tree reported **one** for three days when there were **three**. The
+  tell is `Fatalf`/`break`/`return` inside a range over cases, corpora or fixtures: **the count
+  it yields is a lower bound.** Collect, then report. And if you waive a known failure, waive a
+  *signature* and pin the instance set, so a fourth instance is not silently absorbed and the
+  waiver fails when the defect goes away.
+- **A probe that does not reproduce the failing shape refutes nothing** (AP43). The same three
+  divergences had a correct diagnosis, which we then retracted on two probes that ran cleanly
+  and were about the wrong position — an out-of-range index in a *consumed* position, where both
+  engines were already correct, when the defect lived only at a *closure-result* position. The
+  cause went back to "unknown" in a published CHANGELOG for a day. **Before a refutation retires
+  an explanation, show the probe reaches the mechanism**: name the position/branch the hypothesis
+  predicts will fail, and demonstrate a failing run before the fix rather than only a passing one
+  after. *"I measured it and the explanation is dead"* is a far more expensive claim than
+  *"nobody has measured this"*, and it travels faster because it sounds more rigorous.
+- **When two implementations disagree on GENERATED input, the generated input is the evidence** —
+  reach for this first, not after a round of hypotheses. Regenerate at the fixed seed, dump the
+  IR of each diverging case, then **evaluate every subnode on both engines, children first, and
+  print the deepest disagreement.** One throwaway test file converted three days of "cause
+  unknown" into a named position in a spec, in one run. The scaffolding is deliberately not kept
+  in the tree; it is twenty minutes to rewrite and it is wrong to maintain a debugger as a test.
 - **`make test` STOPS at the first failing package, and `-k` does not cross the container**
   (`test` = `IN_CONTAINER make test-native`, so `make -k test` still aborts at the first
   sub-target). **Never quote a failure count taken from a red `make test` run** — it is a
@@ -265,7 +287,7 @@ them — name the recurring cycle first, then let each step own one lever of it)
   matters, you're probably about to mislead. Cite `file:line` in test comments and doc
   explanations.
 - The project measures everything against the **24 disciplines (D1–D24)**, ten review
-  questions, and anti-pattern catalog (AP1–AP42) in `docs/architecture/DISCIPLINE-CHARTER.md`.
+  questions, and anti-pattern catalog (AP1–AP43) in `docs/architecture/DISCIPLINE-CHARTER.md`.
 - **A model with no shipped surface is not shipped** (D23). Landing a renderer-neutral model
   is half a feature; the other half is a verb, panel, or menu entry a user can reach, in the
   same session. Three times now — the name arc, the handler browser, `PeerLiveness` — every
@@ -599,6 +621,43 @@ entities):
   3 skipped" while its own unit tests — which build Go ints directly — stayed green. Refuse a
   non-integral value rather than truncating it (AP33). When a fixture has to prove a cross-verb
   type contract, encode it through the *writing* verb's path, not by hand.
+- **A compute error is a VALUE, and what happens to it depends on the POSITION, not on how it
+  arrived** (`entitysdk/axis1/contain.go`, AP43). Two representations exist at every result site —
+  *minted* (the evaluator raised it) and *value-form* (a `compute/error` entity arrived as an
+  ordinary result), and §2.4 forbids them taking different paths. Three positions, and each call
+  site in `axis1/eval.go` names its own: **CONSUMED** — the result is READ (arith/compare/logic
+  operand, `if` condition, cast value, field target, construct field, index and its array, any
+  collection operand, a filter predicate) → both short-circuit, via `evaluator.operand`;
+  **CONTAINED** — the result is PLACED without being read (`map`'s output element, `fold`'s
+  accumulator and `initial`) → both become a value in that slot, except `budget_exhausted` /
+  `cascade_limit`, whose counters are not restored on unwind (`depth` *is*, so `depth_exceeded`
+  contains like anything else); **BOUNDARY** — a contained error element materializes
+  **code-only**, because `message` is prose no spec pins and containing it forks the array's bytes
+  cross-impl. Getting the split wrong is silent under any test whose closures cannot fail — the
+  filter half of the defect **kept** elements whose predicate had failed rather than erroring.
+  Gates: `TestAxis1Equivalence_ContainedErrorPositions` (one vector per position) and, the real
+  one, **arch's differential corpus below.**
+- **`TestAxis1Admission_*` SKIPS unless you set `AXIS1_ADMISSION_CORPUS`, so a green
+  `make test-sdk` says NOTHING about AE-5** — and a skip counts as a failure (AGENTS-STANDARD).
+  This is the gate that matters and it is not wired into any target. Run it:
+
+  ```
+  (cd ../entity-core-go && go run ./cmd/internal/compute-corpus generate --profile inproc --out /tmp/c.cbor \
+     && go run ./cmd/internal/compute-corpus emit --corpus /tmp/c.cbor --out /tmp/ref.cbor)
+  (cd entitysdk && AXIS1_ADMISSION_CORPUS=/tmp/c.cbor AXIS1_ADMISSION_OUT=/tmp/a1.cbor go test -run TestAxis1Admission .)
+  (cd ../entity-core-go && go run ./cmd/internal/compute-corpus cross-bless --corpus /tmp/c.cbor \
+     --emission /tmp/ref.cbor --emission /tmp/a1.cbor)
+  ```
+
+  **Measured 2026-08-25 (corpus `8d2f55c8`, 362 vectors, core-go `13a42ea`): 334 agree, 0 diverge,
+  28 INCOMPLETE — NOT LOCKED.** Every vector Axis-1 *answers* is byte-identical to the reference;
+  the 28 deopt to Stage-1, and under **AE-6 a deopted vector's evidence is void**, so **AE-5 is not
+  green and has not been since the v3.24/v3.25 primitives landed.** Do not quote the 2026-07-23
+  admission as current. The corpus names the divergence-prone classes in its vector IDs
+  (`cv8a-map-contains-minted-error`, `cv8c-filter-predicate-error-shortcircuit`,
+  `cv9a-map-depth-exceeded-contains`, `worked/value-error/*`) — **it catches the AP43 bug in five
+  vectors**, measured by re-running it against the pre-fix engine. Our home-grown 300-case fuzz
+  found three cases and no cause; this corpus names them. **Reach for it first.**
 - **Not the conformance team.** When a cross-impl wire bug surfaces during perf/feature
   work, capture `file:line` + reproducer and route it (Python encoder → Python team, spec
   ambiguity → arch, conformance test-gap → core-go) — don't extend the probe into a

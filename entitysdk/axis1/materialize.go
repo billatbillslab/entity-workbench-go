@@ -1,6 +1,8 @@
 package axis1
 
 import (
+	"fmt"
+
 	"go.entitychurch.org/entity-core-go/core/ecf"
 	"go.entitychurch.org/entity-core-go/core/entity"
 	"go.entitychurch.org/entity-core-go/core/store"
@@ -85,6 +87,35 @@ func materialize(v interface{}, cs store.ContentStore) (interface{}, error) {
 	case []interface{}:
 		out := make([]interface{}, len(t))
 		for i, e := range t {
+			// (B) carve-out (COMPUTE v3.26 §3.5), transcribed from
+			// ext/compute/eval_construct.go::materialize: a compute/error
+			// CONTAINED as an array element materializes CODE-ONLY —
+			// content-hashed over `code` alone — and is referenced by a bare
+			// system/hash like any other entity-valued element.
+			//
+			// Code-only is the load-bearing part, not a detail: `message` is an
+			// in-flight diagnostic no spec pins, so containing it would fork the
+			// enclosing array's BYTES across implementations. That is also what
+			// makes a minted and a value-form error indistinguishable here (§2.4)
+			// — which is the whole reason containClosureResult may convert one
+			// into the other.
+			//
+			// Scope is exactly the contained-element position. The tell that this
+			// has been widened wrongly is a NON-element error materializing
+			// quietly; see the entity.Entity arm below, which refuses that.
+			if ce, isErr := errorFromValue(e); isErr {
+				errEnt, eerr := ce.ToMaterializedEntity()
+				if eerr != nil {
+					return nil, eerr
+				}
+				if cs != nil {
+					if _, err := cs.Put(errEnt); err != nil {
+						return nil, err
+					}
+				}
+				out[i] = errEnt.ContentHash
+				continue
+			}
 			me, err := materialize(e, cs)
 			if err != nil {
 				return nil, err
@@ -96,6 +127,28 @@ func materialize(v interface{}, cs store.ContentStore) (interface{}, error) {
 			}
 		}
 		return out, nil
+
+	case entity.Entity:
+		// (B) INVARIANT (COMPUTE v3.23, scoped v3.26): a compute/error reaching
+		// materialization as a SCALAR — a top-level result, a construct-field
+		// scalar, a scope-binding scalar — is a defect, not a value. Every
+		// CONSUMED position short-circuits it first (§4.1 is_error [MUST]), and
+		// the one place an error legitimately materializes as a written scalar
+		// (§7.2 result_path / SA-9 store) goes through ToMaterializedEntity
+		// directly rather than through here.
+		//
+		// So this arm exists to fail loudly. Reaching it means a short-circuit is
+		// missing upstream, and the alternative — passing it through — re-embeds
+		// the error silently and produces a well-formed-looking boundary hash for
+		// a computation that failed.
+		if t.Type == types.TypeComputeError {
+			return nil, fmt.Errorf(
+				"axis1 internal: compute/error reached materialize() as a scalar — a §4.1 is_error " +
+					"short-circuit was missed (v3.23 ruling B, scoped v3.26: a CONTAINED error " +
+					"materializes code-only as an ARRAY ELEMENT; a scalar error propagates from its " +
+					"consumption site, it never materializes there)")
+		}
+		return v, nil
 	case *closure:
 		// A live closure crossing the boundary must become the artifacts
 		// Stage-1 would have built all along: a compute/scope entity for the
