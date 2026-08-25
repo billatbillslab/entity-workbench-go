@@ -6,9 +6,11 @@
 // shellboot, or panel imports — so this binary is easy to extract
 // into its own repo when the corridor wraps.
 //
-// The signed manifest, signed substitute-entry,
-// and local/io stdout-bridge handler are deferred and tagged in
-// publish/.
+// The signed published-root IS emitted (since 2026-08-18): {out}/manifest
+// carries it, and the http-poll transport profile moved beside the site
+// at {out}/transport-profile per EXTENSION-NETWORK §6.5.4. The signed
+// substitute-entry and the local/io stdout-bridge handler are still
+// deferred and tagged in publish/.
 package main
 
 import (
@@ -18,6 +20,7 @@ import (
 	"os"
 
 	"go.entitychurch.org/entity-core-go/core/crypto"
+	"go.entitychurch.org/entity-core-go/core/types"
 
 	"entity-workbench-go/entitysdk"
 	"entity-workbench-go/publish"
@@ -100,7 +103,8 @@ func printSummary(res publish.Result) {
 	fmt.Println()
 	fmt.Println(" URL patterns (what a Mode-A consumer builds):")
 	if res.OriginURL != "" {
-		fmt.Printf("   manifest          %s/manifest\n", res.OriginURL)
+		fmt.Printf("   manifest          %s/manifest  (the signed published-root)\n", res.OriginURL)
+		fmt.Printf("   transport profile %s/%s  (out-of-band, §6.5.4)\n", res.OriginURL, publish.TransportProfileFile)
 		fmt.Printf("   tree binding      %s/%s/<path>%s\n", res.OriginURL, res.PeerID, m.Endpoint.TreeLeafSuffix)
 		fmt.Printf("   content blob      %s/<wire-hex[0:2]>/<wire-hex[2:4]>/<wire-hex>\n", m.Endpoint.ContentURLPrefix)
 		fmt.Println("                       (sharded-2-4; level 1 = algo byte hex,")
@@ -109,8 +113,24 @@ func printSummary(res publish.Result) {
 	} else {
 		fmt.Println("   (origin unset — URLs cannot be built; -origin is required for serving)")
 	}
+	sr := res.SignedRoot
 	fmt.Println()
-	fmt.Println(" §6.5.3 manifest fields (decoded from {out}/manifest):")
+	fmt.Println(" signed published-root (served at {manifest_url_prefix}, §6.5.3.1):")
+	fmt.Printf("   entity hash        %s\n", sr.Root.ContentHash)
+	fmt.Printf("   root_hash          %s\n", sr.Data.RootHash)
+	fmt.Printf("   prefix             %s\n", sr.Data.Prefix)
+	fmt.Printf("   seq                %d\n", sr.Data.Seq)
+	if sr.Data.Predecessor != nil {
+		fmt.Printf("   predecessor        %s\n", *sr.Data.Predecessor)
+	} else {
+		fmt.Println("   predecessor        (none — first published root for this peer)")
+	}
+	fmt.Printf("   signature at       /%s/%s%s\n", res.PeerID,
+		types.LocalSignaturePath(sr.Root.ContentHash), m.Endpoint.TreeLeafSuffix)
+	fmt.Printf("   closure served     %d hashes (trie nodes + leaf-bound content, §6.5.3 MUST)\n", sr.ClosureSize)
+
+	fmt.Println()
+	fmt.Printf(" §6.5.3 transport-profile fields (decoded from {out}/%s):\n", publish.TransportProfileFile)
 	fmt.Printf("   transport_type     %s\n", m.TransportType)
 	fmt.Printf("   supported_ops      %v\n", m.SupportedOps)
 	fmt.Printf("   freshness          %s\n", m.Freshness)
@@ -130,6 +150,7 @@ func printSummary(res publish.Result) {
 		fmt.Println(" smoke test:")
 		fmt.Printf("   curl -sI %s/manifest\n", res.OriginURL)
 		fmt.Printf("   curl -s  %s/manifest | xxd | head\n", res.OriginURL)
+		fmt.Printf("   curl -s  %s/%s | xxd | head\n", res.OriginURL, publish.TransportProfileFile)
 	}
 	fmt.Println(bar)
 }

@@ -103,6 +103,20 @@ func StatusOf(err error) uint {
 	return 0
 }
 
+// CodeOf returns the machine-readable code carried by err, or "" if
+// err is not an SDK Error (or is nil). The status-code sibling of
+// StatusOf: status says which class of failure, code says which one.
+// Callers distinguishing between two failures that share a status —
+// several of the published-root verification refusals are 403 — need
+// the code, not the status.
+func CodeOf(err error) string {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Code
+	}
+	return ""
+}
+
 // IsStatus reports whether err is an SDK Error with the given status.
 func IsStatus(err error, status uint) bool {
 	return StatusOf(err) == status

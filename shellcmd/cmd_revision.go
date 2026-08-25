@@ -53,7 +53,7 @@ import (
 func cmdRevision(sh *Shell, args []string) (Result, error) {
 	if len(args) < 1 {
 		return Result{}, fmt.Errorf(
-			"usage: revision <commit|log|status|diff|find-ancestor|branch|tag|checkout|cherry-pick|revert|merge|resolve|config> [args]")
+			"usage: revision <commit|log|status|diff|find-ancestor|branch|tag|checkout|cherry-pick|revert|merge|resolve|config|sync|follow|mirror|unfollow|push> [args]")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -89,6 +89,8 @@ func cmdRevision(sh *Shell, args []string) (Result, error) {
 		return cmdRevisionSync(sh, rest)
 	case "follow":
 		return cmdRevisionFollow(sh, rest)
+	case "mirror":
+		return cmdRevisionMirror(sh, rest)
 	case "unfollow":
 		return cmdRevisionUnfollow(sh, rest)
 	case "push":

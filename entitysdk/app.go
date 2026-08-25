@@ -2,6 +2,7 @@ package entitysdk
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 
 	"fmt"
@@ -92,6 +93,13 @@ type AppPeer struct {
 	// shell's mount verb can StartWatching on it post-construction.
 	// Nil when the extension is disabled.
 	localFilesHandler *localfiles.Handler
+
+	// prSeqFloor is the per-publisher published-root freshness floor
+	// (published_root.go): the highest seq accepted for each peer-id,
+	// used to reject rollbacks. Process-lifetime only — see
+	// PublishedRootSeqFloor for why it is not persisted here.
+	prSeqMu    sync.Mutex
+	prSeqFloor map[string]uint64
 }
 
 // OwnerCapability returns the peer-owner self-capability entity

@@ -148,13 +148,13 @@ func (ex *Executor) SetCallerCapability(cap entity.Entity) {
 // Execute dispatches a handler operation through the protocol.
 // Handlers fire, capability grants are checked, emits propagate.
 func (ex *Executor) Execute(path, operation string) (*Response, error) {
-	return ex.executeDispatch(path, operation, entity.Entity{}, nil, nil)
+	return ex.executeDispatch(path, operation, entity.Entity{}, nil, nil, entity.Entity{})
 }
 
 // ExecuteWithParams dispatches a handler operation with parameters.
 // The params entity is passed to the handler as Request.Params.
 func (ex *Executor) ExecuteWithParams(path, operation string, params entity.Entity) (*Response, error) {
-	return ex.executeDispatch(path, operation, params, nil, nil)
+	return ex.executeDispatch(path, operation, params, nil, nil, entity.Entity{})
 }
 
 // ExecuteOnResource dispatches a handler operation that targets a
@@ -162,7 +162,7 @@ func (ex *Executor) ExecuteWithParams(path, operation string, params entity.Enti
 // being accessed lives in Resource.Targets[0] rather than in the
 // handler-target path). Used internally by the L1 tree wrappers.
 func (ex *Executor) ExecuteOnResource(handlerPath, operation string, params entity.Entity, resource *types.ResourceTarget) (*Response, error) {
-	return ex.executeDispatch(handlerPath, operation, params, resource, nil)
+	return ex.executeDispatch(handlerPath, operation, params, resource, nil, entity.Entity{})
 }
 
 // ExecuteWithIncluded dispatches an operation whose handler needs
@@ -171,10 +171,35 @@ func (ex *Executor) ExecuteOnResource(handlerPath, operation string, params enti
 // delivery token. Used internally by the subscription bridge and any
 // future extension wrapper that carries an Included chain.
 func (ex *Executor) ExecuteWithIncluded(handlerPath, operation string, params entity.Entity, resource *types.ResourceTarget, included map[hash.Hash]entity.Entity) (*Response, error) {
-	return ex.executeDispatch(handlerPath, operation, params, resource, included)
+	return ex.executeDispatch(handlerPath, operation, params, resource, included, entity.Entity{})
 }
 
-func (ex *Executor) executeDispatch(path, operation string, params entity.Entity, resource *types.ResourceTarget, included map[hash.Hash]entity.Entity) (*Response, error) {
+// executeAs dispatches under an explicit caller capability instead of
+// the executor's standing owner self-cap.
+//
+// It exists because the owner self-cap cannot express authority over
+// another peer's namespace. Its resources are `["*"]`, and under §PR-8
+// (V7 §5.5) a bare `*` in a capability RESOURCE is peer-LOCAL — it
+// canonicalizes to `/{me}/*`. That is correct and deliberate: it is
+// what stops a self-issued grant from claiming the world. But a peer
+// writing into its own cached copy of someone else's namespace
+// (`/{them}/…`, V7 §1.4 layer 1: "full write access to its entire
+// local tree") is asking for exactly the authority that phrasing
+// forbids expressing, so the caller has to mint a cap that names the
+// namespace and hand it in for that one dispatch.
+//
+// Per-call rather than a setter: ex.callerCap is process-wide state on
+// a shared executor, and swapping it around a dispatch would leak the
+// broader authority to anything running concurrently.
+func (ex *Executor) executeAs(callerCap entity.Entity, handlerPath, operation string, params entity.Entity, resource *types.ResourceTarget) (*Response, error) {
+	return ex.executeDispatch(handlerPath, operation, params, resource, nil, callerCap)
+}
+
+func (ex *Executor) executeDispatch(path, operation string, params entity.Entity, resource *types.ResourceTarget, included map[hash.Hash]entity.Entity, callerCap entity.Entity) (*Response, error) {
+	effectiveCap := ex.callerCap
+	if !callerCap.ContentHash.IsZero() {
+		effectiveCap = callerCap
+	}
 	timeout := ex.timeout
 	if timeout == 0 {
 		timeout = 10 * time.Second
@@ -215,7 +240,7 @@ func (ex *Executor) executeDispatch(path, operation string, params entity.Entity
 			Operation:        operation,
 			Params:           params,
 			Resource:         resource,
-			CallerCapability: ex.callerCap,
+			CallerCapability: effectiveCap,
 			Author:           ex.peerID,
 			AuthorHash:       ex.authorHash,
 			Included:         included,
@@ -231,7 +256,7 @@ func (ex *Executor) executeDispatch(path, operation string, params entity.Entity
 			LocalPeerID:      ex.peerID,
 			Author:           ex.peerID,
 			AuthorHash:       ex.authorHash,
-			CallerCapability: ex.callerCap,
+			CallerCapability: effectiveCap,
 			Resource:         resource,
 			Included:         included,
 		}
@@ -258,7 +283,7 @@ func (ex *Executor) executeDispatch(path, operation string, params entity.Entity
 					LocalPeerID:      ex.peerID,
 					Author:           ex.peerID,
 					AuthorHash:       ex.authorHash,
-					CallerCapability: ex.callerCap,
+					CallerCapability: effectiveCap,
 					Resource:         subResource,
 				},
 			}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"go.entitychurch.org/entity-core-go/core/entity"
 	"go.entitychurch.org/entity-core-go/core/hash"
 	"go.entitychurch.org/entity-core-go/core/types"
 
@@ -120,10 +121,19 @@ func cmdRevisionFollow(sh *Shell, args []string) (Result, error) {
 	mergePath := followMergePath(remoteID, prefix)
 
 	// Bootstrap: fetch the remote's full current closure (base=zero)
-	// and merge locally. This populates the mirror under the remote's
-	// namespace without waiting for the next commit. Subsequent
-	// commits are picked up by the standing chain incrementally.
-	// Per GUIDE-REVISION-AUTO-VERSION §4.3.
+	// and merge locally, without waiting for the next commit.
+	// Subsequent commits are picked up by the standing chain
+	// incrementally. Per GUIDE-REVISION-AUTO-VERSION §4.3.
+	//
+	// "Locally" is literal, and it used to say "under the remote's
+	// namespace", which was never true: the prefix is relative, so
+	// `NamespacedIndex.canonicalize` resolves it against US and the
+	// mirror lands at `/{us}/{prefix}`. That gap between the comment
+	// and the code is W2 of
+	// REVIEW-SHARE-AND-CONNECTIVITY-ALIGNMENT-2026-08-17 — the intent
+	// was right and the destination was not. `revision mirror` (see
+	// InstallRevisionMirrorChain) is the form that does what this
+	// comment claimed.
 	if err := bootstrapFollow(ctx, local, remoteID, prefix); err != nil {
 		return LinesResult([]string{
 			fmt.Sprintf("following %s @ %s (sub=%s)", prefix, alias, rawSub.ID()),
@@ -139,6 +149,70 @@ func cmdRevisionFollow(sh *Shell, args []string) (Result, error) {
 		fmt.Sprintf("  merge inbox:      %s", mergePath),
 		"  bootstrap: ok",
 	}), nil
+}
+
+// cmdRevisionMirror is `revision follow` with the destination the
+// multi-peer model calls for: the remote's subtree lands under
+// `/{them}/…` in our tree, at the publisher's own path, instead of
+// under our own namespace.
+//
+// The prefix argument is optional. Omitted, it mirrors the whole
+// subtree the publisher declares in its signed published-root; given,
+// it must name a subtree of that declaration — a prefix the publisher
+// has not signed a root over is refused rather than mirrored to a path
+// they never claimed.
+//
+// Pre-condition beyond `revision follow`'s: the remote must have
+// published a signed `system/peer/published-root`. That is where the
+// destination comes from, and there is no fallback by design.
+//
+// Tear-down is `revision unfollow <source-prefix> <alias>` — the chain
+// inboxes are keyed by the SOURCE prefix, which is why the source
+// prefix is printed even when the caller supplied none.
+func cmdRevisionMirror(sh *Shell, args []string) (Result, error) {
+	if len(args) < 1 {
+		return Result{}, fmt.Errorf("usage: revision mirror <remote-alias> [prefix]")
+	}
+	alias := args[0]
+	prefix := ""
+	if len(args) > 1 {
+		prefix = args[1]
+	}
+
+	pc, ok := sh.Conns[alias]
+	if !ok {
+		return Result{}, fmt.Errorf("not connected: %s", alias)
+	}
+	if pc.PeerID == sh.Local.PeerID {
+		return Result{}, fmt.Errorf("cannot mirror self")
+	}
+
+	local := sh.Local.Peer
+	remoteID := pc.PeerID
+	ctx := context.Background()
+
+	dest, err := local.MirrorDestination(ctx, remoteID, prefix)
+	if err != nil {
+		return Result{}, err
+	}
+	rawSub, err := InstallRevisionMirrorChain(ctx, local, remoteID, prefix)
+	if err != nil {
+		return Result{}, err
+	}
+
+	lines := []string{
+		fmt.Sprintf("mirroring %s @ %s (sub=%s)", dest.SourcePrefix, alias, rawSub.ID()),
+		fmt.Sprintf("  destination:      %s", dest.TargetPrefix),
+		fmt.Sprintf("  publisher root:   %s (seq %d)",
+			dest.PublishedRoot.Data.RootHash, dest.PublishedRoot.Data.Seq),
+		fmt.Sprintf("  fetch-diff inbox: %s", followFetchPath(remoteID, dest.SourcePrefix)),
+		fmt.Sprintf("  merge inbox:      %s", followMergePath(remoteID, dest.SourcePrefix)),
+	}
+	if err := bootstrapMirror(ctx, local, remoteID, prefix); err != nil {
+		return LinesResult(append(lines,
+			fmt.Sprintf("  WARN: bootstrap failed: %v (future commits will trigger the chain)", err))), nil
+	}
+	return LinesResult(append(lines, "  bootstrap: ok")), nil
 }
 
 // InstallRevisionFollowChain installs the canonical 2-step
@@ -158,11 +232,50 @@ func InstallRevisionFollowChain(ctx context.Context, local *entitysdk.AppPeer, r
 	if !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
+	return installFollowChain(ctx, local, remoteID, prefix, prefix, local.OwnerCapability())
+}
+
+// InstallRevisionMirrorChain is InstallRevisionFollowChain with the
+// destination the multi-peer model calls for: the standing chain
+// merges each delta into the PUBLISHER's namespace at the publisher's
+// own path (`/{them}/…`), not into ours.
+//
+// It is the follow-chain half of §5.1 step 3 of
+// REVIEW-SHARE-AND-CONNECTIVITY-ALIGNMENT-2026-08-17, and it takes
+// both of that step's constraints from the SDK rather than restating
+// them: `MirrorDestination` derives the target from the publisher's
+// signed `published-root` (never a caller-chosen string), and
+// `MintMirrorCapability` supplies the namespace-scoped cap the merge
+// step needs — the owner self-cap cannot authorize a `/{them}/…`
+// write, and a chain whose merge step 403s does it silently, into an
+// error inbox nobody is watching.
+//
+// prefix may be empty to mirror the publisher's whole declared
+// subtree.
+func InstallRevisionMirrorChain(ctx context.Context, local *entitysdk.AppPeer, remoteID, prefix string) (*entitysdk.RawSubscription, error) {
+	dest, err := local.MirrorDestination(ctx, remoteID, prefix)
+	if err != nil {
+		return nil, err
+	}
+	mergeCap, err := local.MintMirrorCapability(remoteID)
+	if err != nil {
+		return nil, err
+	}
+	return installFollowChain(ctx, local, remoteID, dest.SourcePrefix, dest.TargetPrefix, mergeCap)
+}
+
+// installFollowChain is the shared body. sourcePrefix is what we pull
+// from the remote; targetPrefix is where it lands locally; mergeCap is
+// the capability the local merge step dispatches under. The two
+// prefixes are separate parameters precisely so the destination can be
+// somewhere other than the source's own relative path.
+func installFollowChain(ctx context.Context, local *entitysdk.AppPeer, remoteID, sourcePrefix, targetPrefix string, mergeCapEnt entity.Entity) (*entitysdk.RawSubscription, error) {
+	prefix := sourcePrefix
 	localID := local.PeerID()
 	fetchPath := followFetchPath(remoteID, prefix)
 	mergePath := followMergePath(remoteID, prefix)
 
-	localCap := local.OwnerCapability().ContentHash
+	localCap := mergeCapEnt.ContentHash
 	crossPeerGrants := []types.GrantEntry{{
 		Handlers:   types.CapabilityScope{Include: []string{"system/revision"}},
 		Operations: types.CapabilityScope{Include: []string{"fetch-diff"}},
@@ -180,7 +293,7 @@ func InstallRevisionFollowChain(ctx context.Context, local *entitysdk.AppPeer, r
 	mergeParams, err := cbor.Marshal(types.MergeRequestData{
 		Strategy:     "source-wins",
 		SourcePrefix: prefix,
-		TargetPrefix: prefix,
+		TargetPrefix: targetPrefix,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode merge params: %w", err)
@@ -198,7 +311,7 @@ func InstallRevisionFollowChain(ctx context.Context, local *entitysdk.AppPeer, r
 	mergeData := types.ContinuationData{
 		Target:      "system/tree",
 		Operation:   "merge",
-		Resource:    &types.ResourceTarget{Targets: []string{prefix}},
+		Resource:    &types.ResourceTarget{Targets: []string{targetPrefix}},
 		Params:      cbor.RawMessage(mergeParams),
 		ResultField: "source_envelope",
 		OnError: &types.DeliverySpec{
@@ -282,42 +395,27 @@ func InstallRevisionFollowChain(ctx context.Context, local *entitysdk.AppPeer, r
 
 // bootstrapFollow runs one synchronous content-mirror cycle so the
 // local tree reflects the remote's current state without waiting
-// for the next commit. Same semantics as the standing chain (one
-// fetch-diff + one tree:merge), driven directly via the SDK so we
-// don't need to inject a synthetic notification. Uses base=zero =
-// full current closure per REVISION v3.4 §4.4.19 + GUIDE-REVISION-
-// AUTO-VERSION §4.3.
+// for the next commit. base=zero = full current closure per REVISION
+// v3.4 §4.4.19 + GUIDE-REVISION-AUTO-VERSION §4.3.
+//
+// This was a hand-rolled fetch-diff + tree:merge pair, byte-for-byte
+// the body of entitysdk.ReconcileSinceLastSeen. Two copies of the
+// same chain is one copy too many — when the SDK's grew a separate
+// target prefix, this one would have been left behind silently.
 func bootstrapFollow(ctx context.Context, local *entitysdk.AppPeer, remoteID, prefix string) error {
-	envEnt, err := local.RevisionAt(remoteID).FetchDiff(ctx, types.RevisionFetchDiffParamsData{
-		Prefix: prefix,
-		Base:   hash.Hash{}, // zero = full closure
-	})
-	if err != nil {
-		return fmt.Errorf("bootstrap fetch-diff: %w", err)
+	if _, err := local.ReconcileSinceLastSeen(ctx, remoteID, prefix, hash.Hash{}); err != nil {
+		return fmt.Errorf("bootstrap follow %s prefix=%s: %w", remoteID, prefix, err)
 	}
-	envEntRaw, err := cbor.Marshal(envEnt)
-	if err != nil {
-		return fmt.Errorf("encode bootstrap envelope: %w", err)
-	}
-	mergeReq := types.MergeRequestData{
-		Strategy:       "source-wins",
-		SourcePrefix:   prefix,
-		TargetPrefix:   prefix,
-		SourceEnvelope: cbor.RawMessage(envEntRaw),
-	}
-	mergeParamEnt, err := mergeReq.ToEntity()
-	if err != nil {
-		return fmt.Errorf("encode bootstrap merge params: %w", err)
-	}
-	resp, err := local.Executor().ExecuteWithParams("system/tree", "merge", mergeParamEnt)
-	if err != nil {
-		return fmt.Errorf("bootstrap tree:merge: %w", err)
-	}
-	if resp == nil {
-		return fmt.Errorf("bootstrap tree:merge: nil response")
-	}
-	if resp.Status >= 400 {
-		return fmt.Errorf("bootstrap tree:merge: status=%d", resp.Status)
+	return nil
+}
+
+// bootstrapMirror is bootstrapFollow's mirror-destination sibling: the
+// initial pull lands in the publisher's namespace, matching where the
+// standing chain installed by InstallRevisionMirrorChain will put
+// every subsequent delta.
+func bootstrapMirror(ctx context.Context, local *entitysdk.AppPeer, remoteID, prefix string) error {
+	if _, err := local.MirrorSinceLastSeen(ctx, remoteID, prefix, hash.Hash{}); err != nil {
+		return fmt.Errorf("bootstrap mirror %s prefix=%s: %w", remoteID, prefix, err)
 	}
 	return nil
 }

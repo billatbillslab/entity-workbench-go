@@ -1,6 +1,6 @@
 # entity-workbench-go — status
 
-_Updated: 2026-08-13 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
+_Updated: 2026-08-18 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
 
 ## Where it is
 
@@ -21,7 +21,8 @@ it is deliberately unmerged (see the guardrail below).
 
 ## Where we left off
 
-Two threads, one open and one just closed.
+Three threads: the share arc (open, moving), the compute floor (held), and a closed
+stabilization pass.
 
 ### 1. The compute floor (the primary arc — Doom-class realtime) — WORKBENCH SIDE IS DRY
 
@@ -162,6 +163,113 @@ Structural cleanup so the next arch ask lands on solid ground:
 - **The minimize crash got a headless repro suite** —
   `avalonia/tests/Workbench.Headless.Tests/PanelStackZeroCollapseTests.cs` (see below).
 
+### 3. The share / multi-peer arc (the live thread) — steps 3a and 3 DONE
+
+The one doc to read is
+**`docs/architecture/reviews/REVIEW-SHARE-AND-CONNECTIVITY-ALIGNMENT-2026-08-17.md`** —
+§5.1 is the ordered plan, §7 is the N1 ruling, §8 is what landed 2026-08-18 and the
+correction it forced. Companion packet: `reviews/CORE-GO-ASKS-2026-08-17.md`.
+
+Where the six steps stand:
+
+| step | what | status |
+|---|---|---|
+| 1 | Commit + send the review | done (`ee96c5f`, `0e86a9f`, `ca2e0cb`) |
+| 2 | Foreign-namespace subscription gate on the Go arm | done (`b3848c1`) — and it found the watch-hub `send on closed channel` |
+| **3a** | **Consumer-side `published-root` reader** | **done** — `entitysdk/published_root.go` |
+| **3** | **Target prefix on the sync surface (source ≠ target)** | **done** — `MirrorSinceLastSeen` + `InstallRevisionMirrorChain` + `revision mirror` |
+| 4 | Follow vocabulary settled with browser-rust | **open — needs browser-rust.** Arch confirms the two pieces (one follow verb with a `strategy` field; a per-follow minted capability) need no arch ruling |
+| 5 | The first `app/share/*` record | blocked on 4, and on `APP-CONVENTION-SHARE` — **unauthored, #4 on arch's release slice**, and they say plainly it is not fast. They will re-order if our step 5 is otherwise ready; it is not (4 comes first) |
+| 6 | `APP-CONVENTION-CHAT` review as a consumer | open, competes with nothing |
+
+**What 3a/3 mean in practice.** A peer can now read another peer's signed
+`system/peer/published-root` (full verification: content-hash recompute, signature against
+the key derived from the Base58 peer-id, `prefix` §3.3a discipline, monotonic seq floor),
+and mirror that peer's subtree into `/{them}/{their path}` — the V7 §1.4 cached-remote
+shape browser-rust's F1 is about — instead of into our own namespace. Both the one-shot
+pull and the standing follow chain. The destination is **derived from the publisher's
+signed prefix**, never caller-chosen, per arch's amendment.
+
+**The correction worth carrying.** W3 told core-go the mirror needed "no wire change — the
+blocker is entirely ours, in an SDK signature." Half right. `tree:merge` pre-checks put
+authorization on every target path, and a self-issued `Resources: ["*"]` is peer-local under
+§PR-8, so every `/{them}/…` merge 403s. The fix is a capability that names the publisher's
+namespace (`MintMirrorCapability`) plus a per-call caller-cap seam on the executor — not a
+signature change. **No ask on core-go**; their behavior is correct. Full account in §8.2;
+ratified as **D19** with **AP10/AP11** in the charter.
+
+**Axis B (connectivity validation)** is unstarted, **confirmed unblocked by arch**, and the three
+constraints are confirmed correct as stated (§5.2 sizes it). One caveat added 08-18: **no TURN
+credential mechanism is specified anywhere in the corpus** (arch queue Q18). Build against static
+config and do not invent a credential shape — hitting that wall and routing it is the forcing
+function.
+
+**Scoped with browser-rust 2026-08-18** —
+`docs/architecture/reviews/CONNECTIVITY-CONVERGENCE-2026-08-18.md`. They named the four app-tier
+pieces our arm is missing and we verified all four against our own tree: no `ext/signaling`
+consumer, no `system/peer/status` read-model (`ConnectedPeers()` is a pool snapshot), no
+`maintain-peer`, no connector/`meet`. **The transport is not the gap** — `AppPeer`
+listens and dials WebSocket already (`ListenWebSocketReady`, `Connect("ws://")`), and `shellboot`
+routes a `ws://` `ListenAddr` at peer creation. What is missing is **self-publication**: nothing
+writes `system/peer/transport/{our-peer-id}/*`, so a browser cannot learn we accept a socket.
+That inverts the order — profile publish is the precondition, not a peer, of the other three.
+**No WebRTC on the Go arm** (§6.5.2d is latent without a native terminator; browser↔Go is `wss`,
+browser↔browser is WebRTC).
+
+### 4. Publisher conformance — CLOSED 2026-08-18, the corridor emits a real signed root
+
+`publish/publish.go` advertised `signed_pointer: "system/peer/published-root"` +
+`freshness: "static-immutable+signed-pointer"` and did no signing at all; the artifact at
+`{manifest_url_prefix}` was the http-poll *transport profile*, which `EXTENSION-NETWORK` §6.5.3.1
+rules out in as many words. Step 3a made it self-refuting — our own `ReadPublishedRoot` rejected
+our own publisher's output on gate one. Arch routed it 08-17 and again 08-18.
+
+**Exit B taken (emit a real signed root), not Exit A.** The handoff priced B as its own arc on the
+strength of *"our closure walk is shallow and D3 requires the trie closure"* — true about
+`publish/`'s walker over bound entities, and irrelevant to the obligation, because
+`tree.CollectNodeClosure` in core-go already implements D3 exactly and cites §6.5.6 Amendment 10
+as the reason it exists. **An estimate that prices a spec obligation off our own code's shape,
+without checking whether the substrate already implements it, is an estimate of the wrong thing.**
+
+What ships (`publish/signed_root.go`, new):
+
+| object | now |
+|---|---|
+| `{out}/manifest` | the signed `system/peer/published-root` (3-key wire entity, `content_hash` + `prefix`) |
+| `{out}/transport-profile` | the http-poll profile, out-of-band per §6.5.4 / proposal D5 |
+| `{out}/content/…` | + the transitive trie closure of `root_hash`, the published-root, and its signature — the §6.5.3 publish-side MUST |
+| `{out}/{peer}/system/signature/{hex}.bin` | the §5.2 invariant pointer, as an ordinary two-hop TREE_GET leaf |
+| `{out}/{peer}/system/peer/published-root/{peer}.bin` | `signed_pointer` names a path, so the path resolves too |
+
+Acceptance test is written **as a consumer** — no peer, only the emitted files: recompute the
+manifest hash from its own bytes, resolve the signature two-hop, verify against the key derived
+from the Base58 peer-id, walk the CHAMP trie from `root_hash` over the emitted shard asserting no
+404 (`TestPublish_SignedRootVerifiesFromTheEmittedFiles`).
+
+**Three things fell out of building it**, all in
+`docs/architecture/reviews/PUBLISHER-CONFORMANCE-RESULT-2026-08-18.md`:
+
+1. **A signed root and a filtered publish are incompatible — we refuse at the emitter.** The
+   closure obligation would upload the `IncludeType`/`IncludePath`-excluded entities' bytes under
+   `content_url_prefix` anyway (a leak, and *because* we advertised a signed pointer); withholding
+   them instead is the silent short walk browser-rust measured (`9a9c0f5`). §6.5.3 states the
+   broken-walk direction; the leak direction is unstated. Routed as a candidate.
+2. **core-go ask: `published-root` `seq`/`predecessor` are process-memory only.** Measured — three
+   publishes of three *different* roots through `ext/publishedroot.Publisher` emitted
+   `seq=1 / predecessor=nil` every time. §6.5.6 makes both a MUST. We source them from the store
+   ourselves and would rather not own a second minting site.
+3. **arch ask: the content-only mirror §6.5.6 sanctions has no expressible `freshness`.** The enum
+   is `live | async | static-immutable+signed-pointer`, and the MUST list requires `signed_pointer`
+   for both non-live values. Found while pricing Exit A; we emit nothing into the gap.
+
+**Unblocked by this:** the Go-published / Rust-consumed cross-check with `entity-browser-rust`
+(they emit and walk signed roots already, rust↔rust) — arch calls it the most valuable interop
+result on this track, and the only one that is not cohort-consistent.
+
+**Process (AP12, ours).** Arch routed the finding on 08-17 addressed to us by name; we did not open
+a row and shipped three commits past it. `AGENTS.md` now makes the sibling-arch read a session-start
+step. Catalogued, not ratified — first time in this shape.
+
 ## Open bugs
 
 - **Managed stack overflow on window minimize** (Avalonia, software-render path). A tight
@@ -282,3 +390,8 @@ generic-host copy of all three panels. Retiring them means re-pinning that oracl
   identity-ceremony re-apply; a per-delivery deadline + parallel delivery workers;
   incremental revision-trie update.
 - **Cross-team:** the content-store GC / reachability contract.
+- **`entity-browser-rust`:** the follow vocabulary — one record + verb, `strategy` with a
+  value that does not assume ordered delivery (share-review §3.2). Step 4 of the share arc,
+  and step 5 waits on it by construction.
+- **arch:** `APP-CONVENTION-SHARE` authored (their own named top item) — the last thing
+  between us and writing the first `app/share/*` record.

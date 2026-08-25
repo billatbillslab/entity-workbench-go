@@ -7,10 +7,12 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/fxamacker/cbor/v2"
 
+	"go.entitychurch.org/entity-core-go/core/crypto"
 	"go.entitychurch.org/entity-core-go/core/ecf"
 	"go.entitychurch.org/entity-core-go/core/entity"
 	"go.entitychurch.org/entity-core-go/core/hash"
@@ -102,58 +104,62 @@ func TestPublish_FirstForm(t *testing.T) {
 		t.Errorf("emitted hash pointer = %s, want %s", pointer, want)
 	}
 
-	// --- Manifest (Amendment 5 three-prefix endpoint + listing suffix) ---
-	manifestRaw, err := os.ReadFile(filepath.Join(out, "manifest"))
+	// --- Transport profile (Amendment 5 three-prefix endpoint + listing
+	// suffix). It lives at {out}/transport-profile, NOT at
+	// {out}/manifest: §6.5.3.1 reserves the manifest slot for the signed
+	// published-root and §6.5.4 sends a static publisher's own profile
+	// out-of-band. Serving the profile there was the 2026-08-18 defect. ---
+	profileRaw, err := os.ReadFile(filepath.Join(out, publish.TransportProfileFile))
 	if err != nil {
-		t.Fatalf("read manifest: %v", err)
+		t.Fatalf("read transport profile: %v", err)
 	}
-	var manifestEnt entity.Entity
-	if err := ecf.Decode(manifestRaw, &manifestEnt); err != nil {
-		t.Fatalf("decode manifest entity: %v", err)
+	var profileEnt entity.Entity
+	if err := ecf.Decode(profileRaw, &profileEnt); err != nil {
+		t.Fatalf("decode transport profile entity: %v", err)
 	}
-	if manifestEnt.Type != types.TypePeerTransportHTTPPoll {
-		t.Errorf("manifest.type = %q, want %q", manifestEnt.Type, types.TypePeerTransportHTTPPoll)
+	if profileEnt.Type != types.TypePeerTransportHTTPPoll {
+		t.Errorf("profile.type = %q, want %q", profileEnt.Type, types.TypePeerTransportHTTPPoll)
 	}
 	var md types.HTTPPollProfileData
-	if err := cbor.Unmarshal(manifestEnt.Data, &md); err != nil {
-		t.Fatalf("decode manifest data: %v", err)
+	if err := cbor.Unmarshal(profileEnt.Data, &md); err != nil {
+		t.Fatalf("decode transport profile data: %v", err)
 	}
 	if md.TransportType != "http-poll" {
-		t.Errorf("manifest.transport_type = %q, want http-poll", md.TransportType)
+		t.Errorf("profile.transport_type = %q, want http-poll", md.TransportType)
 	}
 	if md.PeerID != ap.PeerID() {
-		t.Errorf("manifest.peer_id = %q, want %q", md.PeerID, ap.PeerID())
+		t.Errorf("profile.peer_id = %q, want %q", md.PeerID, ap.PeerID())
 	}
 	if md.Endpoint.TreeURLPrefix != origin {
-		t.Errorf("manifest.endpoint.tree_url_prefix = %q, want %q", md.Endpoint.TreeURLPrefix, origin)
+		t.Errorf("profile.endpoint.tree_url_prefix = %q, want %q", md.Endpoint.TreeURLPrefix, origin)
 	}
 	if md.Endpoint.ContentURLPrefix != origin+"/content" {
-		t.Errorf("manifest.endpoint.content_url_prefix = %q, want %q", md.Endpoint.ContentURLPrefix, origin+"/content")
+		t.Errorf("profile.endpoint.content_url_prefix = %q, want %q", md.Endpoint.ContentURLPrefix, origin+"/content")
 	}
 	if md.Endpoint.ManifestURLPrefix != origin+"/manifest" {
-		t.Errorf("manifest.endpoint.manifest_url_prefix = %q, want %q (Amendment 5 §6.5.3)", md.Endpoint.ManifestURLPrefix, origin+"/manifest")
+		t.Errorf("profile.endpoint.manifest_url_prefix = %q, want %q (Amendment 5 §6.5.3)", md.Endpoint.ManifestURLPrefix, origin+"/manifest")
 	}
 	if md.Endpoint.ContentLayout != types.ContentLayoutSharded24 {
-		t.Errorf("manifest.endpoint.content_layout = %q, want %q", md.Endpoint.ContentLayout, types.ContentLayoutSharded24)
+		t.Errorf("profile.endpoint.content_layout = %q, want %q", md.Endpoint.ContentLayout, types.ContentLayoutSharded24)
 	}
 	if md.Endpoint.TreeLeafSuffix != publish.DefaultTreeLeafSuffix {
-		t.Errorf("manifest.endpoint.tree_leaf_suffix = %q, want %q", md.Endpoint.TreeLeafSuffix, publish.DefaultTreeLeafSuffix)
+		t.Errorf("profile.endpoint.tree_leaf_suffix = %q, want %q", md.Endpoint.TreeLeafSuffix, publish.DefaultTreeLeafSuffix)
 	}
 	if md.Endpoint.TreeListingSuffix != publish.DefaultTreeListingSuffix {
-		t.Errorf("manifest.endpoint.tree_listing_suffix = %q, want %q (Amendment 5 §6.5.3)", md.Endpoint.TreeListingSuffix, publish.DefaultTreeListingSuffix)
+		t.Errorf("profile.endpoint.tree_listing_suffix = %q, want %q (Amendment 5 §6.5.3)", md.Endpoint.TreeListingSuffix, publish.DefaultTreeListingSuffix)
 	}
 	if md.Endpoint.TreeLeafSuffix == md.Endpoint.TreeListingSuffix {
-		t.Errorf("manifest.endpoint: leaf and listing suffixes MUST differ (Amendment 5)")
+		t.Errorf("profile.endpoint: leaf and listing suffixes MUST differ (Amendment 5)")
 	}
 	if len(md.SupportedOps) != 3 ||
 		md.SupportedOps[0] != types.OpTreeGet ||
 		md.SupportedOps[1] != types.OpContentGet ||
 		md.SupportedOps[2] != types.OpManifestGet {
-		t.Errorf("manifest.supported_ops = %v, want [%s %s %s]",
+		t.Errorf("profile.supported_ops = %v, want [%s %s %s]",
 			md.SupportedOps, types.OpTreeGet, types.OpContentGet, types.OpManifestGet)
 	}
 	if md.Freshness != "static-immutable+signed-pointer" {
-		t.Errorf("manifest.freshness = %q, want static-immutable+signed-pointer", md.Freshness)
+		t.Errorf("profile.freshness = %q, want static-immutable+signed-pointer", md.Freshness)
 	}
 
 	// --- Listings (Amendment 5 §6.5.3.1) ---
@@ -221,8 +227,21 @@ func TestPublish_FirstForm(t *testing.T) {
 	}
 }
 
-// TestPublish_FilterHooks exercises IncludePath + IncludeType, the
-// sketch-level extension seams.
+// TestPublish_FilterHooks pins the refusal: IncludePath / IncludeType
+// are incompatible with a signed published-root and Publish says so
+// rather than emitting something that is wrong in one of two ways.
+//
+// Tier: contract pin (TESTING-STRATEGY). The two failure modes it
+// stands in for are the reason, and neither is hypothetical:
+//
+//   - Leak. The §6.5.3 closure obligation uploads every leaf-bound hash
+//     the root commits to. Filtered-out entities are still under the
+//     prefix, so their bytes would land under content_url_prefix,
+//     hash-addressed and fetchable, while the operator believed they
+//     were excluded.
+//   - Silent short walk. Withholding them instead breaks the consumer's
+//     enumeration with no error — entity-browser-rust measured one
+//     withheld interior node hiding 1 of 24 names (9a9c0f5).
 func TestPublish_FilterHooks(t *testing.T) {
 	ap, err := entitysdk.CreatePeer(entitysdk.PeerConfig{})
 	if err != nil {
@@ -233,32 +252,34 @@ func TestPublish_FilterHooks(t *testing.T) {
 	if _, err := ap.Store().Put("docs/keep", "type/keep", map[string]string{"k": "1"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := ap.Store().Put("docs/drop-path", "type/keep", map[string]string{"k": "2"}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
 	if _, err := ap.Store().Put("docs/drop-type", "type/drop", map[string]string{"k": "3"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	out := t.TempDir()
-	res, err := publish.Publish(context.Background(), publish.Opts{
-		Peer:      ap,
-		Prefix:    "docs/",
-		OutputDir: out,
-		IncludePath: func(p string) bool {
-			return filepath.Base(p) != "drop-path"
-		},
-		IncludeType: func(t string) bool { return t != "type/drop" },
-	})
-	if err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
-
-	if res.Paths != 2 {
-		t.Errorf("Paths after IncludePath = %d, want 2", res.Paths)
-	}
-	if res.Entities != 1 {
-		t.Errorf("Entities after IncludeType = %d, want 1", res.Entities)
+	for _, tc := range []struct {
+		name string
+		opts publish.Opts
+	}{
+		{"IncludePath", publish.Opts{IncludePath: func(string) bool { return true }}},
+		{"IncludeType", publish.Opts{IncludeType: func(string) bool { return true }}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := t.TempDir()
+			o := tc.opts
+			o.Peer, o.Prefix, o.OutputDir = ap, "docs/", out
+			if _, err := publish.Publish(context.Background(), o); err == nil {
+				t.Fatalf("Publish with %s returned nil error; want a refusal", tc.name)
+			} else if !strings.Contains(err.Error(), "signed published-root") {
+				t.Errorf("refusal does not name the reason: %v", err)
+			}
+			// Nothing may be written before the refusal — a half-emitted
+			// origin directory is worse than none.
+			if entries, err := os.ReadDir(out); err != nil {
+				t.Fatalf("ReadDir: %v", err)
+			} else if len(entries) != 0 {
+				t.Errorf("refused publish left %d entries in the output dir", len(entries))
+			}
+		})
 	}
 }
 
@@ -361,4 +382,247 @@ func keysOf(m map[string]interface{}) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestPublish_SignedRootVerifiesFromTheEmittedFiles is the acceptance
+// test for the 2026-08-18 publisher-conformance fix, and it is written
+// as a *consumer*: nothing below touches the publishing peer's store.
+// It reads only the files a CDN would serve, which is the only vantage
+// point from which the old defect was visible — our own
+// AppPeer.ReadPublishedRoot rejected the previous {out}/manifest on its
+// first gate because that file was the transport profile.
+//
+// Tier: end-to-end contract pin (TESTING-STRATEGY). It asserts the four
+// things a Mode-A consumer does and nothing about how we do them:
+//
+//  1. MANIFEST_GET returns a 3-key `system/peer/published-root` wire
+//     entity whose content_hash matches its own bytes (§6.5.3.1).
+//  2. The §5.2 invariant pointer resolves through the ordinary two-hop
+//     tree route to a `system/signature` over that content hash, and it
+//     verifies against the key carried in the publisher's peer-id.
+//  3. `prefix` is present and ends in "/" (§3.3a) — without it a
+//     consumer cannot rebuild absolute paths.
+//  4. The §6.5.3 publish-side closure is complete: walking the CHAMP
+//     trie from root_hash over the emitted content/ shard reaches every
+//     interior node and every leaf-bound hash with no 404. This is the
+//     failure §6.5.3 names as the one prose review does not catch —
+//     "every pointer resolves and a pinned consumer still gets nothing."
+func TestPublish_SignedRootVerifiesFromTheEmittedFiles(t *testing.T) {
+	ap, err := entitysdk.CreatePeer(entitysdk.PeerConfig{})
+	if err != nil {
+		t.Fatalf("CreatePeer: %v", err)
+	}
+	defer ap.Close()
+
+	for _, p := range []string{"docs/index", "docs/intro", "docs/chapter-1/start"} {
+		if _, err := ap.Store().Put(p, "test/note", map[string]string{"body": p}); err != nil {
+			t.Fatalf("seed %s: %v", p, err)
+		}
+	}
+
+	out := t.TempDir()
+	res, err := publish.Publish(context.Background(), publish.Opts{
+		Peer:      ap,
+		Prefix:    "docs/",
+		OutputDir: out,
+		OriginURL: "https://test-origin.example",
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	peerID := ap.PeerID()
+
+	// (1) MANIFEST_GET — the wire entity, self-consistent.
+	manifestRaw, err := os.ReadFile(filepath.Join(out, "manifest"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var rootEnt entity.Entity
+	if err := ecf.Decode(manifestRaw, &rootEnt); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+	if rootEnt.Type != types.TypePeerPublishedRoot {
+		t.Fatalf("manifest.type = %q, want %q — the manifest slot is reserved for the signed root (§6.5.3.1)",
+			rootEnt.Type, types.TypePeerPublishedRoot)
+	}
+	if rootEnt.ContentHash.IsZero() {
+		t.Fatal("manifest body carries no content_hash; §6.5.3.1 requires the 3-key wire form here")
+	}
+	computed, err := hash.ComputeFormat(rootEnt.ContentHash.Algorithm, rootEnt.Type, rootEnt.Data)
+	if err != nil {
+		t.Fatalf("recompute manifest content hash: %v", err)
+	}
+	if computed != rootEnt.ContentHash {
+		t.Fatalf("manifest content_hash disagrees with its own bytes: served=%s computed=%s",
+			rootEnt.ContentHash, computed)
+	}
+
+	rootData, err := types.PublishedRootDataFromEntity(rootEnt)
+	if err != nil {
+		t.Fatalf("decode published-root data: %v", err)
+	}
+	if rootData.PeerID != peerID {
+		t.Errorf("published-root.peer_id = %q, want %q", rootData.PeerID, peerID)
+	}
+
+	// (3) §3.3a prefix discipline.
+	if rootData.Prefix != "docs/" {
+		t.Errorf("published-root.prefix = %q, want %q", rootData.Prefix, "docs/")
+	}
+	if !strings.HasSuffix(rootData.Prefix, "/") {
+		t.Errorf("published-root.prefix %q must end in \"/\" (§3.3a) or absolute_prefix+relative_key concatenates wrong", rootData.Prefix)
+	}
+	if rootData.RootHash != res.SignedRoot.TrieRoot {
+		t.Errorf("published-root.root_hash = %s, want the emitted trie root %s", rootData.RootHash, res.SignedRoot.TrieRoot)
+	}
+
+	// (2) The §5.2 invariant pointer, resolved the way a consumer does:
+	// TREE_GET leaf → hash pointer → CONTENT_GET.
+	sigRoute := filepath.Join(out, peerID,
+		filepath.FromSlash(types.LocalSignaturePath(rootEnt.ContentHash))) + ".bin"
+	sigPointerBody, err := os.ReadFile(sigRoute)
+	if err != nil {
+		t.Fatalf("read signature tree route %s: %v — a consumer resolving the §5.2 pointer gets a 404", sigRoute, err)
+	}
+	sigHash := decodeHashPointer(t, sigPointerBody)
+	sigEnt := readContentEntity(t, out, sigHash)
+	if sigEnt.Type != types.TypeSignature {
+		t.Fatalf("signature entity type = %q, want %q", sigEnt.Type, types.TypeSignature)
+	}
+	sig, err := types.SignatureDataFromEntity(sigEnt)
+	if err != nil {
+		t.Fatalf("decode signature: %v", err)
+	}
+	if sig.Target != rootEnt.ContentHash {
+		t.Fatalf("signature targets %s, not the published root %s", sig.Target, rootEnt.ContentHash)
+	}
+	pub, keyType, ok := crypto.DerivePeerFromPeerID(crypto.PeerID(peerID))
+	if !ok {
+		t.Fatal("publisher peer-id is not identity-form; the consumer has no key to verify against")
+	}
+	if !crypto.Verify(keyType, pub, rootEnt.ContentHash.Bytes(), sig.Signature) {
+		t.Fatal("published-root signature does not verify against the publisher's own peer-id key")
+	}
+
+	// The published-root is also reachable by its advertised PATH, not
+	// only by the manifest URL — `signed_pointer` names a path.
+	prRoute := filepath.Join(out, peerID,
+		filepath.FromSlash(types.PublishedRootStoragePath(peerID))) + ".bin"
+	prPointerBody, err := os.ReadFile(prRoute)
+	if err != nil {
+		t.Fatalf("read published-root tree route %s: %v", prRoute, err)
+	}
+	if got := decodeHashPointer(t, prPointerBody); got != rootEnt.ContentHash {
+		t.Errorf("signed_pointer path resolves to %s, want the manifest's %s", got, rootEnt.ContentHash)
+	}
+
+	// (4) The closure, walked over the emitted files only.
+	seen := map[hash.Hash]bool{}
+	var walk func(h hash.Hash)
+	walk = func(h hash.Hash) {
+		if seen[h] {
+			return
+		}
+		seen[h] = true
+		ent := readContentEntity(t, out, h)
+		node, err := types.SnapshotNodeDataFromEntity(ent)
+		if err != nil {
+			// Not a trie node: a leaf-bound entity. Reaching it at all
+			// is the assertion.
+			return
+		}
+		for _, e := range node.Data {
+			if e.IsLink() {
+				walk(*e.Link)
+				continue
+			}
+			for _, tuple := range e.Bucket {
+				walk(tuple.ValueHash)
+			}
+		}
+	}
+	walk(rootData.RootHash)
+	if len(seen) < 4 {
+		t.Errorf("closure walk reached %d entities; three seeded notes plus at least one trie node were expected", len(seen))
+	}
+}
+
+// readContentEntity performs a CONTENT_GET against the emitted origin:
+// sharded-2-4 by the full wire hex, body re-hashed before it is used.
+// Fatal on a miss, because a miss IS the §6.5.3 closure failure.
+func readContentEntity(t *testing.T, outDir string, h hash.Hash) entity.Entity {
+	t.Helper()
+	hexWire := hex.EncodeToString(h.Bytes())
+	path := filepath.Join(outDir, "content", hexWire[0:2], hexWire[2:4], hexWire)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("CONTENT_GET %s: %v — the signed-root closure is incomplete", hexWire, err)
+	}
+	rehash := sha256.Sum256(raw)
+	if !bytes.Equal(rehash[:], h.EffectiveDigest()) {
+		t.Fatalf("CONTENT_GET %s: body re-hash mismatch", hexWire)
+	}
+	var ent entity.Entity
+	if err := ecf.Decode(raw, &ent); err != nil {
+		t.Fatalf("decode content %s: %v", hexWire, err)
+	}
+	return ent
+}
+
+// TestPublish_SeqAdvancesAcrossRuns pins the §6.5.6 republish MUST —
+// "seq MUST increase monotonically across republishes and predecessor
+// MUST carry the prior published-root content hash once one exists" —
+// across separate Publish calls over one store, which is what a batch
+// publisher run twice actually is.
+//
+// Tier: regression pin. It exists because the obvious implementation
+// fails it silently: ext/publishedroot.Publisher holds seq in process
+// memory and does not seed it from the bound published-root, so three
+// publishes of three DIFFERENT roots through it emit seq=1 /
+// predecessor=nil every time. A consumer cannot tell a republish from a
+// replay, and the predecessor chain never forms. Measured, then fixed
+// by sourcing both from the store — see mintSignedRoot's note.
+func TestPublish_SeqAdvancesAcrossRuns(t *testing.T) {
+	ap, err := entitysdk.CreatePeer(entitysdk.PeerConfig{})
+	if err != nil {
+		t.Fatalf("CreatePeer: %v", err)
+	}
+	defer ap.Close()
+
+	var prevRootEntity hash.Hash
+	for run := 1; run <= 3; run++ {
+		// A different body each run, so the trie root genuinely moves —
+		// a pin that republished the same root would pass on a publisher
+		// that simply never changed anything.
+		if _, err := ap.Store().Put("docs/a", "test/note", map[string]string{"body": strings.Repeat("x", run)}); err != nil {
+			t.Fatalf("run %d seed: %v", run, err)
+		}
+		res, err := publish.Publish(context.Background(), publish.Opts{
+			Peer:      ap,
+			Prefix:    "docs/",
+			OutputDir: t.TempDir(),
+			OriginURL: "https://test-origin.example",
+		})
+		if err != nil {
+			t.Fatalf("run %d: %v", run, err)
+		}
+		d := res.SignedRoot.Data
+
+		if d.Seq != uint64(run) {
+			t.Fatalf("run %d: seq = %d, want %d — seq must increase across republishes (§6.5.6)", run, d.Seq, run)
+		}
+		if run == 1 {
+			if d.Predecessor != nil {
+				t.Errorf("run 1: predecessor = %s, want nil on the first published root", d.Predecessor)
+			}
+		} else {
+			if d.Predecessor == nil {
+				t.Fatalf("run %d: predecessor is nil; §6.5.6 requires the prior published-root hash once one exists", run)
+			}
+			if *d.Predecessor != prevRootEntity {
+				t.Errorf("run %d: predecessor = %s, want the prior published-root %s", run, *d.Predecessor, prevRootEntity)
+			}
+		}
+		prevRootEntity = res.SignedRoot.Root.ContentHash
+	}
 }

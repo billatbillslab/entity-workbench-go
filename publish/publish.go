@@ -8,7 +8,11 @@
 // static objects (no trailing slash, no redirects):
 //
 //	/content/{hex33(H)}                           — CONTENT_GET
-//	/manifest                                     — MANIFEST_GET
+//	/manifest                                     — MANIFEST_GET (the
+//	                                                signed published-root)
+//	/transport-profile                            — this publisher's own
+//	                                                http-poll profile,
+//	                                                out-of-band per §6.5.4
 //	/peers{tree_listing_suffix}                   — all-peers root listing
 //	/{peer_id}{tree_listing_suffix}               — peer-root listing
 //	/{peer_id}/{path}{tree_leaf_suffix}           — entity binding
@@ -26,10 +30,18 @@
 // subsequent pages are content-addressed and namespace-bound per
 // §6.4.2 — i.e. they fall out of the existing content/ shard).
 //
-// Closure walking remains shallow: content-blob chunks are followed;
-// everything else stops at the directly-bound entity. Capability
-// chains, signature siblings, application-typed references, revision
-// parents — all plug in through Opts.References.
+// Closure walking over *bound* entities remains shallow: content-blob
+// chunks are followed; everything else stops at the directly-bound
+// entity. Capability chains, signature siblings, application-typed
+// references, revision parents — all plug in through Opts.References.
+//
+// The signed-root closure is separate and is NOT shallow: because this
+// publisher advertises `signed_pointer`, §6.5.3's publish-side
+// obligation makes the transitive hash-linked closure of
+// `published-root.root_hash` — the CHAMP trie root, every interior
+// node, every leaf-bound hash — a MUST, and it is emitted in full
+// (see signed_root.go). Interior trie nodes are hash-linked rather
+// than path-bound, so nothing in the path walk above would reach them.
 package publish
 
 import (
@@ -44,18 +56,24 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 
+	"entity-workbench-go/entitysdk"
 	"go.entitychurch.org/entity-core-go/core/ecf"
 	"go.entitychurch.org/entity-core-go/core/entity"
 	"go.entitychurch.org/entity-core-go/core/hash"
 	"go.entitychurch.org/entity-core-go/core/store"
 	"go.entitychurch.org/entity-core-go/core/types"
-	"entity-workbench-go/entitysdk"
 )
 
 // Amendment 5 default suffixes — re-exported from core/types so existing
 // publish-side call sites (and tests) keep their package-local references
 // working. The canonical pins live in types.DefaultTreeLeafSuffix /
 // types.DefaultTreeListingSuffix.
+// TransportProfileFile is the object name this publisher uses for the
+// out-of-band transport profile (§6.5.4). Conventional, not normative
+// — a consumer learns it out-of-band by definition; what IS normative
+// is that it is not `manifest`.
+const TransportProfileFile = "transport-profile"
+
 const (
 	DefaultTreeLeafSuffix    = types.DefaultTreeLeafSuffix
 	DefaultTreeListingSuffix = types.DefaultTreeListingSuffix
@@ -114,7 +132,15 @@ type Result struct {
 	Entities  int
 	Listings  int
 	Bytes     int64
-	Manifest  types.HTTPPollProfileData
+	// Manifest is the http-poll transport profile. Named `Manifest`
+	// from when it was the thing served at {manifest_url_prefix};
+	// since 2026-08-18 that slot holds the signed root (§6.5.3.1) and
+	// the profile ships beside the site (§6.5.4 / proposal D5).
+	Manifest types.HTTPPollProfileData
+	// SignedRoot is the signed `system/peer/published-root` this run
+	// emitted — what the profile's `signed_pointer` advertisement now
+	// actually resolves to.
+	SignedRoot SignedRoot
 }
 
 // Publish walks the peer's location index at Opts.Prefix and emits to
@@ -161,10 +187,52 @@ func Publish(ctx context.Context, opts Opts) (Result, error) {
 		return Result{}, fmt.Errorf("publish: mkdir out: %w", err)
 	}
 
+	if opts.IncludePath != nil || opts.IncludeType != nil {
+		// Refuse at the emitter rather than sign a root we then decline
+		// to serve in full.
+		//
+		// A signed published-root commits to the trie of EVERY binding
+		// under `prefix` (§3.3a: the consumer rebuilds absolute paths as
+		// `prefix + relative_key`, over the whole key set the root
+		// enumerates). A filter makes the emitted set a strict subset of
+		// that, and the two ways out are both wrong:
+		//
+		//   - Serve the closure anyway and the filter leaks: §6.5.3's
+		//     closure obligation would upload the content of every
+		//     filtered-OUT entity under content_url_prefix, hash-addressed
+		//     and fetchable. An operator who wrote IncludeType to keep a
+		//     type off the CDN would have published its bytes.
+		//   - Withhold the closure and the walk breaks silently:
+		//     entity-browser-rust measured exactly this on the consumer
+		//     side — withholding one interior node hid 1 of 24 names with
+		//     no error anywhere ("a withheld trie node is silent",
+		//     browser-rust 9a9c0f5 / STATUS-2026-08-18-a).
+		//
+		// So the honest publish of a subset is `-prefix` (which changes
+		// what the root commits to) — not a filter over a wider one.
+		return Result{}, fmt.Errorf(
+			"publish: IncludePath/IncludeType cannot be combined with a signed published-root — "+
+				"the root commits to every binding under prefix %q, so a filtered emit either leaks "+
+				"the filtered-out content through the §6.5.3 closure or breaks a consumer's walk "+
+				"silently; narrow -prefix instead", opts.Prefix)
+	}
+
+	// Mint the signed root BEFORE the closure walk, so the trie nodes
+	// it commits to are in the content store when the closure is
+	// collected. It is minted after `entries` is snapshotted so that
+	// this run's own published-root / signature bindings are not inside
+	// the root they authenticate — an entity cannot appear in its own
+	// preimage.
+	signed, err := mintSignedRoot(opts.Peer, opts.Prefix)
+	if err != nil {
+		return Result{}, err
+	}
+
 	closure, err := collectClosure(cs, entries, opts)
 	if err != nil {
 		return Result{}, err
 	}
+	addSignedRootClosure(cs, &signed, closure)
 	fmt.Printf("closure: %d distinct entities\n", len(closure))
 
 	bytes, err := emitContent(closure, opts.OutputDir)
@@ -185,20 +253,27 @@ func Publish(ctx context.Context, opts Opts) (Result, error) {
 	fmt.Printf("listings: %d emitted\n", listings)
 	bytes += listingBytes
 
-	manifest, err := writeManifest(opts.OutputDir, opts.OriginURL, peerID)
+	rootBytes, err := emitSignedRoot(opts.OutputDir, signed)
+	if err != nil {
+		return Result{}, err
+	}
+	bytes += rootBytes
+
+	profile, err := writeTransportProfile(opts.OutputDir, opts.OriginURL, peerID)
 	if err != nil {
 		return Result{}, err
 	}
 	return Result{
-		PeerID:    peerID,
-		Prefix:    opts.Prefix,
-		OutputDir: opts.OutputDir,
-		OriginURL: opts.OriginURL,
-		Paths:     len(entries),
-		Entities:  len(closure),
-		Listings:  listings,
-		Bytes:     bytes,
-		Manifest:  manifest,
+		PeerID:     peerID,
+		Prefix:     opts.Prefix,
+		OutputDir:  opts.OutputDir,
+		OriginURL:  opts.OriginURL,
+		Paths:      len(entries),
+		Entities:   len(closure),
+		Listings:   listings,
+		Bytes:      bytes,
+		Manifest:   profile,
+		SignedRoot: signed,
 	}, nil
 }
 
@@ -548,9 +623,18 @@ func splitAbsPath(abs string) (peerID, bare string, ok bool) {
 	return raw, "", true
 }
 
-// writeManifest builds and writes the http-poll profile entity at
-// {out}/manifest using core-go's types.HTTPPollProfileData (which carries
-// the Amendment-5 endpoint extension since core-go 11f512f).
+// writeTransportProfile builds and writes the http-poll profile entity
+// at {out}/transport-profile using core-go's types.HTTPPollProfileData
+// (which carries the Amendment-5 endpoint extension since core-go
+// 11f512f).
+//
+// It is NOT written to {out}/manifest. That slot is reserved for the
+// signed `system/peer/published-root` (§6.5.3.1 MUST), and §6.5.4 says
+// where a static publisher's own profile goes instead: out-of-band —
+// "a well-known URL, a deployment descriptor, a pinned config". A
+// sibling object at the origin root is the cheapest form of that, and
+// it cannot collide with the §6.5.6 demux, whose reserved first-segment
+// literals are exactly {content, manifest, peers}.
 //
 // The three Amendment-5 prefixes are derived from OriginURL in
 // co-located mode (PROPOSAL §3 Edit A, Option B):
@@ -563,7 +647,7 @@ func splitAbsPath(abs string) (peerID, bare string, ok bool) {
 //
 // If OriginURL is empty, all three are empty and the operator must
 // edit before upload.
-func writeManifest(outDir, originURL, peerID string) (types.HTTPPollProfileData, error) {
+func writeTransportProfile(outDir, originURL, peerID string) (types.HTTPPollProfileData, error) {
 	if originURL == "" {
 		fmt.Println("  warn: -origin not set; manifest emitted with empty URL prefixes (operator must edit before upload)")
 	}
@@ -611,7 +695,7 @@ func writeManifest(outDir, originURL, peerID string) (types.HTTPPollProfileData,
 	if err != nil {
 		return types.HTTPPollProfileData{}, fmt.Errorf("publish: encode manifest entity: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(outDir, "manifest"), wire, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(outDir, TransportProfileFile), wire, 0o644); err != nil {
 		return types.HTTPPollProfileData{}, err
 	}
 	return md, nil

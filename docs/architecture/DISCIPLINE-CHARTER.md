@@ -81,13 +81,13 @@ L0-L3's actual behavior gets documented forensically.
 
 ---
 
-## 2. The 18 disciplines
+## 2. The 19 disciplines
 
 D1-D11 are inherited verbatim from the entity-OS discipline charter
 (originating in godot-entity-core-rust, ratified by egui-entity-core-rust).
 They are stack-agnostic; they govern how we use the substrate.
 
-D12-D18 are native to our stack (Avalonia + .NET + cgo + Go + the
+D12-D19 are native to our stack (Avalonia + .NET + cgo + Go + the
 two-renderer architecture). They are **earned** by shipped bugs and
 explicit feedback episodes. Each cites the commit or pin that proved
 we needed it.
@@ -108,7 +108,7 @@ we needed it.
 | D10 | Real-session coverage | Cross-boot + headed + real-store paths for load-bearing changes. Headless green is necessary, not sufficient. Eight crash-hunt commits proved this on the Avalonia side. |
 | D11 | Inventory-boundary declaration (meta) | At audit open: name what's in scope **and what's not.** Findings that surface outside the boundary extend the boundary for the next audit. |
 
-### Native to our stack — earned by shipped bugs (D12-D17) and feedback episodes (D18)
+### Native to our stack — earned by shipped bugs (D12-D17, D19) and feedback episodes (D18)
 
 **D12 — Cross-language lifetime accounting.**
 *Source:* the cgo + GCHandle FFI discipline.
@@ -265,6 +265,42 @@ boundary keeps both honest.
 `avalonia/frontend/Panels/LogViewerPanel.cs` via
 `Bridge.LogOpen`/`LogRender`. Same model, two presentations.
 
+**D19 — A layer needs no change only once the operation has run.**
+*Source:* two findings a session apart, same shape. (1) `b3848c1` — we
+told `entity-browser-rust` the Go arm supported foreign-namespace
+subscription "by construction," reasoning correctly from `parsePattern`;
+the gate test that turned the reading into a measurement failed on its
+first run and surfaced a `send on closed channel` in the watch hub, one
+layer below the code we had read. (2) `REVIEW-SHARE-AND-CONNECTIVITY-
+ALIGNMENT-2026-08-17` W3 / §8.2 — we told core-go that landing a mirror
+at `/{them}/…` needed nothing from them because `applyPrefix` is plain
+concatenation. It is, and the merge still 403s: `tree:merge` pre-checks
+put authorization per target path, and a self-issued `Resources: ["*"]`
+is peer-local under §PR-8. Both readings were correct about the function
+they read and wrong about the operation.
+*Why:* reading a code path establishes what that path does. It does not
+establish what the operation does, because an operation crosses layers
+the reader did not open — a capability pre-check, a lock released
+before a send, a lifecycle the callee owns. The failure mode is
+specific and it is not sloppiness: the more precisely a claim is
+argued from source, the more confidently it gets routed to another
+seat, and the more expensive it is when the layer underneath disagrees.
+*How:*
+- A claim that a layer, an impl, or a sibling repo **needs no change**
+  is not established until the operation has been **executed end to
+  end** against real peers. Until then it is a hypothesis and is
+  labelled one in the packet.
+- The measurement is the deliverable, not the argument. "Supported by
+  construction" belongs in a doc comment, never in a routed claim.
+- When the measurement contradicts the reading, correct **at the point
+  of the claim** in the original packet, and say which half was right —
+  the reading usually was.
+*Enforcement:* every routed "no change needed" row carries a test name
+or is marked unmeasured. `entitysdk/foreign_namespace_subscription_test.go`,
+`entitysdk/mirror_test.go::TestMirror_ForeignNamespaceMergeNeedsItsOwnCapability`,
+and `shellcmd/cmd_revision_mirror_test.go` are the three that exist
+because of this rule.
+
 ---
 
 ## 3. The ten review questions (run on every diff)
@@ -297,10 +333,10 @@ Short enough to run on every change. Six inherited, four substrate-native.
 
 ---
 
-## 4. The anti-pattern catalog (AP1-AP8)
+## 4. The anti-pattern catalog (AP1-AP14)
 
-Eight commits, each a real defect that shipped, was diagnosed, and is now
-pinned by a regression test.
+Each a real defect that shipped or a claim that was routed, diagnosed, and
+is now pinned by a regression test.
 **The discipline they ground exists so they don't recur.**
 
 | AP  | Commit  | Pattern (the name we use for it) | Discipline |
@@ -325,6 +361,44 @@ joins the catalog** to pin the falsification:
 
 | AP9 | `PurgeFontCache` + forced-GC between renders | Tried as the deep-dive's predicted fix for the strike-cache LRU race; direct measurement showed cache at ~10% budget at crash, and the interventions made the crash strictly worse. The lesson: trust direct measurement over predicted models; if a fix candidate makes the symptom worse, the hypothesis is falsified, not the implementation. | D8 (trust the spec, surface drift), D13 |
 
+**The share-arc pair (2026-08-18).** Both from §5.1 steps 3a/3 of
+`reviews/REVIEW-SHARE-AND-CONNECTIVITY-ALIGNMENT-2026-08-17`. Neither is a
+crash; both are the same family as AP4/AP5 — *a check that looked done and
+wasn't exercised.* AP10 is what earned **D19**; AP11 is what caught AP10's
+fix being mis-measured.
+
+| AP  | Source | Pattern (the name we use for it) | Discipline |
+|-----|--------|----------------------------------|------------|
+| AP10 | `REVIEW-…-2026-08-17` §8.2 | **The layer under the layer you read.** `applyPrefix` was read correctly and the conclusion — "an absolute target needs no change anywhere" — was still wrong: `tree:merge` pre-checks put authorization on every target path, and a self-issued `Resources: ["*"]` is peer-local under §PR-8, so every `/{them}/…` merge 403s. Routed to core-go as "no change requested" before the operation had ever been run. | D19, D8 |
+| AP11 | `entitysdk/mirror_test.go` | **A dispatched read of a peer-qualified path is a REMOTE read.** The mirror test's positive assertion used `AppPeer.List("/{them}/…")`, which routes to *that peer* — so it reported the publisher's own tree back to us, and stayed green with the target prefix reverted. Mirrors are asserted against `Store()` (L0), never `List`/`Get` (L1 dispatch). Found by mutation-checking the pin, not by review. | D2, D10 |
+
+**AP12 — the inbound packet nobody opened (2026-08-18).** Catalog-level only: it has
+bitten once, so per §5 it is **not** a discipline yet.
+
+| AP  | Source | Pattern (the name we use for it) | Discipline |
+|-----|--------|----------------------------------|------------|
+| AP12 | arch `ROUTING-2026-08-17-l` §2 | **Filing is not receiving.** A packet addressed to this repo by name carried a live conformance finding against `publish/publish.go`. We never opened it — no `reviews/` row, no backlog entry, no status line — and shipped three commits of feature work past it. It surfaced a day later only because our own new reader (step 3a) contradicted our own publisher. The counterpart of arch's own **L13 — filing is not routing**, from the receiving end. | D8, D11 |
+
+*Enforcement (the reason this is worth writing down at all):* session start reads the
+sibling `entity-system-architecture` repo for packets addressed to us, and any found
+gets a row in `docs/status/STATUS.md` or `docs/architecture/reviews/` **in that session,
+before feature work starts.** Added to `AGENTS.md`. If it bites a second time in a
+different shape, promote it.
+
+**AP13 / AP14 — the publisher-conformance pair (2026-08-18).** From the Exit-B build in
+`publish/`. Both catalog-level; each has bitten once.
+
+| AP  | Source | Pattern (the name we use for it) | Discipline |
+|-----|--------|----------------------------------|------------|
+| AP13 | `HANDOFF-2026-08-18` §2 vs `publish/signed_root.go` | **Pricing an obligation off our own code's shape.** We deferred the release-critical exit for a day because "our closure walk is shallow and D3 requires the trie closure." True about `publish/`'s walker over bound entities; irrelevant to the obligation, because `tree.CollectNodeClosure` in core-go already implemented D3 exactly *and cites the same amendment in its doc comment*. The estimate measured our code instead of the requirement. **Before pricing a spec obligation, grep the substrate for it** — the sibling that owns the primitive usually already shipped it. | D18 (read canonical sources), D8 |
+| AP14 | `publish/publish.go` filter refusal | **A filter is not a confidentiality control once you sign.** `Opts.IncludePath`/`IncludeType` looked like "publish less." Under a signed root they publish *more*: the §6.5.3 closure obligation uploads every leaf-bound hash the root commits to, filtered-out entities included, hash-addressed and fetchable. Withholding them instead shortens a consumer's enumeration **silently** (browser-rust measured 1 of 24 names hidden with no error). The emitter now refuses the combination. **When a new invariant makes an existing knob unsafe, remove the knob at the emitter — do not document around it.** | D3, D19 |
+
+*Enforcement:* `publish/publish_test.go::TestPublish_FilterHooks` pins the refusal (and that
+nothing is written before it), `TestPublish_SignedRootVerifiesFromTheEmittedFiles` pins the
+closure completeness from the consumer's vantage point, and
+`TestPublish_SeqAdvancesAcrossRuns` pins the §6.5.6 republish MUST that the upstream engine
+does not hold on its own.
+
 ---
 
 ## 5. Promotion criteria — when does something become a discipline?
@@ -341,7 +415,10 @@ rule is:
 D12-D17 were earned by the eight crash-hunt commits. D18 was earned
 by two explicit feedback episodes (different shapes, same lesson:
 the boundary between substrate and presentation is structural, not
-stylistic). Future D19, D20 wait until they're earned the same way.
+stylistic). **D19 was earned by AP10 plus the watch-hub crash of
+`b3848c1`** — two arguments-from-source, a session apart, each correct
+about the function it read and wrong about the operation; different
+subsystems, same shape. Future D20 waits until it's earned the same way.
 
 ---
 
