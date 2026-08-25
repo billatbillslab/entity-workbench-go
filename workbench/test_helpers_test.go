@@ -94,7 +94,7 @@ func errCode(t *testing.T, resp *handler.Response) string {
 // errCode above.
 func notifEntity(t *testing.T, uri string) entity.Entity {
 	t.Helper()
-	e, err := types.InboxNotificationData{
+	e, err := types.SubscriptionNotificationData{
 		SubscriptionID: "sub-1",
 		Event:          "updated",
 		URI:            uri,

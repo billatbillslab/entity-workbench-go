@@ -74,7 +74,7 @@ export GOTOOLCHAIN ?= go1.25.1
 # includes the same file and uses the caps on every podman build/run.
 include caps.mk
 
-.PHONY: workbench-test console-build console-run test test-native test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-publish perfreview build build-native shell shell-test shell-help shell-once shell-build publish-build publish-serve vcs-build fetch-build go clean clean-strays ensure-bindir image help lint fmt check lint-native lint-perfreview fmt-native
+.PHONY: workbench-test console-build console-run test test-native test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-inspect test-publish perfreview build build-native shell shell-test shell-help shell-once shell-build publish-build publish-serve vcs-build fetch-build go clean clean-strays ensure-bindir image help lint fmt check lint-native lint-perfreview fmt-native
 
 # ============================================================
 # make + podman — bare-box entry points

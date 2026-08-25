@@ -68,12 +68,16 @@ func TestStage4_CaseH_RestrictedCapsMesh3(t *testing.T) {
 	// Minimum grant set for symmetric mesh: subscribe + content:get +
 	// local-files:read + tree:get on appropriate scopes. Mirrors the
 	// Stage 3 cap-delegation positive test's grant set, applied
-	// symmetrically to every mesh peer.
+	// symmetrically to every mesh peer. Resources are bare "*"
+	// (peer-scoped) only — see cmd_stage3_cap_delegation_test.go's
+	// TestStage3_CapDelegation_Positive doc comment for why "/*/*"
+	// alongside it silently drops the whole grant entry at connect
+	// time under core-go's §PR-8 advertisement discipline.
 	scopedGrants := []types.GrantEntry{
 		{
 			Handlers:   types.CapabilityScope{Include: []string{"system/subscription"}},
 			Operations: types.CapabilityScope{Include: []string{"*"}},
-			Resources:  types.CapabilityScope{Include: []string{"*", "/*/*"}},
+			Resources:  types.CapabilityScope{Include: []string{"*"}},
 		},
 		{
 			Handlers:   types.CapabilityScope{Include: []string{"system/content"}},
@@ -83,12 +87,12 @@ func TestStage4_CaseH_RestrictedCapsMesh3(t *testing.T) {
 		{
 			Handlers:   types.CapabilityScope{Include: []string{"local/files"}},
 			Operations: types.CapabilityScope{Include: []string{"read"}},
-			Resources:  types.CapabilityScope{Include: []string{"*", "/*/*"}},
+			Resources:  types.CapabilityScope{Include: []string{"*"}},
 		},
 		{
 			Handlers:   types.CapabilityScope{Include: []string{"system/tree"}},
 			Operations: types.CapabilityScope{Include: []string{"get"}},
-			Resources:  types.CapabilityScope{Include: []string{"*", "/*/*"}},
+			Resources:  types.CapabilityScope{Include: []string{"*"}},
 		},
 		// NEW for mesh: each peer must authorize incoming
 		// workbench/blob-resolve:receive dispatches from the
@@ -100,7 +104,7 @@ func TestStage4_CaseH_RestrictedCapsMesh3(t *testing.T) {
 		{
 			Handlers:   types.CapabilityScope{Include: []string{"workbench/blob-resolve"}},
 			Operations: types.CapabilityScope{Include: []string{"receive"}},
-			Resources:  types.CapabilityScope{Include: []string{"*", "/*/*"}},
+			Resources:  types.CapabilityScope{Include: []string{"*"}},
 		},
 	}
 

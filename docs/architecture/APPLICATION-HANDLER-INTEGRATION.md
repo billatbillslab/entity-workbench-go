@@ -25,7 +25,7 @@ locIndex.Set/Remove
     → NotifyingLocationIndex emits TreeChangeEvent (store/notifying.go)
     → fan-out broadcasts to sinks (peer/fanout.go)
     → Subscription Engine matches patterns (ext/subscription/engine.go)
-    → builds InboxNotificationData
+    → builds SubscriptionNotificationData
     → delivers via authenticated EXECUTE (ext/subscription/delivery.go)
     → Inbox Handler receives (ext/inbox/handler.go)
     → optional continuation chain (ext/continuation/handler.go)
@@ -53,7 +53,7 @@ type AppHandler struct {
 
 func (h *AppHandler) Handle(ctx context.Context, req *handler.Request) (*handler.Response, error) {
     if req.Operation == "receive" {
-        var notif types.InboxNotificationData
+        var notif types.SubscriptionNotificationData
         ecf.Decode(req.Params.Data, &notif)
         h.notifications <- Notification{
             SubscriptionID: notif.SubscriptionID,
@@ -179,7 +179,7 @@ type AppHandler struct {
 
 func (h *AppHandler) Handle(ctx context.Context, req *handler.Request) (*handler.Response, error) {
     if req.Operation == "receive" {
-        var notif types.InboxNotificationData
+        var notif types.SubscriptionNotificationData
         ecf.Decode(req.Params.Data, &notif)
         h.notifications <- Notification{
             SubscriptionID: notif.SubscriptionID,
@@ -343,7 +343,7 @@ watch what paths and where notifications get delivered.
 
 5. When system/handler/data/files changes:
    - Engine matches pattern
-   - Builds InboxNotificationData
+   - Builds SubscriptionNotificationData
    - Delivers via authenticated EXECUTE to workspace/app
    - App handler receives, writes to channel
 ```
@@ -358,7 +358,7 @@ Patterns are qualified with the peer ID during subscription:
 ### Multiple Subscriptions
 
 A single application handler can receive from many subscriptions.
-The `InboxNotificationData.SubscriptionID` identifies which
+The `SubscriptionNotificationData.SubscriptionID` identifies which
 subscription fired, allowing the application to route notifications
 to the correct panel.
 

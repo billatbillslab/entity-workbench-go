@@ -674,9 +674,9 @@ func (h *channelInboxHandler) Handle(ctx context.Context, req *handler.Request) 
 			"sdk-inbox-channel supports only receive")
 	}
 
-	// The engine delivers a system/protocol/inbox/notification payload
+	// The engine delivers a system/subscription/notification payload
 	// as Params. Decode it and translate into a ChangeEvent.
-	var notif types.InboxNotificationData
+	var notif types.SubscriptionNotificationData
 	if len(req.Params.Data) > 0 {
 		if err := ecf.Decode(req.Params.Data, &notif); err != nil {
 			return handler.NewErrorResponse(400, "invalid_notification",

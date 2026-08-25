@@ -1,6 +1,6 @@
 # entity-workbench-go — status
 
-_Updated: 2026-07-27 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
+_Updated: 2026-08-13 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
 
 ## Where it is
 
@@ -105,6 +105,45 @@ verified pixel-for-pixel via `make smoke-xvfb-program PROGRAM={life,snake,astero
 Nothing here touches the still-open pointer/click gap
 (`docs/architecture/reviews/PROPOSAL-GENERIC-HOST-POINTER-INPUT-DEVICE-2026-07-27.md`) —
 that stays blocked on arch, as before.
+
+### 1c. Full-repo health sweep (2026-08-13) — CLOSED
+
+A ~2.5-week gap (07-27 → 08-13) had `dev` untouched but the sibling `entity-core-go` moved
+dozens of commits, which had silently broken `make test` here — the earlier catch-up sessions
+only ran `make test-programs`, not the full sweep. Ran `make test` / `make lint` /
+`avalonia/bridge` smoke-compile / `avalonia make test` end to end for the first time since;
+three real defects found and fixed, all on our side of the fence (core-go itself untouched):
+
+- **Build break:** core-go's coordinated rename `types.InboxNotificationData` →
+  `types.SubscriptionNotificationData` (+ wire type `system/protocol/inbox/notification` →
+  `system/subscription/notification`, `d7e44f6`, a single-round MUST with no dual-kind
+  window) had never been adopted here. Updated the 5 call sites
+  (`entitysdk/subscription.go`, `entitysdk/subscription_handler_direct_test.go`,
+  `workbench/notification_ingest.go`, `workbench/blob_resolve.go`,
+  `workbench/test_helpers_test.go`) plus stale example code in
+  `docs/architecture/APPLICATION-HANDLER-INTEGRATION.md`.
+- **Two capability-check regressions** (`shellcmd` `TestStage3_CapDelegation_Positive`,
+  `TestStage4_CaseH_RestrictedCapsMesh3`): root-caused to core-go's `43573d3` (Aug 5) —
+  connect-time capability assembly now applies real advertisement-discipline filtering
+  (`ConnectHandler.AssembleInboundGrants` → `filterAdvertisedGrants`), and under the §PR-8
+  canonicalization a self-issued grant can only ever advertise coverage over **its own**
+  peer namespace (`"*"` → `/{peerID}/*`). Both tests' scoped grants listed `Resources:
+  ["*", "/*/*"]` — the `"/*/*"` (cross-peer) entry can never be covered by a same-peer
+  advertisement, and since coverage requires *every* Include member to match, the **whole
+  grant entry** silently dropped, not just that member. Fixed by dropping the redundant
+  `"/*/*"` (the operations under test all target the granting peer's own namespace, so bare
+  `"*"` is sufficient) — confirmed empirically (reverted, reproduced the 403, re-applied).
+  Documented in both tests' doc comments so the next drift doesn't re-diagnose this from
+  scratch.
+- **Makefile hygiene:** `test-inspect` was missing from `.PHONY` (its sibling
+  `test-programs` wasn't) — file-existence-based tracking on that target name was tripping
+  a stat/permission error under the containerized build, failing `make test` at the last
+  step. Added it.
+
+Full sweep green after: `make test` (all 9 native modules + `inspect`), `make lint` (vet
+clean across every module), `avalonia/bridge` smoke-compile, `avalonia make test` (51/51
+headless). No code changes to `entity-core-go` — read-only archaeology (`git log -S`, diff
+review) to root-cause, per the sibling-repo boundary.
 
 ### 2. Stabilization pass (2026-07-22) — CLOSED
 

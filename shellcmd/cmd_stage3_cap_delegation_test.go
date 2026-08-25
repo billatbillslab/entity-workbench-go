@@ -40,12 +40,24 @@ import (
 // cap path is genuinely exercised (not bypassed via wildcard). If the
 // chain stalls or errors with one of these grants missing, that
 // pinpoints which op needs cap-coverage in production.
+//
+// Resources are bare "*" only (peer-scoped), never also "/*/*"
+// (cross-peer). Since core-go's §PR-8 canonicalization + §3
+// advertisement discipline (connect.go's AssembleInboundGrants), a
+// peer can only ever advertise coverage over ITS OWN namespace — "*"
+// canonicalizes to "/{aliceID}/*", never "/*/*". A grant entry listing
+// "/*/*" alongside "*" has one Include member the advertised scope can
+// never cover, and coverage requires EVERY Include member to match, so
+// the whole entry (not just the uncoverable member) gets dropped at
+// connect time — silently revoking the same-peer authority "*" alone
+// would have granted. All of these operations target alice's own
+// namespace, so "*" alone is both correct and sufficient.
 func TestStage3_CapDelegation_Positive(t *testing.T) {
 	scopedGrants := []types.GrantEntry{
 		{
 			Handlers:   types.CapabilityScope{Include: []string{"system/subscription"}},
 			Operations: types.CapabilityScope{Include: []string{"*"}},
-			Resources:  types.CapabilityScope{Include: []string{"*", "/*/*"}},
+			Resources:  types.CapabilityScope{Include: []string{"*"}},
 		},
 		{
 			Handlers:   types.CapabilityScope{Include: []string{"system/content"}},
@@ -55,12 +67,12 @@ func TestStage3_CapDelegation_Positive(t *testing.T) {
 		{
 			Handlers:   types.CapabilityScope{Include: []string{"local/files"}},
 			Operations: types.CapabilityScope{Include: []string{"read"}},
-			Resources:  types.CapabilityScope{Include: []string{"*", "/*/*"}},
+			Resources:  types.CapabilityScope{Include: []string{"*"}},
 		},
 		{
 			Handlers:   types.CapabilityScope{Include: []string{"system/tree"}},
 			Operations: types.CapabilityScope{Include: []string{"get"}},
-			Resources:  types.CapabilityScope{Include: []string{"*", "/*/*"}},
+			Resources:  types.CapabilityScope{Include: []string{"*"}},
 		},
 	}
 
@@ -84,18 +96,18 @@ func TestStage3_CapDelegation_Negative_NoContentGrant(t *testing.T) {
 		{
 			Handlers:   types.CapabilityScope{Include: []string{"system/subscription"}},
 			Operations: types.CapabilityScope{Include: []string{"*"}},
-			Resources:  types.CapabilityScope{Include: []string{"*", "/*/*"}},
+			Resources:  types.CapabilityScope{Include: []string{"*"}},
 		},
 		// system/content:get DELIBERATELY ABSENT.
 		{
 			Handlers:   types.CapabilityScope{Include: []string{"local/files"}},
 			Operations: types.CapabilityScope{Include: []string{"read"}},
-			Resources:  types.CapabilityScope{Include: []string{"*", "/*/*"}},
+			Resources:  types.CapabilityScope{Include: []string{"*"}},
 		},
 		{
 			Handlers:   types.CapabilityScope{Include: []string{"system/tree"}},
 			Operations: types.CapabilityScope{Include: []string{"get"}},
-			Resources:  types.CapabilityScope{Include: []string{"*", "/*/*"}},
+			Resources:  types.CapabilityScope{Include: []string{"*"}},
 		},
 	}
 	err := runCapDelegatedSyncCase(t, scopedGrants)

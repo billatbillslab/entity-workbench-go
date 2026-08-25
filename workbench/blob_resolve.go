@@ -161,13 +161,13 @@ func (h *BlobResolveHandler) Handle(ctx context.Context, req *handler.Request) (
 			return handler.NewErrorResponse(400, "decode_delivery",
 				"decode inbox delivery: "+err.Error())
 		}
-		notifEnt = entity.Entity{Type: types.TypeInboxNotification, Data: delivery.Result}
+		notifEnt = entity.Entity{Type: types.TypeSubscriptionNotification, Data: delivery.Result}
 	}
-	if notifEnt.Type != types.TypeInboxNotification {
+	if notifEnt.Type != types.TypeSubscriptionNotification {
 		return handler.NewErrorResponse(400, "wrong_input_type",
-			"expected "+types.TypeInboxNotification+", got "+notifEnt.Type)
+			"expected "+types.TypeSubscriptionNotification+", got "+notifEnt.Type)
 	}
-	notif, err := types.InboxNotificationDataFromEntity(notifEnt)
+	notif, err := types.SubscriptionNotificationDataFromEntity(notifEnt)
 	if err != nil {
 		return handler.NewErrorResponse(400, "decode_notification",
 			"decode notification: "+err.Error())

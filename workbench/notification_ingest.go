@@ -233,8 +233,8 @@ func (h *NotificationIngestHandler) Handle(_ context.Context, req *handler.Reque
 			"notification-ingest requires store + location index")
 	}
 
-	// The subscription engine delivers a `system/protocol/inbox/notification`
-	// entity wrapped in a `system/protocol/inbox/delivery`. Unwrap to
+	// The subscription engine delivers a `system/subscription/notification`
+	// entity wrapped in a `system/inbox/delivery`. Unwrap to
 	// get the notification.
 	notifEnt := req.Params
 	if notifEnt.Type == types.TypeInboxDelivery {
@@ -246,14 +246,14 @@ func (h *NotificationIngestHandler) Handle(_ context.Context, req *handler.Reque
 		// The delivery's Result is the original notification entity's data;
 		// the wrapping entity type isn't preserved across the delivery wrap,
 		// so reconstruct from the raw data.
-		inner := entity.Entity{Type: types.TypeInboxNotification, Data: delivery.Result}
+		inner := entity.Entity{Type: types.TypeSubscriptionNotification, Data: delivery.Result}
 		notifEnt = inner
 	}
-	if notifEnt.Type != types.TypeInboxNotification {
+	if notifEnt.Type != types.TypeSubscriptionNotification {
 		return handler.NewErrorResponse(400, "wrong_input_type",
-			"expected "+types.TypeInboxNotification+", got "+notifEnt.Type)
+			"expected "+types.TypeSubscriptionNotification+", got "+notifEnt.Type)
 	}
-	notif, err := types.InboxNotificationDataFromEntity(notifEnt)
+	notif, err := types.SubscriptionNotificationDataFromEntity(notifEnt)
 	if err != nil {
 		return handler.NewErrorResponse(400, "decode_notification",
 			"decode notification: "+err.Error())

@@ -27,7 +27,7 @@ import (
 
 func mkValidReceiveRequest(t *testing.T) *handler.Request {
 	t.Helper()
-	notif := types.InboxNotificationData{
+	notif := types.SubscriptionNotificationData{
 		URI:   "entity://peerX/watched/0000001",
 		Event: "put",
 	}
@@ -35,7 +35,7 @@ func mkValidReceiveRequest(t *testing.T) *handler.Request {
 	if err != nil {
 		t.Fatalf("encode notification: %v", err)
 	}
-	ent, err := entity.NewEntity("system/protocol/inbox/notification", raw)
+	ent, err := entity.NewEntity("system/subscription/notification", raw)
 	if err != nil {
 		t.Fatalf("construct notification entity: %v", err)
 	}
