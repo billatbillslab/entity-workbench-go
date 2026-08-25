@@ -1,9 +1,15 @@
 # entity-workbench-go — status
 
-_Updated: 2026-08-21 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
+_Updated: 2026-08-22 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
 
-> **Start here:** `docs/status/HANDOFF-2026-08-21-c-the-controller-that-was-never-wired.md`
-> is the newest session: **interactive Life's controller was inert from the day it shipped,
+> **Start here:** §0a below — **2026-08-22, the release close-out.** Interactive Life's
+> controller now works end to end and the operator drove it; the one remaining complaint,
+> *"Regen just moves the same map one or two over,"* was a real defect and is fixed (AP38).
+> Where the browser-rust / compute coordination stands is in **"Open — the compute/programs
+> track"** near the bottom, rewritten this session; nothing there is started, and the operator's
+> call is to pick it up **after the release**.
+> Before it: `docs/status/HANDOFF-2026-08-21-c-the-controller-that-was-never-wired.md`
+> — **interactive Life's controller was inert from the day it shipped,**
 > through two independent defects** — the generic host sampled its input ports only at tick
 > time (a 25 ms click inside a 167 ms window; **1 of 6** presses landed) and Avalonia's
 > `Button` was silently discarding the panel's `+=` handlers entirely. Both fixed, both
@@ -24,21 +30,92 @@ _Updated: 2026-08-21 · public: v0.8.0 (master) · working branch: `dev` (ahead 
 > bugs. There is **no roadmap doc and there never was one** — "what's next" is the newest
 > handoff's recommended order plus "Waiting on" at the bottom of this file.
 
-**Tree state (2026-08-21-c, the newest sweep).** `make test-each` to completion: **eight PASS,
-two FAIL** — `sdk` 201s · `shellcmd` 307s · `programs` 155s · rest ≤13s.
-**Neither failure is in this session's diff** (which is `programs/host.go` plus two C# files):
+**Tree state (2026-08-22, the newest sweep).** `make test-each` to completion: **nine PASS,
+one FAIL** — `sdk` 196s · `shellcmd` 286s · `programs` 158s · rest ≤13s.
+**The failure is not in this session's diff** (which is `programs/life_edit.go` + its test):
 
 | suite | failing test | disposition |
 |---|---|---|
-| `shellcmd` | `TestE2E_Bidirectional_BurstWrites_NoFS` | **the known one** — the terminal last-burst-write loss, routed as `reviews/CORE-GO-LAST-BURST-WRITE-LOSS-2026-08-20.md`, load-dependent. Documented below. |
-| `sdk` | `TestAxis1Equivalence_Differential` case 9 | **NEW, and it is real — see §0 below.** Our Axis-1 engine has not adopted `EXTENSION-COMPUTE` v3.26's contained-error semantics, which `entity-core-go` landed **today**. |
+| `sdk` | `TestAxis1Equivalence_Differential` case 9 | **the known one, and it is ours — see §0.** Axis-1 has not adopted `EXTENSION-COMPUTE` v3.26's contained-error semantics. Diagnosed 2026-08-21, deliberately not started; row 2 of the post-release backlog. |
 
-`make lint` clean · `gofmt -l` empty · `make reachability` clean · **Avalonia 74/74 headless**
-(three new `ProgramPanelInputTests`) · `make -C avalonia smoke-xvfb-program PROGRAM=life-edit`
-exit 0 · `make -C avalonia smoke-xvfb-click` exit 0 (200 real clicks, seed 1, through the
-rewired handlers).
+`shellcmd` **passed this run** (286s), where it failed the two previous sweeps on
+`TestE2E_Bidirectional_BurstWrites_NoFS` — which is the load-dependence that row has always
+claimed, now observed in the green direction. It is still a real core-go defect
+(`reviews/CORE-GO-LAST-BURST-WRITE-LOSS-2026-08-20.md`); a green run is not a fix, and **do not
+use this sweep to argue the row can close.**
 
-## §0 NEW — Axis-1 has drifted from COMPUTE v3.26, and our own differential gate caught it
+`make lint` clean · `gofmt -l` empty · `make reachability` clean. Previous session's real-input
+gates unchanged (no C# in this diff): `make -C avalonia smoke-xvfb-program PROGRAM=life-edit`
+exit 0 · `make -C avalonia smoke-xvfb-click` exit 0 (200 real clicks, seed 1).
+
+**⚠ Avalonia headless: one unidentified flake, 1 failure in 5 runs.** `make -C avalonia test`
+was run five times this session: the **first** reported `Passed: 73, Failed: 1`, the next
+**four** all reported 74/74. **The failing test's name was not captured** — the run was tailed
+rather than logged, and the name scrolled past. That is a defect in how it was measured, and it
+is recorded as such rather than rounded to "74/74": a ~20% flake in the headless suite is
+exactly the shape of thing this repo has been bitten by (AP32's completion-signal race was
+found because *one* test failed for an unrelated reason). **Next session: run
+`make -C avalonia test 2>&1 | tee` a few times and name it.** Nothing in this session's diff is
+C#, so it is not caused by this work — but it is not attributable to anything else either.
+
+## §0a NEW (2026-08-22) — Regen was sliding one fixed pattern, and the operator's phrasing was the measurement
+
+**Reported:** *"Regen should just basically pick a random seed… right now it just seems to
+iterate this weird ladder. If I keep hitting Regen it seems to just move it one or two over."*
+That is not an impression. It is a description of a **translation**, and it was exactly right.
+
+**The defect (AP38).** `programs/life_edit.go`'s regen soup hashed `(gen, i)` as
+`LCG(gen·C + i)` and read bits 16..18. Under a power-of-two modulus, bit *k* of an LCG step
+depends only on bits 0..*k* of its input — so those three bits depend on nothing but
+`(gen·C + i) mod 2^19`, and **changing the generation counter is arithmetically
+indistinguishable from changing the cell index by a constant.** The 256-cell board was a
+window into one fixed pattern; Regen only slid the window. Measured before the fix, best
+agreement under a cyclic shift:
+
+| generation gap | agreement | shift |
+|---|---|---|
+| 1 | 0.980 | 9 cells |
+| 2 | 0.965 | 18 cells |
+| 6 | 0.961 | 2 cells |
+| 60 | **1.000** | 2 cells |
+
+The board is 16 wide, so a 9-cell shift is half a row — *"one or two over"* is the arithmetic
+read off the screen.
+
+**Why every test was green.** `TestLifeEdit_RegenReplacesBoard` had an explicit anti-vacuity
+clause — `if lifeCellsEqual(before, after) { t.Fatal("regen did nothing") }`. **A translation
+is never equal**, so the clause passes on every one of these boards. The test asserted
+*different* where the property that mattered was *independent*. The second tell was free and
+unread: a translation preserves the live-cell count, so population across regens had σ = 0.76
+where an independent draw at 3/8 density gives σ = 7.75 — every board it ever produced had
+exactly 96 cells alive.
+
+**The fix.** One nonlinear round: square the mixed value (so the counter's contribution depends
+on the index it is mixed with — no shift can reproduce that), then fold the square's high bits
+down before the LCG step, because squaring mod 2^k leaves the low bits weak. After: agreement
+0.578–0.734 under any cyclic shift, cell-for-cell agreement 0.530 (chance for two independent
+boards at this density is 0.53125), population mean 96.5 with σ 7.33 against a theoretical 7.75.
+
+**And no, compute has no randomness — that is correct and load-bearing.** Reproducible state
+hashes are the whole point of the programs track; a mirror that re-derives a program's state has
+to get the same bytes. The entropy is the **tick counter at the moment of the press**, which is
+unpredictable to a human hand and exactly replayable to a machine. The bug was never determinism;
+it was a hash too weak to look like one.
+
+**Gate:** `TestLifeEdit_RegenIsNotATranslation` — two regens through the **running host**, an
+oracle sweep across generation gaps 1…1000, and the population-σ check, with `lifeBestCyclicMatch`
+as the instrument. Thresholds calibrated over 2500 board pairs (defective 0.953–0.992, fixed
+0.578–0.734, cut at 0.85). **The gate was run against the old hash and shown to fire on all seven
+gaps before it was committed** — a regression test never shown red is decoration.
+
+**Ratchet:** AP38 in the charter (with its enforcement paragraph), and a `programs/` entry in
+`AGENTS.md` — *compute has no randomness, so a program's "randomizer" is a hash, and a hash
+linear in its varying input is a translation.*
+
+**Reachability note.** The GUI embeds the Go program authoring, so an operator sees this only
+after `make gui` (image rebuild) — `make gui-run` alone will keep running the old soup.
+
+## §0 (still open) — Axis-1 has drifted from COMPUTE v3.26, and our own differential gate caught it
 
 `TestAxis1Equivalence_Differential` (300-case fuzz, fixed seed 20260716) diverges at case 9:
 
@@ -1735,33 +1812,82 @@ implementation of Life around is the cheapest oracle we will ever have.
 What that removes from the shipped app: nothing a user can do. What it removes from the tree: the
 duplicate path, which is what made `dev` a comparison surface instead of a release.
 
-## Open — the compute/programs track (named by the operator, 2026-08-21)
+## Open — the compute/programs track (operator-named 2026-08-21, rewritten 2026-08-22)
 
-- **Interactive Life "isn't working" — discriminate before building.** The program itself is
-  healthy: `make -C avalonia smoke-xvfb-program PROGRAM=life-edit` is green (mounts, host tick
-  clock runs, 60 samples, `tick 55 · running · shapes: display-list, text`). The complaint is
-  about *interaction*, and `programs/life_edit.go`'s own header says interactive Life is a
-  **d-pad on a `key-set` port** — four axis bits plus three action bits — and that
-  **click-a-cell does not exist**, because no input shape we have can carry a coordinate.
-  Two hypotheses: **(a)** the operator expected to click cells (the documented, unimplemented
-  pointer-input capability), or **(b)** the d-pad/action bits are not reaching the program
-  from `ProgramPanel` (which does wire `KeyDown` + on-screen held-bit buttons).
-  **`smoke-xvfb-click` can now test (b)** — that region was unreachable by any harness until
-  this session.
-- **`entity-browser-rust` serves the old, non-interactive Life.** That is `app/life`, the
-  phase-1 falsification fixture — pure Life, deliberately boring, and correct as such.
-  Publishing `app/life-edit` to it rides on the CDN corridor; note it inherits the item above,
-  since shipping interactive Life to a browser that cannot deliver the input is half a
-  feature (D23).
+**Where this arc actually stands, as of the release close-out.** Interactive Life is *working*
+— the operator has driven it. Three defects were found and fixed across two sessions, and the
+resolution of the original "isn't working" report is recorded here because the two hypotheses it
+was split into are now both answered:
+
+| the 2026-08-21 hypothesis | answer |
+|---|---|
+| **(b)** the d-pad/action bits are not reaching the program | **YES, and twice over** — AP36 (the host sampled its ports only at tick time) and AP37 (`btn.PointerPressed +=` on an Avalonia `Button` never runs). Both fixed, both gated. |
+| **(a)** the operator expected to *click cells* | **Still true, still unimplemented** — see the pointer-input row below. The toggle interface is the d-pad + Toggle button, which the operator has now used and called "clunky, but it works." |
+
+Plus AP38 this session (Regen was a translation, §0a). Nothing in the list below is started;
+**the operator's call is to resume after the release.**
+
+### Backlog — post-release, in the order the operator named
+
+1. **Pointer input for the generic host (click-a-cell).** The capability gap, not a Life bug:
+   neither input shape we have (`key-set`, a 64-bit mask; `direction`, a 0..3 enum) can carry a
+   coordinate. `PROPOSAL-GENERIC-HOST-POINTER-INPUT-DEVICE-2026-07-27.md` is **delivered** and
+   arch has it as `COHORT-OPEN-ITEMS` §1d row **W-1, owner arch**, sequenced with T5's resume by
+   stated decision. This is what upgrades the toggle interface from "clunky but works" to direct
+   manipulation, and it is the honest blocker on shipping interactive Life anywhere as a
+   showcase.
+2. **Axis-1's COMPUTE v3.26 drift** (§0). Ours to fix, nobody else's — a conformance-admitted
+   engine (AE-5, LOCKED) whose admission is stale until it adopts contained-error semantics.
+   Diagnosed with evidence and deliberately not started. **Do not confuse it with arch's compute
+   deferral** — that is the T5 research track and this is an admitted engine drifting from a
+   landed spec revision.
+3. **The `programs/` ↔ `concat` catch-up.** `programs/` routes around `concat` in four places
+   and **Axis-1 implements none of the four v3.24 primitives** against a 350-vector corpus.
+   Nothing is waiting on anybody for this (core-go shipped them at `eb80750`).
+
+### Coordination with `entity-browser-rust` — where we left it
+
+- **They serve `app/life`, the old non-interactive Life.** That is the phase-1 falsification
+  fixture — pure Life, deliberately boring, correct as such. Publishing `app/life-edit` to them
+  rides on the CDN corridor, which works; but it **inherits row 1 above**, because shipping an
+  interactive program to a renderer that cannot deliver the input is half a feature (D23).
+  The AP38 fix does not change this — a translated soup and a good one are equally unreachable
+  without a controller.
+- **The sub-tick input finding is routed and mutual.** `reviews/GENERIC-HOST-SUBTICK-INPUT-2026-08-21.md`
+  (committed at `7729cb5`, pushed) — they found AP36 independently, in a different language, and
+  fixed it at a **different layer** (`MomentaryGuard`: delay the release by one tick period)
+  where we fixed it in the host (an input queue). Routed as a **design result, not a defect
+  report**: the open question is whether sub-tick input belongs in the driver or the host, and
+  the convention that specifies `rate_hint` says nothing about the interval between ticks —
+  which is the hole both implementations fell into. **Blocked on us: nothing. No reply is
+  owed to us either** — this is a question for the convention, not a bug in either tree.
+- **The `.list` artifact format** and the **fixture re-cut** are the two other live browser-rust
+  threads; both are in "Waiting on" below, both cost us nothing today.
+- **Not attempted this session, by decision:** no further browser-rust coordination before the
+  release. Parity work resumes next week per the operator, then the more complex features.
+
+### The instrument note worth keeping
+
+Three defects in this arc (AP36, AP37, AP38) shipped through green suites, and each was found by
+a different thing: AP36 and AP37 by **the first test that crossed the seam** with real input,
+AP38 by **an operator playing with the shipped program**. None was found by the layer's own
+tests, all of which were complete and correct about their own layer. That is D10 stated as a
+measurement rather than a slogan — and for AP38 specifically, the missing instrument was not
+coverage but a **strong enough property**: the test asserted the board *changed* when what it
+needed to assert was that the boards were *independent*.
 
 ## Waiting on
 
-- **⚠ arch — the generic host's third input device (pointer/`click`), and it was NEVER SENT.**
-  `PROPOSAL-GENERIC-HOST-POINTER-INPUT-DEVICE-2026-07-27.md` is AGENTS.md's worked AP28
-  example: no filename hit, **no subject hit** across five distinctive phrases in both sibling
-  trees, no row on arch's board, after 24 days recorded here as "blocked on arch". **This row
-  is not blocked — it was never delivered.** It is now on the critical path for interactive
-  Life if the answer to (a) above is yes. Route it before carrying it forward again.
+- **arch — the generic host's third input device (pointer/`click`). DELIVERED; sequenced, not
+  blocked.** `PROPOSAL-GENERIC-HOST-POINTER-INPUT-DEVICE-2026-07-27.md` is AGENTS.md's worked
+  AP28 example — for 24 days this row read "blocked on arch" while the packet had **no filename
+  hit and no subject hit** in either sibling tree. Pushing `dev` was the delivery; arch read it
+  at `98ff6de` and opened `COHORT-OPEN-ITEMS` §1d row **W-1, owner arch**, deferred by stated
+  decision alongside T5's resume. **The content is undecided, so it stays on this list** — but
+  the reason is arch's sequencing, not our non-delivery, and the difference is the whole of
+  AP28. It is row 1 of the post-release programs backlog above: the answer to hypothesis (a),
+  and what turns interactive Life's toggle interface into direct manipulation. *(Duplicate of
+  the struck-through row further down; kept here because this is where a reader looks first.)*
 
 > **"Waiting on" means the content is undecided.** A ruling that has not been folded into spec
 > text is **not** on this list — that is an editorial queue item on the authoring repo's board,

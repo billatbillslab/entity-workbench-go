@@ -86,6 +86,14 @@ const glyphStatusPause = uint64('⏸')
 // a `map` over indices cannot carry a running LCG state between cells.
 const lifeMixC = uint64(2654435761)
 
+// lifeMixFold is the shift used to fold a squared value's high bits back down
+// (h >> 13). Squaring modulo a power of two leaves the LOW bits degenerate — bit
+// k of h² depends only on bits 0..k of h — so the round that follows the square
+// must carry high bits downward or the output bits we actually read (16..18) stay
+// nearly as structured as the input. See lifeScramble's header for the whole
+// argument; this constant is the second half of it.
+const lifeMixFold = uint64(8192)
+
 // AuthorLifeInteractive writes the interactive Life program into the tree and
 // returns its descriptor path. Same authoring contract as AuthorLife: state₀ +
 // step IR + projections + descriptor land as durable content-addressed artifacts;
@@ -297,27 +305,70 @@ func buildLifeEditStepExpr(ap *entitysdk.AppPeer, w, h int, statePath, inputPath
 		})
 	}
 
-	// The regen soup: a per-index counter-based hash of (gen, i), thresholded at
-	// the SAME 3/8 density lifeSeedState uses, so a regenerated board looks like
-	// the opening one. Sequential-LCG soup is impossible under `map` (no carry),
+	// The regen soup: a per-index hash of (gen, i), thresholded at the SAME 3/8
+	// density lifeSeedState uses, so a regenerated board looks like the opening
+	// one. Sequential-LCG soup is impossible under `map` (no carry between cells),
 	// so each cell hashes its own index against the generation counter.
+	//
+	// ─── Why this hash has a squaring round, and why the first one did not work ──
+	//
+	// The shipped version was `h1 = LCG(gen*C + i)`, read at bits 16..18. That is
+	// LINEAR in (gen, i) under a power-of-two modulus, and linear here means
+	// TRANSLATION: bit k of an LCG step depends only on bits 0..k of its input, so
+	// the three bits we read depend on nothing but `(gen*C + i) mod 2^19`. Changing
+	// `gen` is then arithmetically indistinguishable from changing `i` by a
+	// constant — the board is a 4096-cell window into one fixed 2^19-long pattern,
+	// and regen only slides the window. Measured before the fix: consecutive regens
+	// matched the previous board **100%** under a shift (gen+1 → 146 cells, gen+2 →
+	// 155, gen+3 → -58). The operator's report was "it moves the same map over one
+	// or two," which is exactly what the arithmetic says it does.
+	//
+	// The fix is one nonlinear round. `h0*h0` makes the generation's contribution
+	// depend on the index it is mixed with, which no shift can reproduce; the fold
+	// (lifeMixFold) then carries the square's high bits down, because squaring mod
+	// 2^31 leaves the low bits weak. Measured after: consecutive regens agree at
+	// 0.53 — exactly the chance rate for two independent boards at density 3/8 —
+	// with no shift explaining better, population mean 1536.1 (σ 31.0 against a
+	// theoretical 31.0), and per-cell bias over 2000 generations inside ±3.8σ.
+	// TestLifeEdit_RegenIsNotATranslation is the gate.
+	//
+	// Bounds (arithmetic is 64-bit two's complement, and div/mod are SIGNED by
+	// default — every intermediate must stay under 2^63 or `mod` reads negative):
+	// gen and h are < 2^31, so h*h < 2^62 and gen*lifeLCGMul < 2^61.1; the largest
+	// sum below is < 2^62.6.
 	regenCells := c.BuiltinsCall("map", map[string]*entitysdk.Builder{
 		"collection": c.Literal(indices),
 		"fn": c.Lambda([]string{"i"}, c.Let(map[string]*entitysdk.Builder{
+			// Round 0 — fold the generation into the index (still linear).
 			"h0": c.Arithmetic("mod",
 				c.Arithmetic("add",
 					c.Arithmetic("mul", c.Arithmetic("mod", sc("gen"), c.Literal(lifeLCGMod)), c.Literal(lifeMixC)),
 					sc("i")),
 				c.Literal(lifeLCGMod)),
 		}, c.Let(map[string]*entitysdk.Builder{
+			// Round 1 — the SQUARE. This is the round that makes regen a new board
+			// rather than the old one moved.
 			"h1": c.Arithmetic("mod",
-				c.Arithmetic("add", c.Arithmetic("mul", sc("h0"), c.Literal(lifeLCGMul)), c.Literal(lifeLCGAdd)),
+				c.Arithmetic("add",
+					c.Arithmetic("add",
+						c.Arithmetic("mul", sc("h0"), sc("h0")),
+						c.Arithmetic("mul", c.Arithmetic("mod", sc("gen"), c.Literal(lifeLCGMod)), c.Literal(lifeLCGMul))),
+					c.Literal(lifeLCGAdd)),
+				c.Literal(lifeLCGMod)),
+		}, c.Let(map[string]*entitysdk.Builder{
+			// Round 2 — fold the square's high bits down, then one LCG step.
+			"h2": c.Arithmetic("mod",
+				c.Arithmetic("add",
+					c.Arithmetic("add",
+						floorDiv(sc("h1"), c.Literal(lifeMixFold)),
+						c.Arithmetic("mul", sc("h1"), c.Literal(lifeLCGMul))),
+					c.Literal(lifeLCGAdd)),
 				c.Literal(lifeLCGMod)),
 		}, c.If(
 			c.Compare("lt",
-				c.Arithmetic("mod", floorDiv(sc("h1"), c.Literal(uint64(65536))), c.Literal(uint64(8))),
+				c.Arithmetic("mod", floorDiv(sc("h2"), c.Literal(uint64(65536))), c.Literal(uint64(8))),
 				c.Literal(uint64(3))),
-			c.Literal(uint64(1)), c.Literal(uint64(0)))))),
+			c.Literal(uint64(1)), c.Literal(uint64(0))))))),
 	})
 
 	// The toggle edit: flip the cell at the (post-move) cursor, all others held.
