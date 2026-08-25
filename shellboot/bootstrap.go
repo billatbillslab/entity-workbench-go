@@ -78,6 +78,29 @@ type Config struct {
 	// the prototype multi-peer flows in USAGE-PROTOTYPE-FILESYSTEM-SYNC.md.
 	OpenAccess bool `json:"open_access"`
 
+	// DisableRegistry turns OFF the EXTENSION-REGISTRY name-resolution
+	// substrate, which every shellboot-hosted frontend otherwise carries.
+	//
+	// The default is ON, and it is a reversal: shellboot never set this
+	// field until 2026-08-19, so `entity-shell` and the Avalonia frontend
+	// shipped with no registry handler at all. Every piece of the name arc
+	// — ResolveName, BindLocalName, the resolver-config, the v1.13/1.14
+	// conformance work — was reachable only from unit tests, because the
+	// handler it dispatches to was never registered in a shipped binary.
+	// EXTENSION-REGISTRY §11.2 lists "UI / CLI surface for local-name
+	// bind / unbind / list" as a SHOULD; `name` is that surface, and it
+	// needs this on to do anything.
+	//
+	// The SDK keeps its own default OFF (entitysdk.PeerConfig is a library
+	// surface and should not spend a namespace its embedder did not ask
+	// for). shellboot is the application tier and makes the opposite call
+	// on a measurement: entitysdk/registry_bootstrap_cost_test.go prices
+	// the extension at +8 paths / +8 entities once, with ZERO marginal
+	// cost per restart. The linear-rebootstrap-leak claim that justified
+	// the old default did not survive its control — a registry-less peer
+	// accretes at exactly the same rate.
+	DisableRegistry bool `json:"disable_registry"`
+
 	// ExtraPeerOptions forwards raw peer options to entitysdk for
 	// frontend-specific tuning (e.g. additional handlers, sync hooks).
 	// Use sparingly; most knobs belong in Config above.
@@ -138,6 +161,11 @@ func Bootstrap(ctx context.Context, cfg Config) (*entitysdk.AppPeer, *shellcmd.S
 		Storage:    entitysdk.StorageConfig{Kind: cfg.StorageKind, Path: resolvedStoragePath},
 		ListenAddr: cfg.ListenAddr,
 	}
+	// The name-resolution substrate the `name` verb dispatches to. See
+	// Config.DisableRegistry for why this is on by default and what it costs.
+	if !cfg.DisableRegistry {
+		peerCfg.Extensions.Registry = &entitysdk.RegistryConfig{}
+	}
 	if cfg.Identity != "" {
 		peerCfg.Identity = &entitysdk.IdentityBindingConfig{Name: cfg.Identity}
 	}
@@ -173,6 +201,31 @@ func Bootstrap(ctx context.Context, cfg Config) (*entitysdk.AppPeer, *shellcmd.S
 	ap, err := entitysdk.CreatePeer(peerCfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("shellboot: create peer: %w", err)
+	}
+
+	// Ship §4.1a's default resolver-config. Registering the registry
+	// handler makes name resolution POSSIBLE; this makes it WORK — without
+	// a resolver-config the chain is empty, so `name resolve` consults no
+	// backend and every name reports chain_exhausted, which reads to a user
+	// as "the feature is broken" rather than "you have not configured it".
+	// EXTENSION-REGISTRY §4.1a: a distribution SHOULD ship this.
+	//
+	// EnsureResolverConfig is idempotent and never overwrites an operator's
+	// config, so this is a first-boot write, not a per-start one.
+	//
+	// A stored config that FAILS the §4.1 step 2 privacy MUST is fatal
+	// here, deliberately. §11.1 places the refusal at load and
+	// InstallResolverConfig refuses rather than normalizes; booting anyway
+	// would resolve names through the very configuration the validator
+	// exists to reject, and would do it silently. The message names the
+	// opt-out so an operator with a config we reject is not stuck.
+	if !cfg.DisableRegistry {
+		if _, err := ap.EnsureResolverConfig(); err != nil {
+			_ = ap.Close()
+			return nil, nil, fmt.Errorf("shellboot: resolver-config refused at load "+
+				"(EXTENSION-REGISTRY §4.1 step 2 / §11.1); repair it or start with "+
+				"registry disabled to inspect it: %w", err)
+		}
 	}
 
 	// Restart-equivalence for Phase E mounts: walk the persisted

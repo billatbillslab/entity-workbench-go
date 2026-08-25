@@ -28,10 +28,13 @@ help:
 	@echo "                         cycle through every doc in markdown-view"
 	@echo "  make smoke-xvfb-hidpi  driver variant at 2560x1440 to catch HiDPI scaling bugs"
 	@echo "  make smoke-xvfb-site   drive SITE panel: cycle Navigate across the demo site"
+	@echo "  make smoke-xvfb-handlers  drive HANDLER-BROWSER panel: walk + execute every handler"
 	@echo "  make smoke-xvfb-snake  drive SNAKE compute panel: tick clock + input-port steering"
 	@echo "  make smoke-xvfb-life   drive LIFE compute panel: tick clock, display-only"
 	@echo "  make smoke-xvfb-program PROGRAM=life|snake|asteroids"
 	@echo "                         drive the GENERIC host panel: one panel, any program"
+	@echo "  make smoke-xvfb-window  collapse/restore the WINDOW while a program paints"
+	@echo "                         (MODE=resize|minimize|both) — the open-minimize-crash gate"
 	@echo "  make smoke-xvfb-asteroids drive ASTEROIDS compute panel: held-key SET input +"
 	@echo "                         display-list output (heterogeneous actors)"
 	@echo "  make crash      decode the most recent libbridge.so coredump"
@@ -344,6 +347,40 @@ smoke-xvfb-life: build extract
 	  fi
 	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
 
+# HANDLER-BROWSER smoke — drives HandlerBrowserPanel (over
+# wb.HandlerBrowserModel) under real X11: mount, walk every discovered
+# handler, execute an operation on each, repaint the lists + spec line +
+# growing output log each step.
+#
+# What this covers that headless cannot: the Skia paint path under
+# repeated ItemsSource churn, and the error-rendering path — the
+# executions return error statuses by design, since an arbitrary op
+# dispatched with no params is exactly the case a user hits while
+# exploring and exactly the one nobody tests.
+smoke-xvfb-handlers: build extract
+	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
+	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh
+	@echo "==> HANDLER-BROWSER Xvfb smoke (timer=$(DRIVER_SECS)s walk=$(DRIVER_CYCLES))"
+	@cd $(APP_DIR)/dist-native && \
+	  podman run --rm $(PODMAN_RUN_CAPS) \
+	    --userns=keep-id \
+	    -v $(APP_DIR)/dist-native:/app:Z \
+	    -e WB_SMOKE_HANDLERS=1 \
+	    -e WB_SMOKE_CYCLE_PATHS=$(DRIVER_CYCLES) \
+	    -e WB_SMOKE_CYCLE_GAP_MS=$(DRIVER_GAP_MS) \
+	    -w /app \
+	    --entrypoint bash \
+	    $(IMAGE) \
+	    /app/run-xvfb-smoke.sh $(DRIVER_SECS); \
+	  status=$$?; \
+	  if [ $$status -ne 0 ]; then \
+	    echo ""; \
+	    echo "==> smoke-xvfb-handlers FAILED (exit $$status)"; \
+	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
+	    exit $$status; \
+	  fi
+	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
+
 # GENERIC HOST — drives ProgramPanel for any of the three programs through the
 # ONE generic panel, under real X11 + Skia.
 #
@@ -408,6 +445,58 @@ smoke-xvfb-asteroids: build extract
 	    exit $$status; \
 	  fi
 	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
+
+# WINDOW — collapse and restore the window itself while a program paints.
+# The one gate in this repo that can reach the open managed stack overflow:
+# it fires on minimize on a real desktop, its two documented predecessors
+# were a GridSplitter driving a row to zero height, and the headless suite
+# survives all three of its collapse repros because headless never runs the
+# X11 backend. Xvfb does.
+#
+#   MODE=resize    (default) collapse ClientSize toward zero and restore.
+#                  A resize is an X ConfigureWindow, honored with no WM.
+#   MODE=minimize  cycle WindowState. READ THE LOG — iconify is a window-
+#                  MANAGER operation and this harness runs a bare Xvfb with
+#                  no WM, so it may be a no-op. The driver logs the state it
+#                  actually observed and says so when nothing moved.
+#   MODE=both      alternate.
+#
+# PROGRAM= layers a live repaint stream underneath (the crash needs paint in
+# flight, not an idle window). Set PROGRAM= empty for the idle site-view case.
+WINDOW_MODE    ?= resize
+WINDOW_PROGRAM ?= life
+# WM=1 starts openbox on the virtual display first. REQUIRED for
+# MODE=minimize to mean anything — iconify is a window-manager operation,
+# and with no WM the driver correctly reports zero transitions.
+WINDOW_WM      ?=
+smoke-xvfb-window: build extract
+	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
+	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh
+	@echo "==> WINDOW Xvfb smoke: mode=$(WINDOW_MODE) under program=$(WINDOW_PROGRAM) (timer=$(DRIVER_SECS)s cycles=$(DRIVER_CYCLES))"
+	@cd $(APP_DIR)/dist-native && \
+	  podman run --rm $(PODMAN_RUN_CAPS) \
+	    --userns=keep-id \
+	    -v $(APP_DIR)/dist-native:/app:Z \
+	    -e WB_SMOKE_WINDOW=$(WINDOW_MODE) \
+	    $(if $(WINDOW_WM),-e WB_SMOKE_WM=$(WINDOW_WM),) \
+	    $(if $(WINDOW_PROGRAM),-e WB_SMOKE_PROGRAM=$(WINDOW_PROGRAM),) \
+	    -e WB_SMOKE_CYCLE_PATHS=$(DRIVER_CYCLES) \
+	    -e WB_SMOKE_CYCLE_GAP_MS=$(DRIVER_GAP_MS) \
+	    -w /app \
+	    --entrypoint bash \
+	    $(IMAGE) \
+	    /app/run-xvfb-smoke.sh $(DRIVER_SECS); \
+	  status=$$?; \
+	  if [ $$status -ne 0 ]; then \
+	    echo ""; \
+	    echo "==> smoke-xvfb-window FAILED (exit $$status) — if this is a SIGSEGV or a"; \
+	    echo "    stack overflow, that is the OPEN BUG REPRODUCING. Capture the dump"; \
+	    echo "    before it rotates: make crash"; \
+	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
+	    exit $$status; \
+	  fi
+	@echo "==> window cycle survived; grep run.log for 'WINDOW' to see what actually moved"
+	@echo "    $(APP_DIR)/dist-native/xvfb-smoke-out/run.log"
 
 clean:
 	rm -rf $(APP_DIR)/dist-native

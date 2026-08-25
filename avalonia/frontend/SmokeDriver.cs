@@ -31,6 +31,12 @@ namespace EntityAvalonia;
 //   WB_SMOKE_CYCLE_GAP_MS — ms between publishes. Default 150 so the
 //                           150ms MarkdownView debounce sees real
 //                           rapid changes.
+//   WB_SMOKE_WINDOW       — resize | minimize | both. Layers ON TOP of
+//                           any other mode: drives the window geometry
+//                           while the primary mode paints. The only
+//                           surface in this repo that can reach the
+//                           open minimize crash (headless has no X11
+//                           backend). See StartWindowCycle.
 //   WB_SMOKE_SITE_NAVIGATE — set to non-empty to drive the SITE panel
 //                           instead of markdown-view. Leaves the
 //                           middle slot at site-view (its default) and
@@ -75,6 +81,24 @@ public static class SmokeDriver
     // wants to log additional context.
     public static bool MaybeStart(MainWindow window, PeerView peer)
     {
+        var primary = StartPrimaryMode(window, peer);
+
+        // WB_SMOKE_WINDOW layers ON TOP of whatever primary mode ran,
+        // rather than replacing it — the open minimize crash needs a
+        // populated visual tree with paint in flight, so the useful run
+        // is a program cycling WHILE the window collapses, not an idle
+        // window collapsing alone.
+        var windowMode = Environment.GetEnvironmentVariable("WB_SMOKE_WINDOW");
+        if (!string.IsNullOrEmpty(windowMode))
+        {
+            StartWindowCycle(window, windowMode);
+            return true;
+        }
+        return primary;
+    }
+
+    private static bool StartPrimaryMode(MainWindow window, PeerView peer)
+    {
         var snakeMode = Environment.GetEnvironmentVariable("WB_SMOKE_SNAKE");
         if (!string.IsNullOrEmpty(snakeMode))
         {
@@ -100,6 +124,12 @@ public static class SmokeDriver
         if (!string.IsNullOrEmpty(programMode))
         {
             return StartProgram(window, peer, programMode);
+        }
+
+        var handlersMode = Environment.GetEnvironmentVariable("WB_SMOKE_HANDLERS");
+        if (!string.IsNullOrEmpty(handlersMode))
+        {
+            return StartHandlers(window, peer);
         }
 
         var siteMode = Environment.GetEnvironmentVariable("WB_SMOKE_SITE_NAVIGATE");
@@ -584,6 +614,106 @@ public static class SmokeDriver
         _cycleTimer.Start();
     }
 
+    // --- HANDLER-BROWSER mode (WB_SMOKE_HANDLERS) -----------------------
+    //
+    // Drives HandlerBrowserPanel under real X11: mount it in the middle
+    // slot, then walk the discovered handlers, selecting each and
+    // executing its first operation. Every step repaints — the handler
+    // list, the operation list, the spec line and a growing output log —
+    // so the run exercises the thing headless cannot: the Skia paint
+    // path under repeated ItemsSource churn.
+    //
+    // Executions will return error statuses. That is expected and is the
+    // point: an arbitrary op dispatched with no params is exactly the
+    // case whose error rendering nobody tests, and a panel that crashes
+    // formatting a 400 is a panel that fails the first time a user is
+    // exploring. Honors WB_SMOKE_CYCLE_PATHS (handlers to walk, default
+    // 12) and WB_SMOKE_CYCLE_GAP_MS (default 250ms).
+    private static bool StartHandlers(MainWindow window, PeerView peer)
+    {
+        _window = window;
+        _peer = peer;
+        _cyclePaths = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_PATHS"), out var n) ? n : 12;
+        _cycleGapMs = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_GAP_MS"), out var g) ? g : 250;
+        Log($"handlers mode: walk={_cyclePaths} gap={_cycleGapMs}ms");
+
+        try
+        {
+            peer.SwitchMiddleSlotForSmoke("handler-browser");
+            Log("middle slot -> handler-browser");
+        }
+        catch (Exception ex)
+        {
+            Log($"failed to switch middle slot: {ex.Message}");
+            return false;
+        }
+
+        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        settle.Tick += (_, _) =>
+        {
+            settle.Stop();
+            StartHandlersCycle();
+        };
+        settle.Start();
+        return true;
+    }
+
+    private static void StartHandlersCycle()
+    {
+        if (_peer == null) return;
+        var hb = _peer.HandlersForSmoke;
+        if (hb == null)
+        {
+            Log("middle slot is not handler-browser; handlers cycle aborted");
+            return;
+        }
+        Log($"handler-browser mounted: {hb.HandlerCountForTests} handlers discovered");
+        if (hb.HandlerCountForTests == 0)
+        {
+            Log("NO HANDLERS DISCOVERED — this run is NOT evidence the panel works");
+        }
+
+        _iteration = 0;
+        _cycleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_cycleGapMs) };
+        _cycleTimer.Tick += (_, _) =>
+        {
+            if (_peer == null)
+            {
+                _cycleTimer?.Stop();
+                return;
+            }
+            var p = _peer.HandlersForSmoke;
+            if (p == null)
+            {
+                _cycleTimer?.Stop();
+                Log("handler-browser panel disappeared mid-cycle; aborting");
+                return;
+            }
+            int limit = Math.Min(_cyclePaths, p.HandlerCountForTests);
+            if (_iteration >= limit)
+            {
+                _cycleTimer?.Stop();
+                Log($"handlers cycle complete ({_iteration} handlers walked, "
+                    + $"{p.OutputCountForTests} output rows)");
+                return;
+            }
+            p.SelectHandlerForTests(_iteration);
+            var pattern = p.HandlerPatternAtForTests(_iteration);
+            if (p.OperationCountForTests > 0)
+            {
+                p.ExecuteSelectedForTests();
+                Log($"iter {_iteration}/{limit} — {pattern} "
+                    + $"({p.OperationCountForTests} ops) → {p.OutputCountForTests} rows");
+            }
+            else
+            {
+                Log($"iter {_iteration}/{limit} — {pattern} (no operations)");
+            }
+            _iteration++;
+        };
+        _cycleTimer.Start();
+    }
+
     // --- GENERIC-HOST mode (WB_SMOKE_PROGRAM) ---------------------------
     //
     // Drives ProgramPanel for any of the three programs. The ONLY thing that
@@ -681,4 +811,188 @@ public static class SmokeDriver
     }
 
     private static void Log(string msg) => PanelLog.Write("smoke-driver", msg);
+    // --- WINDOW mode (WB_SMOKE_WINDOW) ------------------------------------
+    //
+    // Drives the window geometry itself: collapse toward zero and
+    // restore, repeatedly, with whatever the primary mode is painting
+    // still in flight.
+    //
+    // **This exists to reach a crash nothing else in this repo can
+    // reach.** The open managed stack overflow (STATUS "Open bugs")
+    // fires on window minimize on a real desktop, and its two
+    // documented predecessors were a GridSplitter dragging a
+    // star-weighted row to zero height — the same zero-size condition,
+    // arriving from below instead of above. The headless suite tries
+    // 25× collapse-to-0x0, 25× Minimized/restore and 40× collapse-with-
+    // repaint-in-flight and survives all three, but **headless does not
+    // run the X11 backend at all**, which is where both predecessors
+    // lived. Xvfb does. This is the missing rung between the two.
+    //
+    //   WB_SMOKE_WINDOW=resize    — collapse ClientSize toward zero and
+    //                               restore. The mode that genuinely
+    //                               reproduces under Xvfb: a resize is
+    //                               an X ConfigureWindow, which the
+    //                               server honors with no WM present.
+    //   WB_SMOKE_WINDOW=minimize  — cycle WindowState.Minimized/Normal.
+    //                               **Read the log before believing a
+    //                               pass**: iconify is a window-MANAGER
+    //                               operation and the smoke harness runs
+    //                               a bare Xvfb with no WM, so the state
+    //                               may never take effect. Every step
+    //                               logs the state and client size it
+    //                               ACTUALLY observed afterwards, so a
+    //                               run that proved nothing says so
+    //                               instead of reading as a green gate.
+    //   WB_SMOKE_WINDOW=both      — alternate the two.
+    //
+    // Honors WB_SMOKE_CYCLE_PATHS (iterations, default 40) and
+    // WB_SMOKE_CYCLE_GAP_MS (default 250 — slower than the paint modes
+    // because a geometry change has to round-trip through the X server
+    // and back into a layout pass).
+    private static DispatcherTimer? _windowTimer;
+    private static string _windowMode = "resize";
+    private static int _windowIteration;
+    private static double _restoreWidth;
+    private static double _restoreHeight;
+    private static int _windowStateChanges;
+    private static Avalonia.Size _lastObservedSize;
+    private static Avalonia.Controls.WindowState _lastObservedState;
+    private static bool _haveObservation;
+
+    private static void StartWindowCycle(MainWindow window, string mode)
+    {
+        _window = window;
+        _windowMode = mode.Trim().ToLowerInvariant() switch
+        {
+            "minimize" => "minimize",
+            "both" => "both",
+            _ => "resize",
+        };
+        _cyclePaths = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_PATHS"), out var n) ? n : 40;
+        _cycleGapMs = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_GAP_MS"), out var g) ? g : 250;
+        _restoreWidth = window.Width;
+        _restoreHeight = window.Height;
+        _windowIteration = 0;
+        _windowStateChanges = 0;
+        _haveObservation = false;
+        Log($"WINDOW cycle starting — mode={_windowMode} iterations={_cyclePaths} gap={_cycleGapMs}ms " +
+            $"restore={_restoreWidth}x{_restoreHeight}");
+
+        // Let the primary mode settle and paint once before the
+        // geometry starts moving; collapsing a window that has not laid
+        // out yet tests a different thing than collapsing a live one.
+        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+        settle.Tick += (_, _) =>
+        {
+            settle.Stop();
+            _windowTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_cycleGapMs) };
+            _windowTimer.Tick += (_, _) => WindowCycleStep();
+            _windowTimer.Start();
+        };
+        settle.Start();
+    }
+
+    private static void WindowCycleStep()
+    {
+        var w = _window;
+        if (w == null)
+        {
+            _windowTimer?.Stop();
+            return;
+        }
+        if (_windowIteration >= _cyclePaths)
+        {
+            _windowTimer?.Stop();
+            // Always leave the window restored — the harness screenshots
+            // the final frame, and a 1x1 window would make every run
+            // look like a paint failure.
+            w.WindowState = Avalonia.Controls.WindowState.Normal;
+            w.Width = _restoreWidth;
+            w.Height = _restoreHeight;
+            Log($"WINDOW cycle complete ({_windowIteration} iterations, " +
+                $"{_windowStateChanges} observed state/size transitions)");
+            if (_windowStateChanges == 0)
+            {
+                Log("WINDOW cycle observed ZERO transitions — the window never actually moved, so " +
+                    "this run is NOT evidence about anything. Expected for mode=minimize under a " +
+                    "bare Xvfb: iconify is a window-MANAGER operation and this harness runs no WM. " +
+                    "mode=resize does move (an X ConfigureWindow needs no WM) — if THAT reports " +
+                    "zero, the driver is broken, not the app.");
+            }
+            else
+            {
+                Log($"WINDOW cycle: {_windowStateChanges} transitions actually took effect, with " +
+                    "paint in flight, and the app survived all of them.");
+            }
+            return;
+        }
+
+        var collapsing = (_windowIteration % 2) == 0;
+        var useMinimize = _windowMode == "minimize" ||
+                          (_windowMode == "both" && ((_windowIteration / 2) % 2) == 1);
+
+        // Observe FIRST, and compare against the PREVIOUS tick's
+        // observation — not against a same-tick readback.
+        //
+        // The same-tick version was wrong and the first run proved it:
+        // an X11 geometry change is a request to the server that lands
+        // asynchronously, so reading ClientSize immediately after
+        // setting it returns the OLD value every time, and the counter
+        // reported "zero transitions" for a run whose own log showed
+        // 1400x900 and 1x1 alternating twenty times. A gate that
+        // miscounts in the reassuring direction is worse than no gate:
+        // it was one line away from reporting a run that never
+        // collapsed anything as a run that survived collapsing.
+        var before = w.ClientSize;
+        var beforeState = w.WindowState;
+        if (_haveObservation && (before != _lastObservedSize || beforeState != _lastObservedState))
+        {
+            _windowStateChanges++;
+        }
+        _lastObservedSize = before;
+        _lastObservedState = beforeState;
+        _haveObservation = true;
+
+        try
+        {
+            if (useMinimize)
+            {
+                w.WindowState = collapsing
+                    ? Avalonia.Controls.WindowState.Minimized
+                    : Avalonia.Controls.WindowState.Normal;
+            }
+            else if (collapsing)
+            {
+                // Toward zero, not to zero: Avalonia clamps a 0 and the
+                // predecessors both died on a viewport that had become
+                // effectively-zero for the content, not literally 0.
+                w.Width = 1;
+                w.Height = 1;
+            }
+            else
+            {
+                w.Width = _restoreWidth;
+                w.Height = _restoreHeight;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"WINDOW step {_windowIteration} threw: {ex.GetType().Name}: {ex.Message}");
+        }
+
+        // The log carries what was OBSERVED entering this tick and what
+        // was REQUESTED in it. The pair is the honest record: a request
+        // the server or the toolkit ignored shows up as an observation
+        // that never moves, and a green run that moved nothing says so.
+        if ((_windowIteration % 5) == 0 || _windowIteration < 4)
+        {
+            var want = useMinimize
+                ? (collapsing ? "state->Minimized" : "state->Normal")
+                : (collapsing ? "size->1x1" : $"size->{_restoreWidth:F0}x{_restoreHeight:F0}");
+            Log($"WINDOW iter {_windowIteration}/{_cyclePaths} observed " +
+                $"{beforeState}/{before.Width:F0}x{before.Height:F0}, requested {want}");
+        }
+        _windowIteration++;
+    }
+
 }

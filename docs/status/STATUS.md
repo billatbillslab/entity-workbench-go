@@ -2,10 +2,10 @@
 
 _Updated: 2026-08-19 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
 
-**Green as of `c13dfe2`:** ten suites, run **individually to completion** (AP15 — a count from
-`make test` stops at the first failing package). `entitysdk` 195.5s · `inspect` 1.8s · `shell` 3.1s ·
-`shellboot` 10.2s · `shellcmd` 285.1s · `shellpanel` 1.1s · `workbench` 2.1s · `programs` 134.9s ·
-`publish` 1.5s · `fetch` 1.0s. Zero failures. `make lint` clean. The command was
+**Green as of `HEAD`:** ten suites, run **individually to completion** (AP15 — a count from
+`make test` stops at the first failing package). `entitysdk` 200.3s (re-run after the signaling work; the sweep's own 198.4s predated it) · `inspect` 2.4s · `shell` 5.0s ·
+`shellboot` 11.0s · `shellcmd` 286.7s · `shellpanel` 3.5s · `workbench` 3.2s · `programs` 140.2s ·
+`publish` 2.2s · `fetch` 1.3s. Zero failures. `make lint` clean. The command was
 `for t in sdk inspect shell shellboot shellcmd shellpanel workbench programs publish fetch; do make test-$t; done`.
 **`fetch` is new to the list** — it had no `make` target at all until 2026-08-19 (§6d).
 
@@ -291,6 +291,39 @@ nobody prices this against our own tree again:**
   same pool or silent never-meet); `data_relay` is `policy: open` only; **no TURN credential
   mechanism exists anywhere in the corpus** (arch Q18) — build against static config and route the
   wall rather than invent a credential shape.
+
+**Piece 4, started 2026-08-19 — the carrier landed, the backend is blocked upstream.** The D20
+pre-check said "registration + a consumer" and that is right; what it did not check is whether the
+DISCOVERY surface it registers into exists. It does not:
+
+```
+$ grep -rn 'rendezvous' ../entity-system-architecture/specs/extensions/EXTENSION-DISCOVERY.md
+   (no matches)          # arch c984f93 — Version 1.0, enum still <"mdns" | "qr" | ...>
+```
+
+`PROPOSAL-DISCOVERY-RENDEZVOUS-BACKEND` is stamped **RULED 2026-08-17** and **none of its §6 fold
+has landed** — no `rendezvous` enum token, no §5.5, no version bump. §5.5 is where the mode split
+and the TOFU + successor requirements live, so the backend's whole normative content exists only in
+the proposal, and `AGENTS-STANDARD` says implement against the **landed spec**. Defining the token
+locally is AP20's exact shape one step earlier. `entity-core-go` matches the spec, not the proposal
+(`DiscoveryBackendMDNS` and nothing else) — the gap is upstream of them. Ask routed:
+`docs/architecture/reviews/DISCOVERY-RENDEZVOUS-FOLD-ASK-2026-08-19.md`. **A RULED stamp is a
+decision, not a normative surface** — we read it as landed and had to grep to find out otherwise.
+
+**The carrier half is landed spec (EXTENSION-SIGNALING v1.1) and is done.** `entitysdk/signaling.go`
+— `AppPeer.Signaling(nodePeerID)` with `Offer` / `Collect` / `Advertise` through `extDispatch` (so
+non-2xx maps to `*entitysdk.Error`, not core-go's proto-SDK), key derivation **delegated** to the
+kernel's `ext/signaling` because it is a Layer-2 algorithm — two peers whose key bytes differ
+silently never meet, and no same-impl test can see it. Plus `ExtensionsConfig.SignalingNode`, an
+opt-in hosted node: every other extension in that struct is a capability the peer *has*, this one is
+a service it runs *for other people*.
+
+Gates: three peers on the wire (node + two clients, TCP, pooled connections) meeting at a tag —
+non-destructive collect, arrival order, content-hash dedup, empty-not-404; the derivation properties
+that have no error path (mode separation, pair symmetry, determinism); and §3.4's same-provider MUST
+shown as two nodes with the same key never meeting. **The meeting gate uses two real peers on
+purpose** — one peer offering into its own node proves the bucket and not the meeting, which is the
+shape we just promoted to D22.
 
 ### 4. Publisher conformance — CLOSED 2026-08-18, the corridor emits a real signed root
 
@@ -694,12 +727,39 @@ Packet: `docs/architecture/reviews/CROSSIMPL-CONSUME-RESULT-2026-08-19.md` (to b
   headless does not run the X11 backend at all, which is where both documented predecessors
   lived. **Both original leads are now closed:** the other one — symbolizing the core dump —
   died with rotation; the `entity-avalonia` dumps are gone from
-  `/var/lib/systemd/coredump`. Pinning this needs a **fresh crash capture**: grab the dump
-  before it rotates and symbolize it in the .NET container (`dotnet-dump analyze` →
-  `clrstack`) to name the recursive pair.
+  `/var/lib/systemd/coredump`.
+  **2026-08-19 — the X11 rung was built and it is a third negative, but a much sharper one.**
+  `make smoke-xvfb-window` drives the window geometry itself under Xvfb while a program
+  paints, which is the rung between headless (no X11 at all) and the desktop (crashes,
+  dump rotated). Two runs, both survived, both with the transitions **verified to have
+  actually taken effect** rather than assumed:
+  - `MODE=resize` (no WM): 39/40 transitions, ClientSize alternating 1400x900 ↔ 1x1 with the
+    64×64 Life panel painting. Survived.
+  - `MODE=minimize WM=1` (openbox on the virtual display): 39/40 transitions,
+    `Normal ↔ Minimized`, real iconify. Survived.
+  **And the second run damaged the working hypothesis.** The theory was that minimize
+  collapses the ScrollViewer viewport to zero from above — but under openbox, `ClientSize`
+  stayed `1280x900` across every minimize. Minimize did not collapse anything. So either the
+  zero-size condition comes from the **compositor** specifically (mutter/kwin, not openbox),
+  or the viewport-collapse theory is wrong and the fault is elsewhere in the iconify path.
+  Next rung: a compositing WM in the harness, or a capture on the real desktop.
+  **The instrumentation caught itself, which is the reason to trust it.** The first version
+  read ClientSize back in the same tick it requested the change; an X11 geometry change lands
+  asynchronously, so it reported *"zero transitions"* for a run whose own log showed the
+  window collapsing twenty times. A gate that miscounts in the reassuring direction is worse
+  than no gate. It now compares against the previous tick's observation and prints, for every
+  run, how many transitions actually took effect — with an explicit "this run is NOT evidence"
+  line when that count is zero.
 - **GPU-driver SIGSEGV** (distinct, older): the mesa hardware-GL path crashes under
-  sustained compositor load. Worked around with `WB_SOFTWARE_RENDER=1`. Whether software
-  render should be the default or auto-detected is still an open product call.
+  sustained compositor load. **The product call is made (2026-08-19): software Skia is the
+  DEFAULT, hardware GL is opt-in via `WB_GPU_RENDER=1`.** Auto-detect was the other
+  candidate and was rejected — detecting a bad driver from in-process means fingerprinting
+  mesa versions, which is a guess that ages badly. The two outcomes are not symmetric: the
+  cost of software render is frames per second on an app that is mostly static text and
+  small grids, and the cost of the GPU path on an affected driver is a hard crash. A slow
+  window beats a dead one. `WB_SOFTWARE_RENDER=1` is still honored (now a no-op), and the
+  chosen mode is announced on stderr because it is the first thing a crash report needs and
+  the last thing a reporter includes.
 - **Asteroids "keys" report** — flagged by the operator, never reproduced. Key wiring was
   checked and is correct; suspected to be the GPU crash hit while interacting. A headless
   key-injection repro is still owed.

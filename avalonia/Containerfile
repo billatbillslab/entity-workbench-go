@@ -93,6 +93,7 @@ RUN dnf install -y \
         libGL \
         mesa-dri-drivers \
         xorg-x11-server-Xvfb \
+        openbox \
         ImageMagick \
     && dnf clean all
 

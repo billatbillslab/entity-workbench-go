@@ -63,19 +63,48 @@ Flags:
             .WithInterFont()
             .LogToTrace();
 
-        // GPU rendering (mesa hardware GL) intermittently SIGSEGVs on some drivers
-        // — the render itself is proven crash-free in software Skia (the headless
-        // ProgramPanelStressTests rasterize a 64×64 grid 400× with no GPU, and the
-        // Xvfb smoke runs use llvmpipe software GL). The fault is the driver path,
-        // not our paint code. Setting WB_SOFTWARE_RENDER forces CPU rendering to
-        // dodge it, without touching any render code. (Equivalent to the mesa
-        // LIBGL_ALWAYS_SOFTWARE=1 env, but a supported in-app switch.)
-        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WB_SOFTWARE_RENDER")))
+        // RENDER MODE — software by default since 2026-08-19, GPU by opt-in.
+        //
+        // GPU rendering (mesa hardware GL) intermittently SIGSEGVs on some
+        // drivers. The render itself is proven crash-free in software Skia (the
+        // headless ProgramPanelStressTests rasterize a 64×64 grid 400× with no
+        // GPU, and the Xvfb smoke runs use llvmpipe software GL), so the fault
+        // is the driver path, not our paint code.
+        //
+        // **The default is inverted for release**, and this was an open product
+        // call in STATUS rather than an oversight. The reasoning: we do not own
+        // the faulting code and cannot fix it, we cannot reliably detect a bad
+        // driver from in-process (auto-detect would mean fingerprinting mesa
+        // versions, which is a guess that ages badly), and the two outcomes are
+        // not symmetric — the cost of software render is frames per second on a
+        // desktop app that is mostly static text and small grids, while the cost
+        // of the GPU path on an affected driver is a hard crash that takes the
+        // user's session with it. A slow window beats a dead one.
+        //
+        // Reversible in one env var, both directions:
+        //   WB_GPU_RENDER=1       — opt back into hardware GL (what to try first
+        //                           when someone reports sluggish rendering)
+        //   WB_SOFTWARE_RENDER=1  — still honored; it is now the default, so
+        //                           setting it is a no-op kept for the scripts
+        //                           and docs that already pass it
+        //
+        // The chosen mode is announced on stderr because it is the first thing
+        // a crash report needs and the last thing a reporter thinks to include.
+        var gpuOptIn = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WB_GPU_RENDER"));
+        if (gpuOptIn)
+        {
+            Console.Error.WriteLine(
+                "entity-avalonia: render mode = GPU (hardware GL, WB_GPU_RENDER set) — " +
+                "if this session crashes in the driver, unset it to fall back to software");
+        }
+        else
         {
             builder = builder.With(new X11PlatformOptions
             {
                 RenderingMode = new[] { X11RenderingMode.Software },
             });
+            Console.Error.WriteLine(
+                "entity-avalonia: render mode = software Skia (default; set WB_GPU_RENDER=1 for hardware GL)");
         }
         return builder;
     }
@@ -192,6 +221,8 @@ public class App : Application
             (handle, host) => new MarkdownFilesPanel(handle, host));
         PanelRegistry.Register("query-browser", "Query Browser",
             (handle, host) => new QueryBrowserPanel(handle, host));
+        PanelRegistry.Register("handler-browser", "Handler Browser",
+            (handle, host) => new HandlerBrowserPanel(handle, host));
         PanelRegistry.Register("site-view", "Site",
             (handle, host) => new SiteViewPanel(handle, host));
         PanelRegistry.Register("shell", "Shell",

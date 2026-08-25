@@ -234,6 +234,25 @@ public sealed class PeerView : UserControl, IDisposable, IPanelHost
         }
     }
 
+    // HANDLER-BROWSER smoke surface (WB_SMOKE_HANDLERS). Same shape as
+    // the others: find the mounted panel so the driver can select and
+    // execute against it under real X11.
+    internal Panels.HandlerBrowserPanel? HandlersForSmoke
+    {
+        get
+        {
+            for (int i = 0; i < _panelStack.SlotCountForTests; i++)
+            {
+                if (_panelStack.SlotAtForTests(i).CurrentPanelControlForSmoke
+                    is Panels.HandlerBrowserPanel hp)
+                {
+                    return hp;
+                }
+            }
+            return null;
+        }
+    }
+
     // GENERIC-HOST smoke surface — the one accessor for ALL programs mounted
     // through ProgramPanel (WB_SMOKE_PROGRAM=life|snake|asteroids).
     //

@@ -33,6 +33,8 @@ import (
 	"go.entitychurch.org/entity-core-go/ext/registry/localname"
 	"go.entitychurch.org/entity-core-go/ext/revision"
 	"go.entitychurch.org/entity-core-go/ext/role"
+	"go.entitychurch.org/entity-core-go/ext/signaling"
+	signalingnode "go.entitychurch.org/entity-core-go/ext/signaling/node"
 	"go.entitychurch.org/entity-core-go/ext/subscription"
 )
 
@@ -95,6 +97,14 @@ type AppPeer struct {
 	// Nil when the extension is disabled.
 	localFilesHandler *localfiles.Handler
 
+	// nameResolution records whether the EXTENSION-REGISTRY substrate was
+	// wired at construction. Exposed via NameResolutionEnabled() rather
+	// than the handler pointers: callers ask "can this peer resolve
+	// names", never "give me the meta-resolver", and a handler accessor
+	// would invite app code to bypass the executor and call the backend
+	// directly — the protocol-first rule the SDK exists to hold.
+	nameResolution bool
+
 	// prSeqFloor is the per-publisher published-root freshness floor
 	// (published_root.go): the highest seq accepted for each peer-id,
 	// used to reject rollbacks. Process-lifetime only — see
@@ -119,6 +129,19 @@ func (a *AppPeer) OwnerCapability() entity.Entity { return a.ownerCap }
 // mount` verb (Phase E) calls StartWatching on this handler to
 // install an fsnotify watcher on a configured root.
 func (a *AppPeer) LocalFilesHandler() *localfiles.Handler { return a.localFilesHandler }
+
+// NameResolutionEnabled reports whether the EXTENSION-REGISTRY substrate
+// is wired on this peer — the meta-resolver plus the local-name backend.
+// When false, ResolveName / BindLocalName / ListLocalNames and friends
+// all fail through longest-prefix-miss with a 404 naming a handler path,
+// which is an accurate answer and a terrible message.
+//
+// A UI surfacing name resolution should check this once and say "name
+// resolution is off on this peer" rather than letting a user read a
+// dispatch 404 as "that name does not exist" — the two are opposite
+// diagnoses, and the second sends them looking for a typo in a name that
+// was never consulted.
+func (a *AppPeer) NameResolutionEnabled() bool { return a.nameResolution }
 
 // RawContentStore returns the core-go ContentStore backing this peer.
 // Exposed for extension-aware code (Phase E mount verb, etc.) that
@@ -455,13 +478,27 @@ func buildPeerOptions(cfg PeerConfig) (*builtOptions, error) {
 		)
 	}
 	// EXTENSION-REGISTRY name-resolution substrate (GUIDE-RESOLUTION §4,
-	// the `name → peer_id` rung). Opt-in (default OFF): pass
-	// &RegistryConfig{} to wire it. Off by default because (a) most peers
-	// never resolve names, and (b) the local-name handler's default-grant
-	// caps are re-minted (not deduplicated) on every bootstrap, so wiring
-	// it default-on grows a peer's rebootstrap footprint linearly — a
-	// pre-existing core-go local-name issue this work surfaced; flagged
-	// to core-go in the feedback doc. The meta-resolver consults
+	// the `name → peer_id` rung). Opt-in (default OFF) at the SDK tier:
+	// pass &RegistryConfig{} to wire it. The one reason left is that most
+	// peers never resolve names, and a library should not spend a
+	// namespace on a surface its embedder did not ask for.
+	//
+	// **The second reason is withdrawn — it was measured false on
+	// 2026-08-19.** This comment used to claim the local-name handler's
+	// default-grant caps were "re-minted (not deduplicated) on every
+	// bootstrap", growing a peer's rebootstrap footprint linearly, and
+	// that claim is what kept `entity-shell` with no name resolution at
+	// all: shellboot never set this field, so the verb had no substrate to
+	// stand on. registry_bootstrap_cost_test.go runs the operation across
+	// a five-restart SQLite series with the keypair pinned, in both arms.
+	// The registry's marginal per-restart cost is ZERO on both counters;
+	// its whole cost is +8 paths / +8 entities, once, at install. The
+	// growth originally observed is the +2 entities/restart that a
+	// registry-LESS peer pays too — core-go's, in the same family as the
+	// waived identity-rebootstrap leak, and not this extension's.
+	//
+	// shellboot enables it by default on the strength of that measurement
+	// (shellboot.Config.DisableRegistry opts out). The meta-resolver consults
 	// registered backends per the resolver-config; the local-name backend
 	// is registered onto it in assembleAppPeer once the live peer-id +
 	// store exist. EnableLocalNameResolver writes the chain entry that
@@ -501,6 +538,22 @@ func buildPeerOptions(cfg PeerConfig) (*builtOptions, error) {
 		}
 		opts = append(opts, peer.WithHandler(extnetwork.HandlerPattern, netH))
 		built.networkHandler = netH
+	}
+
+	// SIGNALING node — the rendezvous mailbox, opt-in (see
+	// SignalingNodeConfig for why this one is not default-on). The node
+	// is mode-blind by construction: it stores opaque 33-byte keys and
+	// never derives one, so it cannot tell a tag meeting from a pair
+	// meeting and has no way to act on the difference (§2.2).
+	if cfg.Extensions.SignalingNode != nil {
+		nodeOpts := []signalingnode.Option{}
+		if ep := cfg.Extensions.SignalingNode.Endpoint; ep != "" {
+			nodeOpts = append(nodeOpts, signalingnode.WithEndpoint(ep))
+		}
+		if lc := cfg.Extensions.SignalingNode.LobbyConstant; len(lc) > 0 {
+			nodeOpts = append(nodeOpts, signalingnode.WithLobbyConstant(lc))
+		}
+		opts = append(opts, peer.WithHandler(signaling.HandlerPattern, signalingnode.New(nodeOpts...)))
 	}
 
 	// LocalFiles extension: handler registered at "local/files".
@@ -698,6 +751,7 @@ func assembleAppPeer(bo *builtOptions) (*AppPeer, error) {
 		identityHandler:   bo.identityHandler,
 		ownerCap:          ownerCap,
 		localFilesHandler: bo.localFilesHandler,
+		nameResolution:    bo.registryHandler != nil && bo.localNameHandler != nil,
 	}
 
 	// Finish role extension wiring — SetupStore + SetupAuthority must

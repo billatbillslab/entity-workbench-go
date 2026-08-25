@@ -72,6 +72,28 @@ if [ "$ready" -ne 1 ]; then
 fi
 echo "    Xvfb ready on :$DISPLAY_NUM"
 
+# Optional window manager. WB_SMOKE_WM=1 starts openbox on the virtual
+# display before the app launches.
+#
+# **This exists for one reason: minimize is a window-MANAGER operation.**
+# Setting WindowState.Minimized asks the WM to iconify; with no WM on the
+# display nothing acts on it, and the driver's own counter reports zero
+# transitions (correctly — see SmokeDriver.StartWindowCycle). The open
+# managed stack overflow fires on minimize on a real desktop, and a bare
+# Xvfb cannot reach it by construction. Off by default: every other smoke
+# target is a paint test that a WM would only add reparenting noise to.
+if [ -n "${WB_SMOKE_WM:-}" ]; then
+    if command -v openbox >/dev/null 2>&1; then
+        openbox > "$OUT_DIR/wm.log" 2>&1 &
+        WM_PID=$!
+        trap 'kill $WM_PID 2>/dev/null || true; kill $XVFB_PID 2>/dev/null || true' EXIT
+        sleep 1
+        echo "    window manager: openbox (pid $WM_PID) — minimize can now take effect"
+    else
+        echo "    WARNING: WB_SMOKE_WM set but openbox is not installed; minimize will be a no-op"
+    fi
+fi
+
 # Hand the timer to the app so it self-closes inside the window.
 # We don't kill from outside — that would skip the Closing handler
 # (Bridge.Shutdown) and produce dirty exits.

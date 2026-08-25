@@ -254,6 +254,40 @@ public static class Bridge
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "QueryClose")]
     public static extern void QueryClose(long queryHandle);
 
+    // --- Handler browser panel -----------------------------------------
+    //
+    // Wake-driven on the `system/handler/` prefix: a handler registered
+    // at runtime shows up without a poll. Execution is always explicit —
+    // selecting a handler or an operation dispatches nothing, only
+    // ExecuteSelected / ExecuteCustom do.
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "HandlersOpen")]
+    public static extern IntPtr HandlersOpen(long peerHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "HandlersRegisterWake")]
+    public static extern IntPtr HandlersRegisterWake(long handlersHandle, IntPtr callback);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "HandlersRender")]
+    public static extern IntPtr HandlersRender(long handlersHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "HandlersSelectHandler")]
+    public static extern IntPtr HandlersSelectHandler(long handlersHandle, long index);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "HandlersSelectOperation")]
+    public static extern IntPtr HandlersSelectOperation(long handlersHandle, long index);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "HandlersExecuteSelected")]
+    public static extern IntPtr HandlersExecuteSelected(long handlersHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "HandlersExecuteCustom")]
+    public static extern IntPtr HandlersExecuteCustom(long handlersHandle,
+        [MarshalAs(UnmanagedType.LPStr)] string uri,
+        [MarshalAs(UnmanagedType.LPStr)] string op,
+        [MarshalAs(UnmanagedType.LPStr)] string resource);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "HandlersClose")]
+    public static extern void HandlersClose(long handlersHandle);
+
     // --- Site view panel -----------------------------------------------
     //
     // Read-projection of the SITE convention (app/site-manifest +

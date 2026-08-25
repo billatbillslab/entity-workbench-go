@@ -27,6 +27,11 @@ type Config struct {
 	ListenAddr  string
 	OpenAccess  bool
 
+	// DisableRegistry turns off the name-resolution substrate the `name`
+	// verb dispatches to. Default (false) means ON — see
+	// shellboot.Config.DisableRegistry for the measurement behind that.
+	DisableRegistry bool
+
 	// PeerConfig is forwarded raw to shellboot for tests that need a
 	// pre-built keypair or extra peer options. Most main() callers
 	// leave it zero and let shellboot derive everything from the
@@ -55,6 +60,8 @@ func New(cfg Config) (*App, error) {
 		StoragePath: cfg.StoragePath,
 		ListenAddr:  cfg.ListenAddr,
 		OpenAccess:  cfg.OpenAccess,
+
+		DisableRegistry: cfg.DisableRegistry,
 	}
 	// Honor PeerConfig.RawOptions for tests that pre-build options;
 	// the rest of PeerConfig is reconstructed by shellboot from the
@@ -113,9 +120,23 @@ func drainTreeEvents(peer *entitysdk.AppPeer) {
 // the test owns) and wrap it in a workspace + Shell.
 func newFromPeerConfig(cfg Config) (*App, error) {
 	peerCfg := cfg.PeerConfig
+	// Keep this path's substrate identical to the shellboot one. It is a
+	// test-only door, and a test-only door that quietly lacks an extension
+	// the shipped path has is how a feature passes its suite and fails in
+	// the binary — the caller pre-builds a keypair, not a different product.
+	// An explicit Registry setting on the forwarded PeerConfig wins.
+	if !cfg.DisableRegistry && peerCfg.Extensions.Registry == nil {
+		peerCfg.Extensions.Registry = &entitysdk.RegistryConfig{}
+	}
 	peer, err := entitysdk.CreatePeer(peerCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create local peer: %w", err)
+	}
+	if !cfg.DisableRegistry {
+		if _, err := peer.EnsureResolverConfig(); err != nil {
+			_ = peer.Close()
+			return nil, fmt.Errorf("resolver-config refused at load: %w", err)
+		}
 	}
 	drainTreeEvents(peer)
 	alias := cfg.LocalAlias

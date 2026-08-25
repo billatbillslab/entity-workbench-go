@@ -1,8 +1,11 @@
 package entitysdk
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+
+	cbor "github.com/fxamacker/cbor/v2"
 
 	"go.entitychurch.org/entity-core-go/core/types"
 )
@@ -563,5 +566,92 @@ func TestValidateResolverConfig_DoesNotRejectPatterns(t *testing.T) {
 			t.Errorf("pattern %q was rejected (%v); the grammar is closed and every non-* byte is a "+
 				"literal, so every string is a well-formed pattern (REG-DISPATCH-GRAMMAR-1)", pattern, err)
 		}
+	}
+}
+
+// TestResolverConfig_HintsRoundTripIntact answers arch's R-9
+// (COHORT-OPEN-ITEMS §1a.2): does this SDK preserve
+// `resolver_chain[].hints` across a read-modify-write?
+//
+// The failure it guards is specific and silent. `hints` carries two
+// PINNED keys — `max_ttl` (§6a.9.1's resolver ceiling) and `neg_ttl` —
+// so an SDK layer that reconstructed a chain entry field-by-field and
+// dropped what it did not recognize would **disarm a security control
+// while every test stayed green**. Nothing would fail; a ceiling would
+// simply stop existing.
+//
+// We do not reconstruct — `ResolverConfigDataFromEntity` decodes the
+// whole struct and `ToEntity` re-encodes it, so `hints` survives by
+// construction rather than by care. That is exactly the kind of
+// property that a well-meaning refactor into an explicit field list
+// removes without noticing, which is why it is pinned rather than
+// argued.
+//
+// The unknown key is the load-bearing row: the pinned two are what we
+// know today, and the whole point is surviving the ones declared after
+// this test was written.
+//
+// Tier: contract pin.
+func TestResolverConfig_HintsRoundTripIntact(t *testing.T) {
+	ap, err := CreatePeer(PeerConfig{Extensions: ExtensionsConfig{Registry: &RegistryConfig{}}})
+	if err != nil {
+		t.Fatalf("CreatePeer: %v", err)
+	}
+	defer ap.Close()
+
+	maxTTL, err := cbor.Marshal(uint64(30000))
+	if err != nil {
+		t.Fatalf("marshal max_ttl: %v", err)
+	}
+	negTTL, err := cbor.Marshal(uint64(5000))
+	if err != nil {
+		t.Fatalf("marshal neg_ttl: %v", err)
+	}
+	future, err := cbor.Marshal("a key declared after this test was written")
+	if err != nil {
+		t.Fatalf("marshal future key: %v", err)
+	}
+
+	cfg := DefaultResolverConfig()
+	cfg.ResolverChain[0].Hints = map[string]cbor.RawMessage{
+		"max_ttl":            maxTTL,
+		"neg_ttl":            negTTL,
+		"some_future_pinned": future,
+	}
+	if err := ap.InstallResolverConfig(cfg); err != nil {
+		t.Fatalf("InstallResolverConfig: %v", err)
+	}
+
+	read, found, err := ap.ResolverConfig()
+	if err != nil {
+		t.Fatalf("ResolverConfig: %v", err)
+	}
+	if !found || len(read.ResolverChain) != 1 {
+		t.Fatalf("read back %d chain entries, found=%v", len(read.ResolverChain), found)
+	}
+	got := read.ResolverChain[0].Hints
+	if len(got) != 3 {
+		t.Fatalf("hints round-tripped %d of 3 keys (%v); an SDK that drops a hint it does not "+
+			"recognize disarms §6a.9.1's resolver ceiling with every test still green", len(got), got)
+	}
+	for key, want := range map[string]cbor.RawMessage{
+		"max_ttl": maxTTL, "neg_ttl": negTTL, "some_future_pinned": future,
+	} {
+		if !bytes.Equal(got[key], want) {
+			t.Errorf("hints[%q] = %x, want %x", key, got[key], want)
+		}
+	}
+
+	// And a second write of what we read is byte-stable — the
+	// read-modify-write an operator tool actually performs.
+	if err := ap.InstallResolverConfig(read); err != nil {
+		t.Fatalf("re-install of the read config: %v", err)
+	}
+	again, _, err := ap.ResolverConfig()
+	if err != nil {
+		t.Fatalf("ResolverConfig (second): %v", err)
+	}
+	if len(again.ResolverChain[0].Hints) != 3 {
+		t.Errorf("hints lost on the second round trip (%d keys)", len(again.ResolverChain[0].Hints))
 	}
 }

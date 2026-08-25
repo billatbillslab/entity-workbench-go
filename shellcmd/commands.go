@@ -209,6 +209,15 @@ func init() {
 		Handler: cmdPeer,
 	})
 	r.Register(Command{
+		Name:  "name",
+		Usage: "name <ls|resolve|bind|unbind|config> [args]",
+		Help: "Local name book + name resolution (EXTENSION-REGISTRY §11.2). " +
+			"'name bind <name> <@alias|peer-id>' makes a name resolve for THIS peer only; " +
+			"'name resolve <name> [-pin <peer-id>]' walks the resolver chain and reports the rung it stops at; " +
+			"'name config' shows which backends each name shape is eligible for.",
+		Handler: cmdName,
+	})
+	r.Register(Command{
 		Name:    "identity",
 		Usage:   "identity <list|create|use|bootstrap> [args]",
 		Help:    "Manage V7 identities + run the identity-aware bootstrap ceremony on the local peer.",

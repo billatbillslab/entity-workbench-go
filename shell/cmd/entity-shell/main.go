@@ -42,6 +42,9 @@ Flags:
                       wildcard capabilities. Production peers should
                       configure scoped grants via the role extension.
                       Required for the prototype multi-peer guide.
+  -disable-registry   Turn OFF name resolution (EXTENSION-REGISTRY).
+                      On by default; the 'name' verb needs it. Costs
+                      +8 paths once, nothing per restart.
   -version            Print the binary version and exit
 
 Run 'entity-shell help' inside the REPL for command details.
@@ -55,6 +58,7 @@ func main() {
 	storagePath := flag.String("storage-path", "", "path to the SQLite DB (use \":memory:\" for in-process SQL)")
 	listenAddr := flag.String("listen", "", "TCP listener address for inbound connections (empty = no listener)")
 	openAccess := flag.Bool("open-access", false, "DEV: grant wildcard capabilities to all connecting peers")
+	disableRegistry := flag.Bool("disable-registry", false, "turn off the EXTENSION-REGISTRY name-resolution substrate (the `name` verb needs it)")
 	showVersion := flag.Bool("version", false, "print the binary version and exit")
 	flag.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	flag.Parse()
@@ -76,6 +80,8 @@ func main() {
 		StoragePath: *storagePath,
 		ListenAddr:  *listenAddr,
 		OpenAccess:  *openAccess,
+
+		DisableRegistry: *disableRegistry,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "entity-shell: %v\n", err)

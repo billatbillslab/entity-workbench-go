@@ -231,11 +231,18 @@ func (a *AppPeer) ResolveNamePinned(name, expectPeerID string) (*Resolution, err
 // receiver* through the local-name backend. Returns the binding's
 // content hash. transports may be nil (resolution still yields the
 // peer_id; reach then relies on a separately-established connection).
-func (a *AppPeer) BindLocalName(name, targetPeerID string, transports []hash.Hash) (hash.Hash, error) {
+//
+// The rest of the name book's upkeep — list, unbind, re-point the
+// transports — lives in local_name.go. Options (WithNotes) are declared
+// there too.
+func (a *AppPeer) BindLocalName(name, targetPeerID string, transports []hash.Hash, opts ...BindOption) (hash.Hash, error) {
 	req := types.LocalNameBindRequestData{
 		Name:         name,
 		TargetPeerID: targetPeerID,
 		Transports:   transports,
+	}
+	for _, opt := range opts {
+		opt(&req)
 	}
 	reqEnt, err := req.ToEntity()
 	if err != nil {

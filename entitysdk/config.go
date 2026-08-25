@@ -267,6 +267,20 @@ type ExtensionsConfig struct {
 	// PeerLivenessAll / OnPeerLivenessChange.
 	Network *NetworkConfig
 
+	// SignalingNode wires a `system/signaling` rendezvous NODE — the
+	// mailbox other peers offer into and collect from
+	// (EXTENSION-SIGNALING §4/§5).
+	//
+	// **Default OFF, unlike the rest of this struct**, and the asymmetry
+	// is the point: every other extension here is a capability the peer
+	// has, while this one is a SERVICE the peer runs for other people.
+	// It holds their blobs, it is what §3.4's same-provider MUST points
+	// at, and a peer that starts one by accident is a rendezvous point
+	// nobody chose and nobody watches. Consuming a node needs nothing
+	// from this field — AppPeer.Signaling(nodePeerID) dispatches to
+	// whichever node the pool selected.
+	SignalingNode *SignalingNodeConfig
+
 	// Registry toggles the EXTENSION-REGISTRY name-resolution substrate
 	// — the meta-resolver (system/registry:resolve) plus the local-name
 	// backend (system/registry/local-name) that backs the `name →
@@ -284,6 +298,21 @@ type ExtensionsConfig struct {
 // enabled. Bind runs post-construction so the handler can dial and
 // evict through the live peer.
 type NetworkConfig struct{ Disabled bool }
+
+// SignalingNodeConfig configures a hosted `system/signaling` node.
+// Presence of the struct is the opt-in; the zero value runs a node on
+// the §4.5 defaults (8192-byte blobs, 32 blobs per bucket, 60s TTL).
+type SignalingNodeConfig struct {
+	// Endpoint is the reachable address this node advertises to
+	// clients (§4.5). Empty advertises no endpoint, which is honest
+	// for an in-process node and useless for a hosted one.
+	Endpoint string
+	// LobbyConstant overrides §2.2's named lobby default. **Both arms
+	// must use the same one**, so an override is only safe when
+	// clients read it out of `advertise` rather than assuming — which
+	// is why the SDK's Advertise doc says to.
+	LobbyConstant []byte
+}
 
 // RegistryConfig wires the system/registry resolution substrate. A
 // non-nil value with Disabled=false turns it on; nil leaves it off.
