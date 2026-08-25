@@ -7,7 +7,6 @@ import (
 	"go.entitychurch.org/entity-core-go/core/capability"
 	"go.entitychurch.org/entity-core-go/core/entity"
 	"go.entitychurch.org/entity-core-go/core/hash"
-	"go.entitychurch.org/entity-core-go/core/peer"
 	"go.entitychurch.org/entity-core-go/core/types"
 )
 
@@ -68,12 +67,12 @@ func (a *AppPeer) MintCrossPeerChainCapability(remotePeerID string, grants []typ
 			"MintCrossPeerChainCapability requires at least one grant entry")
 	}
 
-	sess, ok := a.findConnectionSession(remotePeerID)
-	if !ok || sess.Capability == nil {
+	parentCap, ok := a.findConnectionCapability(remotePeerID)
+	if !ok || parentCap == nil {
 		return entity.Entity{}, NewError(404, "no_connection_grant",
 			fmt.Sprintf("no connection-grant capability on file for remote peer %s — Connect first", remotePeerID))
 	}
-	parent := *sess.Capability
+	parent := *parentCap
 
 	// Core-go now runs envelope-signature ingest at the
 	// end of `PerformConnect`, so the parent cap's signature + granter
@@ -200,20 +199,32 @@ func (a *AppPeer) BundleCrossPeerChain(leafCap entity.Entity) (map[hash.Hash]ent
 	return capability.CollectChainBundle(leafCap, a.peer.Store(), a.peer.LocationIndex())
 }
 
-// findConnectionSession returns the session state for the named remote
-// peer if a live connection exists. The session carries Capability (the
-// B-conferred connection grant) and Envelope (the AUTHENTICATE_RESPONSE,
-// whose Included carries the cap's signature + granter identity).
-func (a *AppPeer) findConnectionSession(remotePeerID string) (peer.Session, bool) {
+// findConnectionCapability returns the B-conferred connection-grant capability
+// for the named remote peer, if a live connection exists.
+//
+// ⚠️ It deliberately returns the CAPABILITY, not the `peer.Session` that carries
+// it. `peer.Session` holds `requestSeq atomic.Int64`, which `Connection.Execute`
+// increments on EVERY outgoing request — and core-go's own comment on the type
+// says the increment must be atomic precisely "because concurrent Execute
+// callers race on it before reaching the mutex" (core/peer/connection.go,
+// `Session`). This helper used to `return *sess`, copying the session by value:
+// a plain, non-atomic read of a counter another goroutine may be mid-`Add` on.
+//
+// That is a real race, not a lint nit — `go vet` reports it as "return copies
+// lock value ... contains sync/atomic.noCopy", which is exactly what noCopy
+// exists to say. Reading only the field the caller needs removes the copy and
+// the race with it. Do not widen this back to returning a Session: if a future
+// caller needs Envelope too, read that field here as well rather than copying
+// the struct.
+func (a *AppPeer) findConnectionCapability(remotePeerID string) (*entity.Entity, bool) {
 	for _, c := range a.peer.Connections() {
 		sess := c.Session()
 		if sess == nil {
 			continue
 		}
 		if string(sess.RemotePeerID) == remotePeerID {
-			return *sess, true
+			return sess.Capability, true
 		}
 	}
-	return peer.Session{}, false
+	return nil, false
 }
-

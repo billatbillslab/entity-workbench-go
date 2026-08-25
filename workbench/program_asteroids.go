@@ -37,8 +37,17 @@ package workbench
 // claim was wrong.
 //
 // The honest cost: a derived port is ADDITIONAL work per tick, not a substitute
-// — two evals instead of one. Measured (F5): step 39,082 ops, display list 6,092
-// ops, i.e. the port adds ~16%.
+// — two evals instead of one. Measured (F5, 24 slots / 3 live): step 3,750 ops,
+// display list 924 ops, i.e. the port adds ~25%.
+//
+// ⚠️ Those figures moved by more than 10x during the probe, and NOT because
+// anything got faster: the step was first reported at 68,482, then 39,082, and is
+// now 3,750. Every drop was a self-inflicted lowering error being removed (a
+// thrice-recomputed collision scan; then gathering over all 24 SLOTS when 3 were
+// live). The lesson is written up in the report's §4.0/§7 and is the reason the
+// live sublists below exist: an op count measures OUR EXPRESSION, not compute.
+// If you change a lowering here, re-run F5 and re-sync the report — and if a
+// number surprises you, decompose it before you believe it.
 //
 // The step expression is the product copy of the Exp-F probe
 // (entitysdk/exp_compute_asteroids_test.go — the frozen experiment record that
@@ -100,6 +109,24 @@ const (
 	astLCGMul = uint64(1103515245)
 	astLCGAdd = uint64(12345)
 	astLCGMod = uint64(2147483648)
+
+	// --- wave respawn --------------------------------------------------------
+	//
+	// When the last asteroid dies the step seeds a new wave. No new capability:
+	// the RNG stream is already in state and already advances every tick, so a
+	// wave is a pure function of (state, input) like everything else.
+	//
+	// The ring is centred on the SHIP at the same radius and drift astSeedState
+	// uses, so a respawned wave is indistinguishable from the opening one — and
+	// "clear of the ship" is true BY CONSTRUCTION (every asteroid lands exactly
+	// astWaveDist away) rather than by rejection sampling, which a pure step
+	// cannot do anyway: there is no loop to retry in.
+	astWaveCount = uint64(4)                  // asteroids per wave; matches astSeedState
+	astWaveDist  = int64(80) * astFP          // ring radius — astSeedState's
+	astWaveSpd   = int64(96)                  // drift magnitude — astSeedState's
+	astWaveVeer  = uint64(3)                  // velocity heading = spawn angle + this
+	astWaveSize  = uint64(3)                  // fresh asteroids are full size
+	astWaveArc   = astRotSteps / astWaveCount // even spacing around the ring
 
 	// astCapacity is the fixed mobj cap. Slot 0 is the ship by convention.
 	// A fixed-capacity array with a live flag is how the VARIABLE actor set is
@@ -470,7 +497,7 @@ func (m *AsteroidsGameModel) evalStep() (*astWireState, error) {
 
 // refreshDisplay re-derives the display-list output port from the current state.
 // This is the SECOND eval per tick — the honest, measured cost of a derived port
-// (~16% on top of the step).
+// (~25% on top of the step: 924 ops against the step's 3,750, F5).
 func (m *AsteroidsGameModel) refreshDisplay() error {
 	data, err := m.evalExpr(m.displayPath, astDisplayType)
 	if err != nil {
@@ -639,18 +666,25 @@ func buildAsteroidsStepExpr(ap *entitysdk.AppPeer, statePath, inputPath string) 
 
 	// --- cross-actor spatial query (the O(N^2) all-pairs core) --------------
 
-	// bulletHits(j): is asteroid j hit by any live bullet? filter+length over
-	// the whole frozen actor set. This is the capturing-closure shape F-D2
-	// punishes (the enclosing let's arrays are captured per element) — which is
-	// exactly why this probe is worth measuring on Axis-1.
+	// bulletHits(j): is asteroid j hit by any live bullet? filter+length over the
+	// LIVE BULLET list ("bull", bound once below) — not over every slot.
+	//
+	// THE LIVE-LIST DISCIPLINE. The naive lowering scanned all CAP slots and asked
+	// each "are you a bullet, and do you overlap me?" — but a fixed-cap array is
+	// mostly free slots, so ~21 of 24 answers were "I am not a bullet".
+	// Precomputing the bullet list once (O(CAP)) and scanning THAT makes the cost
+	// O(asteroids x bullets) — the actual size of the problem — instead of
+	// O(CAP^2). The `kind==bullet` test disappears too: the list carries it.
+	//
+	// This is the capturing-closure shape F-D2 punishes (the enclosing let's
+	// arrays are captured per element), which is why shrinking the COLLECTION pays
+	// so much more than shrinking the body.
 	bulletHitsRaw := func(j *entitysdk.Builder) *entitysdk.Builder {
 		return c.Compare("gt",
 			c.Length(c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-				"collection": idxLit,
+				"collection": sc("bull"),
 				"fn": c.Lambda([]string{"b"},
-					c.Logic("and",
-						c.Compare("eq", at("kinds", sc("b")), c.Literal(AsteroidsBullet)),
-						c.Compare("lt", distSq(j, sc("b")), astHitRadiusSq(j)))),
+					c.Compare("lt", distSq(j, sc("b")), astHitRadiusSq(j))),
 			})),
 			c.Literal(uint64(0)))
 	}
@@ -667,35 +701,39 @@ func buildAsteroidsStepExpr(ap *entitysdk.AppPeer, statePath, inputPath string) 
 		return c.Index(sc("hitb"), j)
 	}
 
-	// bulletSpent(b): did bullet b hit any asteroid this tick?
+	// bulletSpent(b): did bullet b hit any asteroid this tick? Scans the LIVE
+	// ASTEROID list ("ast"), not every slot — same discipline as bulletHitsRaw.
 	bulletSpent := func(b *entitysdk.Builder) *entitysdk.Builder {
 		return c.Compare("gt",
 			c.Length(c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-				"collection": idxLit,
+				"collection": sc("ast"),
 				"fn": c.Lambda([]string{"a"},
-					c.Logic("and",
-						c.Compare("eq", at("kinds", sc("a")), c.Literal(AsteroidsAsteroid)),
-						c.Compare("lt", distSq(sc("a"), b), astHitRadiusSq(sc("a"))))),
+					c.Compare("lt", distSq(sc("a"), b), astHitRadiusSq(sc("a")))),
 			})),
 			c.Literal(uint64(0)))
 	}
 
-	// shipHit: does any asteroid overlap the ship (slot 0)?
-	shipHit := c.Compare("gt",
+	// shipHitRaw: does any asteroid overlap the ship (slot 0)? Scans "ast".
+	//
+	// Bound ONCE as "shipdead" in the `live` let below: it is read in two places
+	// (the ship's own think and the state's status field) and is a function of the
+	// frozen previous state alone — the same repeated-scan mistake the bulletHits
+	// hoist fixed, at a smaller multiple. Hoisting costs nothing in semantics:
+	// `status` already forced it unconditionally on every live tick.
+	shipHitRaw := c.Compare("gt",
 		c.Length(c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-			"collection": idxLit,
+			"collection": sc("ast"),
 			"fn": c.Lambda([]string{"a"},
-				c.Logic("and",
-					c.Compare("eq", at("kinds", sc("a")), c.Literal(AsteroidsAsteroid)),
-					c.Compare("lt",
-						distSq(sc("a"), c.Literal(uint64(0))),
-						c.Arithmetic("mul",
-							c.Arithmetic("add", c.Literal(astShipRadius),
-								c.Arithmetic("mul", c.Literal(astAstRadius), at("szs", sc("a")))),
-							c.Arithmetic("add", c.Literal(astShipRadius),
-								c.Arithmetic("mul", c.Literal(astAstRadius), at("szs", sc("a")))))))),
+				c.Compare("lt",
+					distSq(sc("a"), c.Literal(uint64(0))),
+					c.Arithmetic("mul",
+						c.Arithmetic("add", c.Literal(astShipRadius),
+							c.Arithmetic("mul", c.Literal(astAstRadius), at("szs", sc("a")))),
+						c.Arithmetic("add", c.Literal(astShipRadius),
+							c.Arithmetic("mul", c.Literal(astAstRadius), at("szs", sc("a"))))))),
 		})),
 		c.Literal(uint64(0)))
+	shipHit := sc("shipdead")
 
 	// --- the fixed-cap slot allocator (the concat sidestep) -----------------
 	//
@@ -704,26 +742,34 @@ func buildAsteroidsStepExpr(ap *entitysdk.AppPeer, statePath, inputPath string) 
 	// own slot). A free slot claims a spawn by its RANK among free slots:
 	// rank 0 goes to the new bullet (if firing), the rest to splits in order.
 	//
-	// This is the fixed-cap tax, and it is O(CAP) per free slot (the rank
-	// filter) on top of O(CAP) per actor (collision) — see F-F2.
+	// This is the fixed-cap tax, and it is O(frees) per free slot (the rank
+	// filter) on top of O(asteroids x bullets) collision — see F-F2.
+	//
+	// `splits` scans the live ASTEROID list: only an asteroid can split, so the
+	// kind test is the list's job. Order is preserved (ast is itself a filter over
+	// ascending idxLit), which the rank-based slot claim below depends on.
 	splits := c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-		"collection": idxLit,
+		"collection": sc("ast"),
 		"fn": c.Lambda([]string{"j"},
 			c.Logic("and",
-				c.Logic("and",
-					c.Compare("eq", at("kinds", sc("j")), c.Literal(AsteroidsAsteroid)),
-					c.Compare("gt", at("szs", sc("j")), c.Literal(uint64(1)))),
+				c.Compare("gt", at("szs", sc("j")), c.Literal(uint64(1))),
 				bulletHits(sc("j")))),
 	})
 
-	// rank(i): how many free slots precede slot i.
+	// rank(i): how many free slots precede slot i — scanned over the precomputed
+	// FREE list ("frees"), so the per-element test is one compare instead of
+	// index+eq+and.
+	//
+	// NOTE what does NOT go away: this is still O(frees) per free slot, and free
+	// slots are the majority of a fixed-cap array. It is the same shape as the
+	// framebuffer's pixel loop — a prefix count is a SCATTER an imperative
+	// allocator does in O(1) with a bump pointer, and a pure gather must pay a
+	// scan per claimant to discover it. This scan is the residual fixed-cap tax
+	// and the step's remaining O(CAP^2) term; `sort` is what would retire it.
 	rank := func(i *entitysdk.Builder) *entitysdk.Builder {
 		return c.Length(c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-			"collection": idxLit,
-			"fn": c.Lambda([]string{"j"},
-				c.Logic("and",
-					c.Compare("lt", sc("j"), i),
-					c.Compare("eq", at("kinds", sc("j")), c.Literal(AsteroidsFree)))),
+			"collection": sc("frees"),
+			"fn":         c.Lambda([]string{"j"}, c.Compare("lt", sc("j"), i)),
 		}))
 	}
 
@@ -801,6 +847,48 @@ func buildAsteroidsStepExpr(ap *entitysdk.AppPeer, statePath, inputPath string) 
 			"ttl": c.Arithmetic("sub", at("ttls", sc("i")), c.Literal(uint64(1))),
 		}))
 
+	// waveSpawn(j): the j-th asteroid of a fresh wave, on a ring around the ship.
+	//
+	// ⚠️ F-D3 — READ THE HIGH BITS. The heading is (rng >> 16) % 16, never
+	// rng % 16: astLCGMod is 2^31, a power of two, and the low k bits of such an
+	// LCG have period 2^k. `rng % 16` would give a heading cycling every 16 ticks
+	// that still LOOKS random on screen — which is exactly how F-D3 got through
+	// the first time. F8 asserts this property directly (low bits must not change
+	// the heading; high bits must).
+	//
+	// One RNG draw rotates the whole wave; the asteroids are then spaced by
+	// astWaveArc, which keeps them distinct without a per-asteroid draw — there is
+	// no way to advance the stream j times inside a pure expression anyway.
+	waveSpawn := func(j *entitysdk.Builder) *entitysdk.Builder {
+		ang := c.Arithmetic("mod",
+			c.Arithmetic("add",
+				c.Arithmetic("mod",
+					floorDiv(sc("rng"), c.Literal(uint64(65536))),
+					c.Literal(astRotSteps)),
+				c.Arithmetic("mul", j, c.Literal(astWaveArc))),
+			c.Literal(astRotSteps))
+		return c.Let(map[string]*entitysdk.Builder{"wa": ang},
+			c.Let(map[string]*entitysdk.Builder{
+				// the drift heading veers off the spawn radial, so a fresh wave
+				// does not fly straight at (or straight away from) the ship.
+				"wv": c.Arithmetic("mod",
+					c.Arithmetic("add", sc("wa"), c.Literal(astWaveVeer)),
+					c.Literal(astRotSteps)),
+			}, c.Construct(astStateType+"/actor", map[string]*entitysdk.Builder{
+				"kind": c.Literal(AsteroidsAsteroid),
+				// ship-relative, so clearance is structural.
+				"x": wrap(at("xs", c.Literal(uint64(0))),
+					c.Index(c.Literal(astCosTable(astWaveDist)), sc("wa"))),
+				"y": wrap(at("ys", c.Literal(uint64(0))),
+					c.Index(c.Literal(astSinTable(astWaveDist)), sc("wa"))),
+				"vx":  c.Index(c.Literal(astCosTable(astWaveSpd)), sc("wv")),
+				"vy":  c.Index(c.Literal(astSinTable(astWaveSpd)), sc("wv")),
+				"rot": sc("wa"),
+				"sz":  c.Literal(astWaveSize),
+				"ttl": c.Literal(uint64(0)),
+			})))
+	}
+
 	// free slot: claim a spawn by rank, else stay free. All the expensive work
 	// (rank, splits) sits INSIDE branches per F-E2b where it is affordable to,
 	// but `rank` is needed by both arms so it binds once here.
@@ -838,7 +926,14 @@ func buildAsteroidsStepExpr(ap *entitysdk.AppPeer, statePath, inputPath string) 
 				"sz":  c.Arithmetic("sub", at("szs", sc("src")), c.Literal(uint64(1))),
 				"ttl": c.Literal(uint64(0)),
 			})),
-			free))))
+			// No split wants this slot — but if the FIELD IS EMPTY, the first
+			// astWaveCount free slots seed a new wave. "noast" reads the frozen
+			// previous state, so a wave lands the tick AFTER the last asteroid
+			// dies, never in the same tick that kills it.
+			c.If(c.Logic("and", sc("noast"),
+				c.Compare("lt", sc("j"), c.Literal(astWaveCount))),
+				waveSpawn(sc("j")),
+				free)))))
 
 	// --- the actor map (array-of-structs, IN-FLIGHT) ------------------------
 	//
@@ -860,14 +955,12 @@ func buildAsteroidsStepExpr(ap *entitysdk.AppPeer, statePath, inputPath string) 
 		})
 	}
 
-	// scored: how many asteroids died this tick (hit and size 1).
+	// scored: how many asteroids died this tick (hit and size 1). Scans "ast".
 	scored := c.Length(c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-		"collection": idxLit,
+		"collection": sc("ast"),
 		"fn": c.Lambda([]string{"j"},
 			c.Logic("and",
-				c.Logic("and",
-					c.Compare("eq", at("kinds", sc("j")), c.Literal(AsteroidsAsteroid)),
-					c.Compare("eq", at("szs", sc("j")), c.Literal(uint64(1)))),
+				c.Compare("eq", at("szs", sc("j")), c.Literal(uint64(1))),
 				bulletHits(sc("j")))),
 	}))
 
@@ -895,18 +988,49 @@ func buildAsteroidsStepExpr(ap *entitysdk.AppPeer, statePath, inputPath string) 
 			c.Literal(uint64(0))),
 	}))
 
-	// F-E2b: `firing`/`splits` bind INSIDE the live branch. let is eager, so
-	// binding them outside would run the whole O(N^2) split scan on every tick
-	// of a finished game.
+	// F-E2b: these bind INSIDE the live branch. let is eager, so binding them
+	// outside would run the whole split scan on every tick of a finished game.
+	//
+	// let* evaluates in SORTED NAME ORDER, and every name here is chosen to sort
+	// before its readers: ast/bull/frees (the live sublists, which depend on
+	// nothing but the frozen arrays) < hitb (reads bull) and shipdead (reads ast)
+	// < splits (reads ast + hitb). Renaming any of these can silently break the
+	// dependency order — the sort IS the topology.
 	live := c.Let(map[string]*entitysdk.Builder{
+		// the three live sublists — each O(CAP) ONCE, so that every cross-actor
+		// query above is O(live) instead of O(CAP). This is the live-list fix.
+		"ast": c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
+			"collection": idxLit,
+			"fn": c.Lambda([]string{"a"},
+				c.Compare("eq", at("kinds", sc("a")), c.Literal(AsteroidsAsteroid))),
+		}),
+		"bull": c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
+			"collection": idxLit,
+			"fn": c.Lambda([]string{"b"},
+				c.Compare("eq", at("kinds", sc("b")), c.Literal(AsteroidsBullet))),
+		}),
 		"firing": bit(AsteroidsKeyFire),
-		// let* evaluates in SORTED name order, so "hitb" lands before "splits"
-		// and splits can see it. The name is chosen to sort that way.
+		"frees": c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
+			"collection": idxLit,
+			"fn": c.Lambda([]string{"j"},
+				c.Compare("eq", at("kinds", sc("j")), c.Literal(AsteroidsFree))),
+		}),
+		// hitb stays indexed by SLOT (all CAP entries) because its readers hold
+		// slots — but only an ASTEROID can be hit, so the scan is guarded. This is
+		// a pure guard, not a semantic change: every non-asteroid slot has sz=0,
+		// hence hit radius 0, hence distSq < 0, hence false already.
 		"hitb": c.BuiltinsCall("map", map[string]*entitysdk.Builder{
 			"collection": idxLit,
-			"fn":         c.Lambda([]string{"j"}, bulletHitsRaw(sc("j"))),
+			"fn": c.Lambda([]string{"j"},
+				c.If(c.Compare("eq", at("kinds", sc("j")), c.Literal(AsteroidsAsteroid)),
+					bulletHitsRaw(sc("j")),
+					c.Literal(false))),
 		}),
-		"splits": splits,
+		// the wave trigger: the field was empty as of the frozen previous state.
+		// Sorts after "ast", which it reads.
+		"noast":    c.Compare("eq", c.Length(sc("ast")), c.Literal(uint64(0))),
+		"shipdead": shipHitRaw,
+		"splits":   splits,
 	}, alive)
 
 	// The frozen-when-dead tick returns `s` verbatim — same entity, same hash
@@ -1042,12 +1166,26 @@ func buildAsteroidsDisplayExpr(ap *entitysdk.AppPeer, statePath string) *entitys
 		"szs":   c.Field(sc("s"), "szs"),
 		"xs":    c.Field(sc("s"), "xs"),
 		"ys":    c.Field(sc("s"), "ys"),
+		// the live-list fix, here too: a display list is O(DRAWABLES) by
+		// definition, and a free slot is not a drawable. The naive lowering built a
+		// full 4-vertex quad (8 trig lookups + 8 multiply-adds) for all CAP slots
+		// and the consumer threw ~21 of 24 away — Render() has always skipped
+		// kind==free. Emitting them was pure waste, and it made the port's measured
+		// cost O(slots) while we claimed O(actors). The output contract does not
+		// change: the arrays are simply shorter, and Render() finds nothing to
+		// skip.
+	}, c.Let(map[string]*entitysdk.Builder{
+		"live": c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
+			"collection": c.Literal(indices),
+			"fn": c.Lambda([]string{"i"},
+				c.Compare("neq", at("kinds", sc("i")), c.Literal(AsteroidsFree))),
+		}),
 	}, c.Let(map[string]*entitysdk.Builder{
 		"quads": c.BuiltinsCall("map", map[string]*entitysdk.Builder{
-			"collection": c.Literal(indices),
+			"collection": sc("live"),
 			"fn":         quadFn,
 		}),
-	}, c.Construct(astDisplayType, outFields))))
+	}, c.Construct(astDisplayType, outFields)))))
 }
 
 // buildAsteroidsFramebuffer lowers the FRAMEBUFFER output port: a fbW x fbH

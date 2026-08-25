@@ -108,6 +108,25 @@ const (
 	astLCGMul = uint64(1103515245)
 	astLCGAdd = uint64(12345)
 	astLCGMod = uint64(2147483648)
+
+	// --- wave respawn (F8) ---------------------------------------------------
+	//
+	// When the last asteroid dies the step seeds a new wave. This needs no new
+	// capability: the RNG stream is already in state and already advances every
+	// tick, so a wave is a pure function of (state, input) like everything else.
+	//
+	// The spawn ring is centred on the SHIP, at the same radius and drift the
+	// initial seed uses, so a respawned wave is indistinguishable from the opening
+	// one. Placing it relative to the ship is what makes "clear of the ship" true
+	// BY CONSTRUCTION (every asteroid lands exactly astWaveDist away) rather than
+	// by rejection sampling — which a pure step cannot do anyway, since there is
+	// no loop to retry in.
+	astWaveCount = uint64(4)                  // asteroids per wave; matches astSeedState
+	astWaveDist  = int64(80) * astFP          // ring radius, world units — astSeedState's
+	astWaveSpd   = int64(96)                  // drift magnitude — astSeedState's
+	astWaveVeer  = uint64(3)                  // velocity heading = spawn angle + this
+	astWaveSize  = uint64(3)                  // fresh asteroids are full size
+	astWaveArc   = astRotSteps / astWaveCount // even spacing around the ring
 )
 
 // astCapacity is the fixed mobj cap. Slot 0 is the ship by convention.
@@ -330,6 +349,15 @@ func astNext(s astState, keys uint64) astState {
 		}
 	}
 
+	// the wave trigger: no asteroid survives in the FROZEN previous state.
+	noAst := true
+	for j := 0; j < astCapacity; j++ {
+		if s.Kinds[j] == astAsteroid {
+			noAst = false
+			break
+		}
+	}
+
 	out := astState{
 		Kinds: make([]uint64, astCapacity),
 		Xs:    make([]int64, astCapacity),
@@ -342,6 +370,8 @@ func astNext(s astState, keys uint64) astState {
 	}
 	cosThrust, sinThrust := astCosTable(astThrustAcc), astSinTable(astThrustAcc)
 	cosBullet, sinBullet := astCosTable(astBulletSpd), astSinTable(astBulletSpd)
+	cosWaveP, sinWaveP := astCosTable(astWaveDist), astSinTable(astWaveDist)
+	cosWaveV, sinWaveV := astCosTable(astWaveSpd), astSinTable(astWaveSpd)
 
 	for i := 0; i < astCapacity; i++ {
 		switch s.Kinds[i] {
@@ -423,6 +453,16 @@ func astNext(s astState, keys uint64) astState {
 				out.Vxs[i], out.Vys[i] = s.Vys[src], -s.Vxs[src]
 				out.Rots[i] = s.Rots[src]
 				out.Szs[i] = s.Szs[src] - 1
+			} else if noAst && uint64(j) < astWaveCount {
+				// wave respawn — mirrors waveSpawn(). HIGH bits (F-D3).
+				wa := ((s.RNG>>16)%astRotSteps + uint64(j)*astWaveArc) % astRotSteps
+				wv := (wa + astWaveVeer) % astRotSteps
+				out.Kinds[i] = astAsteroid
+				out.Xs[i] = astWrapGo(s.Xs[0], cosWaveP[wa])
+				out.Ys[i] = astWrapGo(s.Ys[0], sinWaveP[wa])
+				out.Vxs[i], out.Vys[i] = cosWaveV[wv], sinWaveV[wv]
+				out.Rots[i] = wa
+				out.Szs[i] = astWaveSize
 			}
 		}
 	}
@@ -538,23 +578,32 @@ func buildAsteroidsStepRange(ap *entitysdk.AppPeer, statePath, inputPath string,
 	// --- cross-actor spatial query (the O(N^2) all-pairs core) --------------
 
 	// bulletHits(j): is asteroid j hit by any live bullet? filter+length over
-	// the whole frozen actor set. This is the capturing-closure shape F-D2
-	// punishes (the enclosing let's arrays are captured per element) — which is
-	// exactly why this probe is worth measuring on Axis-1.
+	// the LIVE BULLET list ("bull", bound once below) — not over every slot.
+	//
+	// THE LIVE-LIST DISCIPLINE (F6's second error, applied here). The naive
+	// lowering scanned all CAP slots and asked each "are you a bullet, and do you
+	// overlap me?" — but a fixed-cap array is mostly free slots, so ~21 of 24
+	// answers were "I am not a bullet". Precomputing the bullet list once (O(CAP))
+	// and scanning THAT makes the cost O(asteroids x bullets) — the actual size of
+	// the problem — instead of O(CAP^2). The `kind==bullet` test disappears too:
+	// the list already carries that predicate.
+	//
+	// This is the capturing-closure shape F-D2 punishes (the enclosing let's
+	// arrays are captured per element), which is exactly why shrinking the
+	// collection pays so much more than shrinking the body.
 	bulletHitsRaw := func(j *entitysdk.Builder) *entitysdk.Builder {
 		return c.Compare("gt",
 			c.Length(c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-				"collection": idxLit,
+				"collection": sc("bull"),
 				"fn": c.Lambda([]string{"b"},
-					c.Logic("and",
-						c.Compare("eq", at("kinds", sc("b")), c.Literal(astBullet)),
-						c.Compare("lt", distSq(j, sc("b")), astHitRadiusSq(j)))),
+					c.Compare("lt", distSq(j, sc("b")), astHitRadiusSq(j))),
 			})),
 			c.Literal(uint64(0)))
 	}
 
 	// bulletHits indexes the PRECOMPUTED per-actor hit array ("hitb", bound once
-	// below) instead of re-scanning every bullet.
+	// below) instead of re-scanning every bullet. It stays indexed by SLOT (not
+	// by position in a live list) because every reader below has a slot in hand.
 	//
 	// Whether asteroid j was hit is a function of the frozen previous state
 	// alone, but it is needed in THREE places (the split scan, the asteroid's
@@ -566,35 +615,39 @@ func buildAsteroidsStepRange(ap *entitysdk.AppPeer, statePath, inputPath string,
 		return c.Index(sc("hitb"), j)
 	}
 
-	// bulletSpent(b): did bullet b hit any asteroid this tick?
+	// bulletSpent(b): did bullet b hit any asteroid this tick? Scans the LIVE
+	// ASTEROID list ("ast"), not every slot — same discipline as bulletHitsRaw.
 	bulletSpent := func(b *entitysdk.Builder) *entitysdk.Builder {
 		return c.Compare("gt",
 			c.Length(c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-				"collection": idxLit,
+				"collection": sc("ast"),
 				"fn": c.Lambda([]string{"a"},
-					c.Logic("and",
-						c.Compare("eq", at("kinds", sc("a")), c.Literal(astAsteroid)),
-						c.Compare("lt", distSq(sc("a"), b), astHitRadiusSq(sc("a"))))),
+					c.Compare("lt", distSq(sc("a"), b), astHitRadiusSq(sc("a")))),
 			})),
 			c.Literal(uint64(0)))
 	}
 
-	// shipHit: does any asteroid overlap the ship (slot 0)?
-	shipHit := c.Compare("gt",
+	// shipHitRaw: does any asteroid overlap the ship (slot 0)? Scans "ast".
+	//
+	// This is bound ONCE as "shipdead" in the `live` let below, because it is read
+	// in two places (the ship's own think and the state's status field) and is a
+	// function of the frozen previous state alone — the same triple-scan mistake
+	// the bulletHits hoist fixed, at a smaller multiple. Hoisting costs nothing in
+	// semantics: `status` already forced it unconditionally on every live tick.
+	shipHitRaw := c.Compare("gt",
 		c.Length(c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-			"collection": idxLit,
+			"collection": sc("ast"),
 			"fn": c.Lambda([]string{"a"},
-				c.Logic("and",
-					c.Compare("eq", at("kinds", sc("a")), c.Literal(astAsteroid)),
-					c.Compare("lt",
-						distSq(sc("a"), c.Literal(uint64(0))),
-						c.Arithmetic("mul",
-							c.Arithmetic("add", c.Literal(astShipRadius),
-								c.Arithmetic("mul", c.Literal(astAstRadius), at("szs", sc("a")))),
-							c.Arithmetic("add", c.Literal(astShipRadius),
-								c.Arithmetic("mul", c.Literal(astAstRadius), at("szs", sc("a")))))))),
+				c.Compare("lt",
+					distSq(sc("a"), c.Literal(uint64(0))),
+					c.Arithmetic("mul",
+						c.Arithmetic("add", c.Literal(astShipRadius),
+							c.Arithmetic("mul", c.Literal(astAstRadius), at("szs", sc("a")))),
+						c.Arithmetic("add", c.Literal(astShipRadius),
+							c.Arithmetic("mul", c.Literal(astAstRadius), at("szs", sc("a"))))))),
 		})),
 		c.Literal(uint64(0)))
+	shipHit := sc("shipdead")
 
 	// --- the fixed-cap slot allocator (the concat sidestep) -----------------
 	//
@@ -603,26 +656,34 @@ func buildAsteroidsStepRange(ap *entitysdk.AppPeer, statePath, inputPath string,
 	// own slot). A free slot claims a spawn by its RANK among free slots:
 	// rank 0 goes to the new bullet (if firing), the rest to splits in order.
 	//
-	// This is the fixed-cap tax, and it is O(CAP) per free slot (the rank
-	// filter) on top of O(CAP) per actor (collision) — see F-F2.
+	// This is the fixed-cap tax, and it is O(frees) per free slot (the rank
+	// filter) on top of O(asteroids x bullets) collision — see F-F2.
+	//
+	// `splits` scans the live ASTEROID list: only an asteroid can split, so the
+	// kind test is the list's job. Order is preserved (ast is itself a filter over
+	// ascending idxLit), which the rank-based slot claim below depends on.
 	splits := c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-		"collection": idxLit,
+		"collection": sc("ast"),
 		"fn": c.Lambda([]string{"j"},
 			c.Logic("and",
-				c.Logic("and",
-					c.Compare("eq", at("kinds", sc("j")), c.Literal(astAsteroid)),
-					c.Compare("gt", at("szs", sc("j")), c.Literal(uint64(1)))),
+				c.Compare("gt", at("szs", sc("j")), c.Literal(uint64(1))),
 				bulletHits(sc("j")))),
 	})
 
-	// rank(i): how many free slots precede slot i.
+	// rank(i): how many free slots precede slot i — scanned over the precomputed
+	// FREE list ("frees"), so the per-element test is one compare instead of
+	// index+eq+and.
+	//
+	// NOTE what does NOT go away: this is still O(frees) per free slot, and free
+	// slots are the majority of a fixed-cap array. It is the same shape as the
+	// framebuffer's pixel loop — a prefix count is a SCATTER an imperative
+	// allocator does in O(1) with a bump pointer, and a pure gather must pay a
+	// scan per claimant to discover. This scan is the residual fixed-cap tax and
+	// the step's remaining O(CAP^2) term; `sort` is what would retire it.
 	rank := func(i *entitysdk.Builder) *entitysdk.Builder {
 		return c.Length(c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-			"collection": idxLit,
-			"fn": c.Lambda([]string{"j"},
-				c.Logic("and",
-					c.Compare("lt", sc("j"), i),
-					c.Compare("eq", at("kinds", sc("j")), c.Literal(astFree)))),
+			"collection": sc("frees"),
+			"fn":         c.Lambda([]string{"j"}, c.Compare("lt", sc("j"), i)),
 		}))
 	}
 
@@ -700,6 +761,50 @@ func buildAsteroidsStepRange(ap *entitysdk.AppPeer, statePath, inputPath string,
 			"ttl": c.Arithmetic("sub", at("ttls", sc("i")), c.Literal(uint64(1))),
 		}))
 
+	// waveSpawn(j): the j-th asteroid of a fresh wave, on a ring around the ship.
+	//
+	// ⚠️ F-D3 — READ THE HIGH BITS. The wave's heading is (rng >> 16) % 16, never
+	// rng % 16: astLCGMod is 2^31, a power of two, and the low k bits of such an
+	// LCG have period 2^k. Taking rng % 16 would give a heading that cycles every
+	// 16 ticks — and it would LOOK random in a screenshot, which is exactly how
+	// F-D3 got through the first time. floorDiv(rng, 65536) drops the poisoned
+	// low half.
+	//
+	// The whole wave rotates with one RNG draw; the asteroids are then spaced
+	// evenly by astWaveArc, which is what keeps them DISTINCT without needing a
+	// per-asteroid RNG draw (there is no way to advance the stream j times inside
+	// a pure expression without a loop — this sidesteps that entirely).
+	waveSpawn := func(j *entitysdk.Builder) *entitysdk.Builder {
+		ang := c.Arithmetic("mod",
+			c.Arithmetic("add",
+				c.Arithmetic("mod",
+					floorDiv(sc("rng"), c.Literal(uint64(65536))),
+					c.Literal(astRotSteps)),
+				c.Arithmetic("mul", j, c.Literal(astWaveArc))),
+			c.Literal(astRotSteps))
+		return c.Let(map[string]*entitysdk.Builder{"wa": ang},
+			c.Let(map[string]*entitysdk.Builder{
+				// the drift heading veers off the spawn radial, so a fresh wave
+				// does not fly straight at (or straight away from) the ship.
+				"wv": c.Arithmetic("mod",
+					c.Arithmetic("add", sc("wa"), c.Literal(astWaveVeer)),
+					c.Literal(astRotSteps)),
+			}, c.Construct(astStateType+"/actor", map[string]*entitysdk.Builder{
+				"kind": c.Literal(astAsteroid),
+				// ship-relative, so clearance is structural: every wave asteroid
+				// lands exactly astWaveDist from the ship.
+				"x": wrap(at("xs", c.Literal(uint64(0))),
+					c.Index(c.Literal(astCosTable(astWaveDist)), sc("wa"))),
+				"y": wrap(at("ys", c.Literal(uint64(0))),
+					c.Index(c.Literal(astSinTable(astWaveDist)), sc("wa"))),
+				"vx":  c.Index(c.Literal(astCosTable(astWaveSpd)), sc("wv")),
+				"vy":  c.Index(c.Literal(astSinTable(astWaveSpd)), sc("wv")),
+				"rot": sc("wa"),
+				"sz":  c.Literal(astWaveSize),
+				"ttl": c.Literal(uint64(0)),
+			})))
+	}
+
 	// free slot: claim a spawn by rank, else stay free. All the expensive work
 	// (rank, splits) sits INSIDE branches per F-E2b where it is affordable to,
 	// but `rank` is needed by both arms so it binds once here.
@@ -737,7 +842,14 @@ func buildAsteroidsStepRange(ap *entitysdk.AppPeer, statePath, inputPath string,
 				"sz":  c.Arithmetic("sub", at("szs", sc("src")), c.Literal(uint64(1))),
 				"ttl": c.Literal(uint64(0)),
 			})),
-			free))))
+			// No split wants this slot — but if the FIELD IS EMPTY, the first
+			// astWaveCount free slots seed a new wave (F8). "noast" reads the
+			// frozen previous state, so a wave lands the tick AFTER the last
+			// asteroid dies, never in the same tick that kills it.
+			c.If(c.Logic("and", sc("noast"),
+				c.Compare("lt", sc("j"), c.Literal(astWaveCount))),
+				waveSpawn(sc("j")),
+				free)))))
 
 	// --- the actor map (array-of-structs, IN-FLIGHT) ------------------------
 	//
@@ -759,14 +871,12 @@ func buildAsteroidsStepRange(ap *entitysdk.AppPeer, statePath, inputPath string,
 		})
 	}
 
-	// scored: how many asteroids died this tick (hit and size 1).
+	// scored: how many asteroids died this tick (hit and size 1). Scans "ast".
 	scored := c.Length(c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-		"collection": idxLit,
+		"collection": sc("ast"),
 		"fn": c.Lambda([]string{"j"},
 			c.Logic("and",
-				c.Logic("and",
-					c.Compare("eq", at("kinds", sc("j")), c.Literal(astAsteroid)),
-					c.Compare("eq", at("szs", sc("j")), c.Literal(uint64(1)))),
+				c.Compare("eq", at("szs", sc("j")), c.Literal(uint64(1))),
 				bulletHits(sc("j")))),
 	}))
 
@@ -794,18 +904,49 @@ func buildAsteroidsStepRange(ap *entitysdk.AppPeer, statePath, inputPath string,
 			c.Literal(uint64(0))),
 	}))
 
-	// F-E2b: `firing`/`splits` bind INSIDE the live branch. let is eager, so
-	// binding them outside would run the whole O(N^2) split scan on every tick
-	// of a finished game.
+	// F-E2b: these bind INSIDE the live branch. let is eager, so binding them
+	// outside would run the whole split scan on every tick of a finished game.
+	//
+	// let* evaluates in SORTED NAME ORDER, and every name here is chosen to sort
+	// before its readers: ast/bull/frees (the live sublists, which depend on
+	// nothing but the frozen arrays) < hitb (reads bull) and shipdead (reads ast)
+	// < splits (reads ast + hitb). Renaming any of these can silently break the
+	// dependency order — the sort IS the topology.
 	live := c.Let(map[string]*entitysdk.Builder{
+		// the three live sublists — each O(CAP) ONCE, so that every cross-actor
+		// query below is O(live) instead of O(CAP). This is the live-list fix.
+		"ast": c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
+			"collection": idxLit,
+			"fn": c.Lambda([]string{"a"},
+				c.Compare("eq", at("kinds", sc("a")), c.Literal(astAsteroid))),
+		}),
+		"bull": c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
+			"collection": idxLit,
+			"fn": c.Lambda([]string{"b"},
+				c.Compare("eq", at("kinds", sc("b")), c.Literal(astBullet))),
+		}),
 		"firing": bit(astKeyFire),
-		// let* evaluates in SORTED name order, so "hitb" lands before "splits"
-		// and splits can see it. The name is chosen to sort that way.
+		"frees": c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
+			"collection": idxLit,
+			"fn": c.Lambda([]string{"j"},
+				c.Compare("eq", at("kinds", sc("j")), c.Literal(astFree))),
+		}),
+		// hitb stays indexed by SLOT (all CAP entries) because its readers hold
+		// slots — but only an ASTEROID can be hit, so the scan is guarded. This is
+		// a pure guard, not a semantic change: every non-asteroid slot has sz=0,
+		// hence hit radius 0, hence distSq < 0, hence false already.
 		"hitb": c.BuiltinsCall("map", map[string]*entitysdk.Builder{
 			"collection": idxLit,
-			"fn":         c.Lambda([]string{"j"}, bulletHitsRaw(sc("j"))),
+			"fn": c.Lambda([]string{"j"},
+				c.If(c.Compare("eq", at("kinds", sc("j")), c.Literal(astAsteroid)),
+					bulletHitsRaw(sc("j")),
+					c.Literal(false))),
 		}),
-		"splits": splits,
+		// the wave trigger: the field was empty as of the frozen previous state.
+		// Sorts after "ast", which it reads.
+		"noast":    c.Compare("eq", c.Length(sc("ast")), c.Literal(uint64(0))),
+		"shipdead": shipHitRaw,
+		"splits":   splits,
 	}, alive)
 
 	// The frozen-when-dead tick returns `s` verbatim — same entity, same hash
@@ -977,12 +1118,26 @@ func buildAsteroidsDisplayList(ap *entitysdk.AppPeer, statePath string) *entitys
 		"szs":   c.Field(sc("s"), "szs"),
 		"xs":    c.Field(sc("s"), "xs"),
 		"ys":    c.Field(sc("s"), "ys"),
+		// the live-list fix, here too: a display list is O(DRAWABLES) by
+		// definition, and a free slot is not a drawable. The naive lowering built
+		// a full 4-vertex quad (8 trig lookups + 8 multiply-adds) for all CAP
+		// slots and the consumer threw ~21 of 24 away — Render() has always
+		// skipped kind==free (program_asteroids.go). Emitting them was pure waste,
+		// and it made the port's measured cost O(slots) while the report claimed
+		// O(actors). Same shape as F6's second error. The output contract does not
+		// change: the arrays are simply shorter.
+	}, c.Let(map[string]*entitysdk.Builder{
+		"live": c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
+			"collection": c.Literal(indices),
+			"fn": c.Lambda([]string{"i"},
+				c.Compare("neq", at("kinds", sc("i")), c.Literal(astFree))),
+		}),
 	}, c.Let(map[string]*entitysdk.Builder{
 		"quads": c.BuiltinsCall("map", map[string]*entitysdk.Builder{
-			"collection": c.Literal(indices),
+			"collection": sc("live"),
 			"fn":         quadFn,
 		}),
-	}, c.Construct(astDisplayType, outFields))))
+	}, c.Construct(astDisplayType, outFields)))))
 }
 
 // buildAsteroidsFramebuffer lowers the FRAMEBUFFER output port: a fbW x fbH
@@ -1194,28 +1349,451 @@ func buildAsteroidsBlockmap(ap *entitysdk.AppPeer, statePath string, binsPerAxis
 		"kinds": c.Field(sc("s"), "kinds"),
 		"xs":    c.Field(sc("s"), "xs"),
 		"ys":    c.Field(sc("s"), "ys"),
+	}, c.Let(map[string]*entitysdk.Builder{
+		// the live list, hoisted out of the bin loop (O(CAP) once) so each bin
+		// scans LIVE actors, not every slot. Measured at the BEST lowering on
+		// purpose: this number is compared against the step, and a benchmark that
+		// compares designs is only as honest as its worst lowering. It does not
+		// soften the finding — the gather is still a gather, the cost is still
+		// linear in bin count, and the ratio the test asserts is unchanged.
+		"live": c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
+			"collection": c.Literal(indices),
+			"fn": c.Lambda([]string{"a"},
+				c.Compare("neq", at("kinds", sc("a")), c.Literal(astFree))),
+		}),
+		// ⚠️ HOISTED (F9 found this the hard way). binOf(a) is a function of the
+		// actor alone; computing it inline in the bin's lambda re-runs the whole
+		// floor-div per (bin, actor) pair — the §4.0 framebuffer error, still
+		// sitting here after two correction passes had blessed these numbers.
+		// Bind it once per slot; each bin then does index+compare.
+		"bkey": c.BuiltinsCall("map", map[string]*entitysdk.Builder{
+			"collection": c.Literal(indices),
+			"fn":         c.Lambda([]string{"a"}, binOf(sc("a"))),
+		}),
 	}, c.Construct(astBlockmapType, map[string]*entitysdk.Builder{
 		"bins": c.BuiltinsCall("map", map[string]*entitysdk.Builder{
 			"collection": c.Literal(binIdx),
-			// THE SHAPE THAT DECIDES EVERYTHING: each bin asks EVERY actor "are
-			// you in me?". That is a GATHER, and it is not an implementation
-			// choice — a pure function must compute each bin's contents from its
-			// inputs, and it cannot instead have each actor append itself to a
-			// bin (that would be a scatter into mutable state).
+			// THE SHAPE: each bin asks EVERY LIVE actor "are you in me?" — a
+			// GATHER. A pure function computes each bin's contents from its
+			// inputs; it cannot have each actor append itself to a bin, because
+			// that needs an indexed update this primitive set does not have (F9).
+			// Shrinking the scanned set to live actors, and hoisting the key,
+			// change the CONSTANT; the bins x actors shape is what survives.
 			"fn": c.Lambda([]string{"b"},
 				c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
-					"collection": c.Literal(indices),
+					"collection": sc("live"),
 					"fn": c.Lambda([]string{"a"},
-						c.Logic("and",
-							c.Compare("neq", at("kinds", sc("a")), c.Literal(astFree)),
-							c.Compare("eq", binOf(sc("a")), sc("b")))),
+						c.Compare("eq", c.Index(sc("bkey"), sc("a")), sc("b"))),
 				})),
 		}),
-	})))
+	}))))
 }
 
 type astBlockmapWire struct {
 	Bins [][]uint64 `cbor:"bins"`
+}
+
+// --- F9: does `fold` rescue the scatter? ------------------------------------
+//
+// THE HOLE THIS CLOSES. The report's unifying claim is "pure compute cannot
+// SCATTER" — and it was written without ever mentioning `fold`, which is the
+// language's documented iteration primitive (`system/compute/builtins/fold`),
+// is exposed by this very SDK as `LowerFold` ("the practical loop pattern for
+// compute"), and is already used in production by program_life.go.
+//
+// That is the same error as every other one in this document, one level deeper:
+// we asserted a property of PURE COMPUTE having measured a property of OUR
+// EXPRESSION — and this time we did not even check what the language could do.
+// A scatter IS a loop with an accumulator. fold IS a loop with an accumulator.
+// So the claim is either wrong, or true for a reason nobody had stated.
+//
+// The two lowerings below compute the SAME THING — a per-bin population count —
+// one by gather, one by fold-scatter:
+//
+//	gather : bins = map(b => length(filter(actors, in b)))     — B x N
+//	scatter: bins = fold(actors, zeros, (acc,a) => bump acc[binOf(a)])  — N steps
+//
+// The fold version is what an imperative engine does: walk actors ONCE, each
+// bumps its own cell. If it comes out cheaper, the report's central finding is
+// WRONG and the capability ask changes completely. That is the point of writing
+// it.
+//
+// Counts, not membership lists, because appending to a bin needs `concat` and
+// there is no concat — which is itself half the answer (see the READ line).
+func buildBinCountsGather(ap *entitysdk.AppPeer, statePath string, binsPerAxis int) *entitysdk.Builder {
+	c := ap.Compute()
+	sc := c.LookupScope
+	indices, binIdx, cellSize := astBinFixtures(binsPerAxis)
+	at := func(arr string, i *entitysdk.Builder) *entitysdk.Builder { return c.Index(sc(arr), i) }
+	binOf := astBinOfExpr(c, at, cellSize, binsPerAxis)
+
+	// ⚠️ HOISTED. `binOf(a)` is a function of the actor alone, so it is computed
+	// ONCE per slot into "bkey" and each bin then does a single index+compare.
+	// The naive form — binOf(a) inline in the bin's lambda — recomputes the whole
+	// floor-div per (bin, actor) pair and inflates the constant ~3.6x. That is the
+	// §4.0 framebuffer error verbatim, and it was still sitting in this file's
+	// blockmap while the report called the number honest. A comparison against
+	// fold is only worth printing if BOTH sides are hoisted.
+	return astBinPreamble(c, statePath, indices, at,
+		c.Let(map[string]*entitysdk.Builder{
+			"bkey": c.BuiltinsCall("map", map[string]*entitysdk.Builder{
+				"collection": c.Literal(indices),
+				"fn":         c.Lambda([]string{"a"}, binOf(sc("a"))),
+			}),
+		}, c.BuiltinsCall("map", map[string]*entitysdk.Builder{
+			"collection": c.Literal(binIdx),
+			"fn": c.Lambda([]string{"b"},
+				c.Length(c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
+					"collection": sc("live"),
+					"fn": c.Lambda([]string{"a"},
+						c.Compare("eq", c.Index(sc("bkey"), sc("a")), sc("b"))),
+				}))),
+		})))
+}
+
+// buildBinCountsFold — the SCATTER shape, expressed with the loop the language
+// actually has. fold walks the actors once; each step must produce the next
+// accumulator.
+//
+// ⚠️ Look closely at the step body, because it is the whole finding: to "bump
+// acc[k]" the step must rebuild the ENTIRE accumulator with `map` over all B
+// bins, asking every bin "are you the one being bumped?". There is no indexed
+// update primitive — no assoc, no replace, no store-at-index — so a one-cell
+// change costs a full O(B) reconstruction.
+//
+// The loop is O(N). The loop BODY is O(B). The product is the same O(B x N) the
+// gather pays, and it is now SEQUENTIAL as well.
+func buildBinCountsFold(ap *entitysdk.AppPeer, statePath string, binsPerAxis int) *entitysdk.Builder {
+	c := ap.Compute()
+	sc := c.LookupScope
+	indices, binIdx, cellSize := astBinFixtures(binsPerAxis)
+	at := func(arr string, i *entitysdk.Builder) *entitysdk.Builder { return c.Index(sc(arr), i) }
+	binOf := astBinOfExpr(c, at, cellSize, binsPerAxis)
+
+	zeros := make([]uint64, binsPerAxis*binsPerAxis)
+	body := entitysdk.LowerFold(c, sc("live"), c.Literal(zeros),
+		func(acc, elem *entitysdk.Builder) *entitysdk.Builder {
+			// bind the element's bin ONCE per step, not once per bin — the
+			// live-list lesson, applied so this lowering is not the weak one.
+			return c.Let(map[string]*entitysdk.Builder{"k": binOf(elem)},
+				c.BuiltinsCall("map", map[string]*entitysdk.Builder{
+					"collection": c.Literal(binIdx),
+					"fn": c.Lambda([]string{"b"},
+						c.If(c.Compare("eq", sc("b"), sc("k")),
+							c.Arithmetic("add", c.Index(acc, sc("b")), c.Literal(uint64(1))),
+							c.Index(acc, sc("b")))),
+				}))
+		})
+	return astBinPreamble(c, statePath, indices, at, body)
+}
+
+// astBinFixtures / astBinOfExpr / astBinPreamble — shared scaffolding so the two
+// lowerings above differ ONLY in gather-vs-fold, and neither can be accused of
+// carrying the other's overhead.
+func astBinFixtures(binsPerAxis int) (indices, binIdx []uint64, cellSize int64) {
+	indices = make([]uint64, astCapacity)
+	for i := range indices {
+		indices[i] = uint64(i)
+	}
+	binIdx = make([]uint64, binsPerAxis*binsPerAxis)
+	for i := range binIdx {
+		binIdx[i] = uint64(i)
+	}
+	return indices, binIdx, astWorld / int64(binsPerAxis)
+}
+
+func astBinOfExpr(c *entitysdk.ComputeBuilder, at func(string, *entitysdk.Builder) *entitysdk.Builder,
+	cellSize int64, binsPerAxis int,
+) func(*entitysdk.Builder) *entitysdk.Builder {
+	floorDiv := func(a, b *entitysdk.Builder) *entitysdk.Builder {
+		return c.Arithmetic("div", c.Arithmetic("sub", a, c.Arithmetic("mod", a, b)), b)
+	}
+	return func(a *entitysdk.Builder) *entitysdk.Builder {
+		return c.Arithmetic("add",
+			c.Arithmetic("mul",
+				floorDiv(at("ys", a), c.Literal(cellSize)),
+				c.Literal(int64(binsPerAxis))),
+			floorDiv(at("xs", a), c.Literal(cellSize)))
+	}
+}
+
+func astBinPreamble(c *entitysdk.ComputeBuilder, statePath string, indices []uint64,
+	at func(string, *entitysdk.Builder) *entitysdk.Builder, body *entitysdk.Builder,
+) *entitysdk.Builder {
+	sc := c.LookupScope
+	return c.Let(map[string]*entitysdk.Builder{
+		"s": c.LookupTreeLocal(statePath),
+	}, c.Let(map[string]*entitysdk.Builder{
+		"kinds": c.Field(sc("s"), "kinds"),
+		"xs":    c.Field(sc("s"), "xs"),
+		"ys":    c.Field(sc("s"), "ys"),
+	}, c.Let(map[string]*entitysdk.Builder{
+		"live": c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
+			"collection": c.Literal(indices),
+			"fn": c.Lambda([]string{"a"},
+				c.Compare("neq", at("kinds", sc("a")), c.Literal(astFree))),
+		}),
+		// both shapes wrap their array in the same entity so the port decodes,
+		// and so neither carries a framing cost the other doesn't.
+	}, c.Construct(astBinCountsType, map[string]*entitysdk.Builder{"counts": body}))))
+}
+
+const astBinCountsType = "app/asteroids/bincounts"
+
+type astBinCountsWire struct {
+	Counts []uint64 `cbor:"counts"`
+}
+
+// TestExpAsteroidsF9_FoldDoesNotRescueTheScatter — the falsification attempt the
+// report's central claim never got.
+//
+// If fold-scatter beats gather, "pure compute cannot scatter" is false and the
+// whole §5b/§4 story needs rewriting. This test exists to give it that chance.
+func TestExpAsteroidsF9_FoldDoesNotRescueTheScatter(t *testing.T) {
+	if testing.Short() {
+		t.Skip("bisects the budget; slow")
+	}
+	ap, err := entitysdk.CreatePeer(entitysdk.PeerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ap.Close() })
+
+	const axis = 8
+	type row struct{ n, gather, fold int }
+	var rows []row
+
+	for _, n := range []int{4, 8, 16, 24} {
+		seed := astSeedNLive(n)
+		root := fmt.Sprintf("app/asteroids/f9/n%d", n)
+		p := astSetup(t, ap, root, seed)
+
+		gPath, fPath := root+"/gather", root+"/fold"
+		if _, err := buildBinCountsGather(ap, p.statePath, axis).
+			Build(context.Background(), gPath); err != nil {
+			t.Fatalf("build gather n=%d: %v", n, err)
+		}
+		if _, err := buildBinCountsFold(ap, p.statePath, axis).
+			Build(context.Background(), fPath); err != nil {
+			t.Fatalf("build fold n=%d: %v", n, err)
+		}
+
+		// EQUIVALENCE FIRST — a cheaper lowering that computes something else is
+		// not a cheaper lowering. Both must produce identical counts summing to n.
+		var gw, fw astBinCountsWire
+		astEvalPort(t, ap, gPath, &gw)
+		astEvalPort(t, ap, fPath, &fw)
+		gc, fc := gw.Counts, fw.Counts
+		if len(gc) != axis*axis || len(fc) != axis*axis {
+			t.Fatalf("n=%d: bad shapes gather=%d fold=%d", n, len(gc), len(fc))
+		}
+		sum := 0
+		for i := range gc {
+			if gc[i] != fc[i] {
+				t.Fatalf("n=%d: fold-scatter DISAGREES with gather at bin %d (%d vs %d) — "+
+					"the comparison is meaningless until they compute the same thing",
+					n, i, fc[i], gc[i])
+			}
+			sum += int(gc[i])
+		}
+		if sum != n {
+			t.Fatalf("n=%d: counts sum to %d — the bins are not holding the actors, so the "+
+				"op numbers price binning NOTHING", n, sum)
+		}
+
+		gOps, ok1 := astEvalOps(t, ap, gPath)
+		fOps, ok2 := astEvalOps(t, ap, fPath)
+		if !ok1 || !ok2 {
+			t.Fatalf("n=%d: over the op cap (gather ok=%v fold ok=%v)", n, ok1, ok2)
+		}
+		rows = append(rows, row{n, gOps, fOps})
+	}
+
+	t.Logf("per-bin population counts, %dx%d = %d bins — SAME RESULT, two shapes:", axis, axis, axis*axis)
+	t.Logf("  %6s %12s %12s %10s", "actors", "gather ops", "fold ops", "fold/gather")
+	for _, r := range rows {
+		t.Logf("  %6d %12d %12d %9.2fx", r.n, r.gather, r.fold,
+			float64(r.fold)/float64(r.gather))
+	}
+
+	// THE FALSIFICATION, stated so it can fire: if fold-scatter is materially
+	// CHEAPER, the report's unifying claim is wrong.
+	last := rows[len(rows)-1]
+	if last.fold < last.gather/2 {
+		t.Fatalf("fold-scatter is %dx CHEAPER than gather at N=%d (%d vs %d) — 'pure compute "+
+			"cannot scatter' is FALSE as stated and the report must be rewritten around this",
+			last.gather/last.fold, last.n, last.fold, last.gather)
+	}
+	// And it must still be linear in N (a loop over actors, whose body is O(B)).
+	first := rows[0]
+	nRatio := float64(last.n) / float64(first.n)
+	fRatio := float64(last.fold) / float64(first.fold)
+	t.Logf("  actors x%.0f -> fold ops x%.1f (a loop whose BODY is O(B) predicts these track)",
+		nRatio, fRatio)
+
+	t.Logf("READ: fold does NOT rescue the scatter, and the reason is sharper than 'purity'. "+
+		"The language HAS the loop — `fold` is the documented iteration primitive and this is a "+
+		"real scatter shape: walk the actors once, each bumps its own cell. What it does not have "+
+		"is an INDEXED UPDATE. To bump acc[k], the step must rebuild the whole accumulator with "+
+		"`map` over all %d bins, asking each 'are you k?' — so the O(N) loop has an O(B) body and "+
+		"lands right back on O(B x N), now SEQUENTIALLY instead of in parallel. (Membership lists "+
+		"are worse: appending to a bin needs `concat`, which does not exist — the same primitive "+
+		"§1 recommends closing.) THE CORRECTED CLAIM: purity does not forbid scatter — every "+
+		"functional language scatters via persistent maps in O(log N). THIS PRIMITIVE SET forbids "+
+		"it, because map/filter/fold over flat arrays cannot change one cell in less than O(B). "+
+		"That is a fixable gap, and it names the ask better than `sort` does.",
+		axis*axis)
+}
+
+// astSeedNLive: a state with exactly n LIVE actors (slot 0 the ship when n>0,
+// the rest asteroids), spread across the world so they occupy distinct bins.
+// n=0 is legal and useful: it isolates the cost of the bins themselves.
+//
+// The blockmap expression reads only kinds/xs/ys, so this seed never has to be a
+// playable position — no step runs against it.
+func astSeedNLive(n int) astState {
+	s := astState{
+		Kinds: make([]uint64, astCapacity),
+		Xs:    make([]int64, astCapacity),
+		Ys:    make([]int64, astCapacity),
+		Vxs:   make([]int64, astCapacity),
+		Vys:   make([]int64, astCapacity),
+		Rots:  make([]uint64, astCapacity),
+		Szs:   make([]uint64, astCapacity),
+		Ttls:  make([]uint64, astCapacity),
+		RNG:   7,
+	}
+	for i := 0; i < n && i < astCapacity; i++ {
+		if i == 0 {
+			s.Kinds[0] = astShip
+			s.Xs[0], s.Ys[0] = astWorld/2, astWorld/2
+			continue
+		}
+		s.Kinds[i] = astAsteroid
+		// coprime strides: a deterministic spread that puts actors in distinct
+		// cells rather than clustering them in one bin.
+		s.Xs[i] = int64((i*37)%256) * astFP
+		s.Ys[i] = int64((i*53)%256) * astFP
+		s.Szs[i] = 1
+	}
+	return s
+}
+
+// TestExpAsteroidsF7b_BlockmapCostVsActorCount — the N-sweep F7 owed, and the
+// test that decides whether F7's headline was ever worth printing.
+//
+// F7 sweeps the BIN COUNT with N fixed and finds cost linear in B. That alone
+// does NOT establish O(B x N): an imperative engine's build is O(B + N) — it also
+// pays a per-bin cost (allocate/clear every cell) — so "cost grows with B" is
+// something BOTH engines do. The gather penalty is specifically the ×N factor,
+// and nobody had measured it. The report said so, and called an N-sweep the
+// follow-up. This is it.
+//
+// WHY THIS MATTERS MORE THAN THE HEADLINE IT REPLACES. F7 reported "an 8x8
+// blockmap costs more than the whole step" — but at 3 live actors, a spatial
+// index losing to an all-pairs scan is true of EVERY engine ever written; it is a
+// statement about N=3, not about purity. That comparison was close to rigged.
+// The load-bearing question is what the cost is MADE of:
+//
+//   - the INTERCEPT (cost at N=0) is the bins alone — a cost an imperative
+//     engine pays too, and therefore not evidence of anything;
+//   - the SLOPE (ops per additional actor, at fixed B) is the gather — the part
+//     an imperative engine does NOT pay, because it scatters in O(1) per actor.
+//
+// A flat slope would REFUTE the scatter finding outright. A slope that is linear
+// in N, at a per-actor cost that itself scales with B, is what "O(B x N) where an
+// imperative engine gets O(B + N)" actually means — and that, combined with F7's
+// B-sweep, is the claim measured from both sides instead of reasoned from one.
+func TestExpAsteroidsF7b_BlockmapCostVsActorCount(t *testing.T) {
+	if testing.Short() {
+		t.Skip("blockmap sweep bisects the budget; slow")
+	}
+	ap, err := entitysdk.CreatePeer(entitysdk.PeerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ap.Close() })
+
+	const axis = 8 // fixed B = 64 bins; only N varies
+	type row struct {
+		n, ops int
+	}
+	var rows []row
+	for _, n := range []int{0, 1, 2, 4, 8, 16, 24} {
+		seed := astSeedNLive(n)
+		if got := astCapacity - astCount(seed, astFree); got != n {
+			t.Fatalf("seed has %d live actors, wanted %d — the sweep's x-axis is wrong", got, n)
+		}
+		root := fmt.Sprintf("app/asteroids/f7b/n%d", n)
+		p := astSetup(t, ap, root, seed)
+		path := root + "/bm"
+		if _, err := buildAsteroidsBlockmap(ap, p.statePath, axis).
+			Build(context.Background(), path); err != nil {
+			t.Fatalf("build blockmap n=%d: %v", n, err)
+		}
+		ops, ok := astEvalOps(t, ap, path)
+		if !ok {
+			t.Fatalf("blockmap n=%d is over the op cap", n)
+		}
+		// CORRECTNESS before cost: the bins must actually hold the actors, or
+		// the number is the price of binning nothing.
+		var bm astBlockmapWire
+		astEvalPort(t, ap, path, &bm)
+		binned := 0
+		for _, b := range bm.Bins {
+			binned += len(b)
+		}
+		if binned != n {
+			t.Fatalf("n=%d: blockmap binned %d actors, want %d — the cost would be meaningless",
+				n, binned, n)
+		}
+		rows = append(rows, row{n, ops})
+	}
+
+	base := rows[0].ops // N=0: the bins alone
+	t.Logf("blockmap build cost vs LIVE ACTOR COUNT, B fixed at %dx%d = %d bins:",
+		axis, axis, axis*axis)
+	t.Logf("  %6s %9s %12s %14s", "actors", "ops", "over N=0", "ops/actor")
+	for _, r := range rows {
+		perActor := ""
+		if r.n > 0 {
+			perActor = fmt.Sprintf("%.1f", float64(r.ops-base)/float64(r.n))
+		}
+		t.Logf("  %6d %9d %12d %14s", r.n, r.ops, r.ops-base, perActor)
+	}
+
+	// THE CLAIM, stated so it can fail: the marginal cost per actor is ~constant
+	// (the gather is linear in N), and it is a LARGE share of the total — not a
+	// rounding error on top of fixed bin overhead.
+	last := rows[len(rows)-1]
+	if last.ops <= base {
+		t.Fatalf("adding %d actors did not increase the build cost (%d -> %d) — the gather "+
+			"is free, which REFUTES the scatter finding; the report must be corrected",
+			last.n, base, last.ops)
+	}
+	marg8, marg24 := float64(rows[4].ops-base)/8.0, float64(last.ops-base)/float64(last.n)
+	ratio := marg24 / marg8
+	t.Logf("  marginal ops/actor: %.1f at N=8, %.1f at N=%d (ratio %.2f) — a GATHER predicts "+
+		"these track (cost linear in N); a scatter would predict the marginal cost fall to ~0",
+		marg8, marg24, last.n, ratio)
+	if ratio < 0.5 || ratio > 2.0 {
+		t.Fatalf("marginal cost per actor is NOT ~constant (%.1f at N=8 vs %.1f at N=%d) — the "+
+			"build is not linear in N and the O(B x N) claim is wrong as stated",
+			marg8, marg24, last.n)
+	}
+
+	// The decomposition the report should be quoting instead of "it costs more
+	// than the step": how much of the price is the gather vs. the bins.
+	gatherShare := 100 * float64(last.ops-base) / float64(last.ops)
+	t.Logf("READ: at %d bins, the bins THEMSELVES cost %d ops (N=0) — a cost an imperative "+
+		"engine pays too, and therefore not evidence about purity. Every actor then adds "+
+		"~%.0f ops BECAUSE EACH BIN MUST ASK IT 'are you in me?', which is the cost an "+
+		"imperative engine does NOT pay: it scatters each actor into its cell in O(1). At "+
+		"N=%d the gather is %.0f%% of the build. THAT is the scatter tax, measured from both "+
+		"axes (B by F7, N here) rather than reasoned from one. Note what this does NOT say: "+
+		"at Asteroids' real 3-5 actors a blockmap is absurd overkill in ANY engine, and "+
+		"comparing it to this game's step is not a finding.",
+		axis*axis, base, marg24, last.n, gatherShare)
 }
 
 // TestExpAsteroidsF7_BlockmapIsAScatterStructure answers arch's §3.2/§7.2 —
@@ -1234,9 +1812,22 @@ type astBlockmapWire struct {
 // collision term you need B to grow with N — at which point O(B x N) is O(N^2)
 // and the blockmap has cost what it was meant to save.
 //
-// This test measures the build cost against B with N fixed. The claim is
-// falsifiable and stated as such: if cost does NOT scale ~linearly in B, the
-// gather reasoning is wrong and the report must be corrected.
+// This test measures the build cost against B. The claim is falsifiable and
+// stated as such: if cost does NOT scale ~linearly in B, the gather reasoning is
+// wrong and the report must be corrected.
+//
+// ⚠️ MEASURE THE GATHER TERM, NOT THE TOTAL — this test used to get this wrong.
+// The total is `fixed(CAP) + c·B·N`, where fixed is the O(CAP) key/live-list
+// preamble that runs once regardless of B. At the 3-live-actor seed this test
+// originally used, that fixed term (~930 ops) SWAMPED the B·N term (~960 at
+// B=64), so a B-sweep of the total looked sub-linear (bins ×16 → ops ×2.3) and
+// the assertion fired — correctly. The old lowering hid this by recomputing
+// binOf per (bin, actor), which inflated the B·N term ~5x until it happened to
+// dominate. Two errors cancelling into a "clean" linear result.
+//
+// So: sweep B at N=0 and at N=24, and take the DIFFERENCE. That is the gather
+// term with the fixed preamble subtracted out, and it is the only thing here
+// that is evidence about scatter.
 func TestExpAsteroidsF7_BlockmapIsAScatterStructure(t *testing.T) {
 	if testing.Short() {
 		t.Skip("blockmap sweep bisects the budget; slow")
@@ -1247,21 +1838,12 @@ func TestExpAsteroidsF7_BlockmapIsAScatterStructure(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = ap.Close() })
 
-	seed := astSeedDuel(7)
-	seed.Kinds[2] = astBullet
-	seed.Xs[2] = astWorld / 2
-	seed.Ys[2] = astWorld/2 - 20*astFP
-	seed.Ttls[2] = astBulletTTL
-	p := astSetup(t, ap, "app/asteroids/f7", seed)
-	live := astCapacity - astCount(seed, astFree)
+	const nHigh = 24 // full cap: the B·N term must dominate to be measurable
 
-	type row struct {
-		axis, bins, ops int
-		binned          int
-	}
-	var rows []row
-	for _, axis := range []int{2, 4, 8} {
-		path := fmt.Sprintf("app/asteroids/f7/bm%d", axis)
+	measure := func(root string, seed astState, axis int) (int, int) {
+		t.Helper()
+		p := astSetup(t, ap, root, seed)
+		path := fmt.Sprintf("%s/bm%d", root, axis)
 		if _, err := buildAsteroidsBlockmap(ap, p.statePath, axis).
 			Build(context.Background(), path); err != nil {
 			t.Fatalf("build blockmap %d: %v", axis, err)
@@ -1281,48 +1863,64 @@ func TestExpAsteroidsF7_BlockmapIsAScatterStructure(t *testing.T) {
 		for _, b := range bm.Bins {
 			binned += len(b)
 		}
-		if binned != live {
-			t.Fatalf("blockmap %dx%d binned %d actors, want %d live — the index is "+
-				"wrong, so its cost is meaningless", axis, axis, binned, live)
+		return ops, binned
+	}
+
+	type row struct {
+		axis, bins, ops int
+		binned          int
+	}
+	var rows []row
+	for _, axis := range []int{2, 4, 8} {
+		empty, _ := measure(fmt.Sprintf("app/asteroids/f7/e%d", axis), astSeedNLive(0), axis)
+		full, binned := measure(fmt.Sprintf("app/asteroids/f7/f%d", axis), astSeedNLive(nHigh), axis)
+		if binned != nHigh {
+			t.Fatalf("blockmap %dx%d binned %d actors, want %d — the index is wrong, so its "+
+				"cost is meaningless", axis, axis, binned, nHigh)
 		}
-		rows = append(rows, row{axis, axis * axis, ops, binned})
+		// the GATHER term: total minus the B-independent preamble.
+		rows = append(rows, row{axis, axis * axis, full - empty, binned})
 	}
 
-	// The naive all-pairs collision this is supposed to replace, for scale.
-	stepOps, ok := astEvalOps(t, ap, p.stepPath)
-	if !ok {
-		t.Fatal("step over the cap")
-	}
-
-	t.Logf("blockmap BUILD cost, %d slots (%d live), world %dx%d:",
-		astCapacity, live, astWorld, astWorld)
-	t.Logf("  %-14s %6s %9s %14s", "grid", "bins", "ops", "ops/bin")
+	t.Logf("blockmap GATHER TERM vs bin count (%d slots, N=%d live; the B-independent "+
+		"preamble measured at N=0 and subtracted):", astCapacity, nHigh)
+	t.Logf("  %-14s %6s %13s %16s", "grid", "bins", "gather ops", "ops/bin/actor")
 	for _, r := range rows {
-		t.Logf("  %-14s %6d %9d %14.1f",
+		t.Logf("  %-14s %6d %13d %16.2f",
 			fmt.Sprintf("%dx%d", r.axis, r.axis), r.bins, r.ops,
-			float64(r.ops)/float64(r.bins))
+			float64(r.ops)/float64(r.bins)/float64(nHigh))
 	}
-	t.Logf("  (the whole step, incl. naive O(N^2) collision, is %d ops)", stepOps)
+	// ⚠️ DO NOT reintroduce a comparison against the step here. This test used to
+	// print "the blockmap costs more than the whole step" and it was rigged: at 3
+	// live actors a spatial index loses to an all-pairs scan in EVERY engine ever
+	// written, imperative or pure. A fact about N=3, not about purity — and
+	// Asteroids would never build a blockmap. The step cost is deliberately not
+	// even measured here now, because having the number in scope is how the
+	// sentence kept coming back.
 
-	// THE CLAIM, stated so it can fail: cost is ~linear in the BIN COUNT,
-	// because every bin scans every actor. ops/bin should stay ~flat.
+	// THE CLAIM, stated so it can fail: the GATHER TERM is ~linear in the bin
+	// count, because every bin scans every actor. ops/bin/actor should stay flat.
 	first, last := rows[0], rows[len(rows)-1]
 	binRatio := float64(last.bins) / float64(first.bins)
 	opsRatio := float64(last.ops) / float64(first.ops)
-	t.Logf("  bins x%.0f -> ops x%.1f  (a GATHER predicts these track; a scatter "+
-		"would predict ops stay flat as bins grow)", binRatio, opsRatio)
+	t.Logf("  bins x%.0f -> gather ops x%.1f  (a GATHER predicts these track; a scatter "+
+		"would predict the term stay flat as bins grow)", binRatio, opsRatio)
 	if opsRatio < binRatio*0.5 {
-		t.Fatalf("blockmap build cost did NOT track the bin count (bins x%.0f, ops "+
-			"x%.1f) — the O(B x N) gather reasoning is WRONG and the report must "+
-			"be corrected", binRatio, opsRatio)
+		t.Fatalf("the blockmap's gather term did NOT track the bin count (bins x%.0f, ops "+
+			"x%.1f) — the O(B x N) reasoning is WRONG and the report must be corrected",
+			binRatio, opsRatio)
 	}
-	t.Logf("READ: the blockmap BUILD is O(bins x actors) — each bin gathers over " +
-		"every actor. An imperative engine builds the same index in O(actors) by " +
-		"scatter (each actor appends itself to its cell). To make bins sparse " +
-		"enough to cut the O(N^2) collision term, B must grow with N — and then " +
-		"O(B x N) IS O(N^2). The blockmap does not rescue pure-compute collision; " +
-		"it relocates the same product. What WOULD: a sort primitive (bin actors " +
-		"by cell key in O(N log N), bins become contiguous ranges).")
+	t.Logf("READ: the blockmap BUILD is O(bins x actors) — each bin gathers over every " +
+		"actor — and BOTH axes are now measured (B here, N in F7b) with the fixed " +
+		"preamble subtracted rather than left to pollute the sweep. An imperative " +
+		"engine builds the same index in O(actors) by scatter, and MAINTAINS it " +
+		"incrementally thereafter. To make bins sparse enough to cut the O(N^2) " +
+		"collision term, B must grow with N — and then O(B x N) IS O(N^2). The " +
+		"blockmap relocates the product; it does not remove it. And per F9, `fold` " +
+		"does not rescue it either: the language has the loop but not an indexed " +
+		"update, so a scatter's loop body is O(B) and lands back on the same product, " +
+		"sequentially. The ask is a primitive that builds a keyed structure in one " +
+		"pass — see the report §6.")
 }
 
 // --- the rig ---------------------------------------------------------------
@@ -1489,6 +2087,172 @@ func astAssertState(t *testing.T, tick int, got *astState, gotHash hash.Hash, wa
 	if got.Status != 1 && gotHash != wantEnt.ContentHash {
 		t.Fatalf("tick %d: constructed state hash != hand-built oracle hash", tick)
 	}
+}
+
+// astSeedEmpty: ship at centre, NO asteroids. The wave trigger's precondition,
+// seeded directly rather than played into — the wave branch is what F8 tests, and
+// shooting a field empty first would only add ways for the test to not reach it.
+func astSeedEmpty(rng uint64) astState {
+	s := astState{
+		Kinds: make([]uint64, astCapacity),
+		Xs:    make([]int64, astCapacity),
+		Ys:    make([]int64, astCapacity),
+		Vxs:   make([]int64, astCapacity),
+		Vys:   make([]int64, astCapacity),
+		Rots:  make([]uint64, astCapacity),
+		Szs:   make([]uint64, astCapacity),
+		Ttls:  make([]uint64, astCapacity),
+		RNG:   rng % astLCGMod,
+	}
+	s.Kinds[0] = astShip
+	s.Xs[0] = astWorld / 2
+	s.Ys[0] = astWorld / 2
+	return s
+}
+
+// astWaveHeading evaluates one tick from an empty field and reports the heading
+// the wave came in on (the rot of the first spawned asteroid). Used to assert the
+// F-D3 high-bits property directly.
+func astWaveHeading(t *testing.T, rng uint64) uint64 {
+	t.Helper()
+	ap, err := entitysdk.CreatePeer(entitysdk.PeerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ap.Close() })
+	seed := astSeedEmpty(rng)
+	p := astSetup(t, ap, fmt.Sprintf("app/asteroids/f8h%d", rng), seed)
+	p.writeInput(t, 0)
+	got, _, err := p.tick()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < astCapacity; i++ {
+		if got.Kinds[i] == astAsteroid {
+			return got.Rots[i]
+		}
+	}
+	t.Fatal("no wave spawned — astWaveHeading has nothing to report")
+	return 0
+}
+
+// TestExpAsteroidsF8_WaveRespawn — clear the field and a new wave arrives.
+//
+// This is a GAMEPLAY gap from §10 of the report, not a capability gap, and it is
+// worth a probe only because of how it interacts with two things the track has
+// already been bitten by:
+//
+//   - the fixed-cap allocator (§1): a wave is four simultaneous spawns claiming
+//     free slots by rank, which is the widest the rank path has been exercised —
+//     splits only ever claim one slot per split.
+//   - F-D3, the LCG's low bits: the wave heading is the first thing in this
+//     program to consume the RNG stream for anything a human would SEE. A
+//     power-of-two-modulus LCG has period 2^k in its low k bits, so `rng % 16`
+//     would cycle every 16 ticks while looking perfectly random in a screenshot.
+//
+// ANTI-VACUITY: a test that asserts "4 asteroids exist" would pass on a seed that
+// simply had 4 asteroids. So it asserts the field was EMPTY first, that the wave
+// arrived from nothing, that it does NOT re-trigger while asteroids survive, and
+// it checks every tick against the oracle field-by-field and at the hash.
+func TestExpAsteroidsF8_WaveRespawn(t *testing.T) {
+	ap, err := entitysdk.CreatePeer(entitysdk.PeerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ap.Close() })
+
+	seed := astSeedEmpty(7)
+	if n := astCount(seed, astAsteroid); n != 0 {
+		t.Fatalf("VACUOUS: the seed already has %d asteroids — the wave would prove nothing", n)
+	}
+	p := astSetup(t, ap, "app/asteroids/f8", seed)
+
+	cur := seed
+	const ticks = 6
+	for tk := 1; tk <= ticks; tk++ {
+		p.writeInput(t, 0)
+		want := astNext(cur, 0)
+		got, gh, err := p.tick()
+		if err != nil {
+			t.Fatalf("tick %d: %v", tk, err)
+		}
+		astAssertState(t, tk, got, gh, want)
+
+		if tk == 1 {
+			// THE WAVE: it must arrive, whole, on the first tick after empty.
+			if n := astCount(*got, astAsteroid); uint64(n) != astWaveCount {
+				t.Fatalf("tick 1: expected a wave of %d asteroids on an empty field, got %d",
+					astWaveCount, n)
+			}
+			// Structural, not statistical: distinct positions, correct size, and
+			// every one exactly astWaveDist from the ship — which is what makes
+			// "clear of the ship" true by construction rather than by luck.
+			seen := map[[2]int64]bool{}
+			for i := 0; i < astCapacity; i++ {
+				if got.Kinds[i] != astAsteroid {
+					continue
+				}
+				if got.Szs[i] != astWaveSize {
+					t.Fatalf("wave asteroid slot %d: size %d, want %d", i, got.Szs[i], astWaveSize)
+				}
+				pos := [2]int64{got.Xs[i], got.Ys[i]}
+				if seen[pos] {
+					t.Fatalf("wave asteroids are STACKED at %v — the ring collapsed to one point "+
+						"(a per-asteroid angle that does not vary with j)", pos)
+				}
+				seen[pos] = true
+
+				dx, dy := got.Xs[i]-got.Xs[0], got.Ys[i]-got.Ys[0]
+				d2 := dx*dx + dy*dy
+				wantD2 := astWaveDist * astWaveDist
+				if d := d2 - wantD2; d > wantD2/50 || d < -wantD2/50 {
+					t.Fatalf("wave asteroid slot %d is %d² from the ship, want ~%d² — the ring is "+
+						"not ship-centred, so clearance is not structural", i, d2, wantD2)
+				}
+				// the kill radius the ship would have to survive.
+				hit := astShipRadius + astAstRadius*int64(got.Szs[i])
+				if d2 < hit*hit {
+					t.Fatalf("wave asteroid slot %d spawned INSIDE the ship's kill radius", i)
+				}
+			}
+			if got.Kinds[0] != astShip || got.Status != 0 {
+				t.Fatal("the ship did not survive its own wave spawn")
+			}
+		}
+		if tk == 2 {
+			// The trigger is conditional, not per-tick: with asteroids alive the
+			// wave must NOT fire again. A step that re-seeded every tick would
+			// pass every tick-1 assertion above.
+			if n := astCount(*got, astAsteroid); uint64(n) != astWaveCount {
+				t.Fatalf("tick 2: wave re-triggered while asteroids were alive (%d asteroids) — "+
+					"the noast guard is not holding", n)
+			}
+		}
+		cur = want
+	}
+
+	// F-D3, asserted as the structural property it actually is: the heading is a
+	// function of the RNG's HIGH bits alone. Two seeds differing only in the low
+	// 16 bits must agree; a seed differing in the high bits must not. This fails
+	// loudly on `rng % astRotSteps`, which is the bug that shipped once already.
+	const hi = uint64(0x2A) << 16
+	h1 := astWaveHeading(t, hi|0x0001)
+	h2 := astWaveHeading(t, hi|0xBEEF)
+	if h1 != h2 {
+		t.Fatalf("wave heading changed with the RNG's LOW bits (%d vs %d) — the spawn is reading "+
+			"the poisoned half of the LCG (F-D3)", h1, h2)
+	}
+	h3 := astWaveHeading(t, (uint64(0x15)<<16)|0x0001)
+	if h3 == h1 {
+		t.Fatalf("wave heading ignored the RNG's HIGH bits too (%d) — the heading is constant, "+
+			"which is not an RNG at all", h3)
+	}
+
+	t.Logf("PASS F8: an empty field respawns a wave of %d size-%d asteroids on a ring "+
+		"astWaveDist from the ship (clearance structural, positions distinct), the guard holds "+
+		"on the next tick, every tick matches the oracle field-by-field AND at the hash, and the "+
+		"heading is a function of the RNG's HIGH bits only (F-D3: low bits change nothing, "+
+		"high bits do).", astWaveCount, astWaveSize)
 }
 
 // --- F2: the differential run — spawns, splits, and the oracle --------------
@@ -1783,8 +2547,21 @@ func TestExpAsteroidsF5_OutputPortCost(t *testing.T) {
 
 	// CORRECTNESS before cost: the ship's quad must be 4 vertices at ~3 units
 	// from the ship's centre, and the kinds must survive the projection.
-	if len(dl.Kinds) != astCapacity || len(dl.X0) != astCapacity {
-		t.Fatalf("display list wrong length: kinds=%d x0=%d", len(dl.Kinds), len(dl.X0))
+	//
+	// The display list is O(DRAWABLES), not O(slots): it carries one quad per LIVE
+	// actor, in slot order, and free slots never appear (they are not drawables,
+	// and the consumer has always dropped them — program_asteroids.go Render()).
+	// The count is derived from the seed rather than hard-coded so this stays a
+	// real assertion if the seed changes.
+	wantQuads := 0
+	for _, k := range seed.Kinds {
+		if k != astFree {
+			wantQuads++
+		}
+	}
+	if len(dl.Kinds) != wantQuads || len(dl.X0) != wantQuads {
+		t.Fatalf("display list wrong length: kinds=%d x0=%d want=%d (live actors in the seed)",
+			len(dl.Kinds), len(dl.X0), wantQuads)
 	}
 	if dl.Kinds[0] != astShip || dl.Kinds[1] != astAsteroid || dl.Kinds[2] != astBullet {
 		t.Fatalf("display list lost the kind tags: %v", dl.Kinds[:3])
@@ -1889,18 +2666,31 @@ func TestExpAsteroidsF5_OutputPortCost(t *testing.T) {
 	// (Anti-vacuity on the assertion itself: comparing against fbs[last] would
 	// silently skip, because the largest framebuffer is over the cap and has no
 	// measured cost. Compare against the largest one that actually MEASURED.)
-	var big *fbResult
+	var big, small *fbResult
 	for i := range fbs {
 		if fbs[i].ok {
 			big = &fbs[i]
+			if small == nil {
+				small = &fbs[i]
+			}
 		}
 	}
-	if big == nil {
+	if big == nil || small == nil {
 		t.Fatal("no framebuffer resolution measured under the cap — nothing to compare")
 	}
 	if dlOps >= big.ops {
 		t.Fatalf("expected the framebuffer to dominate the display list; got dl=%d fb%dx%d=%d",
 			dlOps, big.w, big.h, big.ops)
+	}
+	// The STRONGER claim, now that both ports are lowered honestly: the
+	// framebuffer loses at the SMALLEST resolution in the sweep, not merely at a
+	// large-N crossover. If this ever fails while the assertion above passes, the
+	// display list stopped being resolution-independent — read F6 before touching
+	// the number.
+	fbSmallOps := small.ops
+	if dlOps >= fbSmallOps {
+		t.Fatalf("expected the display list to beat even the smallest framebuffer "+
+			"(%dx%d); got dl=%d fb=%d", small.w, small.h, dlOps, fbSmallOps)
 	}
 	// The cliff is the headline: SOME framebuffer resolution must exceed the cap,
 	// otherwise this sweep never reached the interesting regime.
@@ -1917,11 +2707,16 @@ func TestExpAsteroidsF5_OutputPortCost(t *testing.T) {
 	t.Logf("READ: the display list costs O(actors) and is INDEPENDENT of "+
 		"resolution; the framebuffer costs O(pixels x LIVE actors), because a pure "+
 		"(state)->frame function cannot scatter and must ask, at every pixel, which "+
-		"actors cover it. Both are cheap here — the framebuffer only becomes the "+
-		"loser as resolution x actor count grows (see F6's sweep and the report's "+
-		"Doom extrapolation). The step's own cost (%d) is the floor under all "+
-		"three: a derived port is ADDITIONAL work per tick, not a substitute.",
-		stepOps)
+		"actors cover it. Every row here is measured at its BEST lowering (live "+
+		"lists throughout), which is what makes the comparison mean anything — and "+
+		"the framebuffer is ALREADY the loser at 8x8 (%d), a derisory resolution, "+
+		"costing %.1fx the display list (%d). It is not a large-N crossover: "+
+		"resolution only widens a gap that is open at the smallest grid we can "+
+		"draw. The step's own cost (%d) is the floor under all three — a derived "+
+		"port is ADDITIONAL work per tick, not a substitute — but the display list "+
+		"adds only %.0f%% to the tick, so the generic renderer is nearly free.",
+		fbSmallOps, float64(fbSmallOps)/float64(dlOps), dlOps, stepOps,
+		100*float64(dlOps)/float64(stepOps))
 }
 
 // --- F6: WHERE the framebuffer's ops actually go ---------------------------
