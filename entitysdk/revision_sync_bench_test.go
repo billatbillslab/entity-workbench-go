@@ -70,9 +70,9 @@ func TestDiag_CrossPeerSync_ReadDuringWrite(t *testing.T) {
 	}
 
 	type sample struct {
-		variant      string
-		itemCount    int
-		syncWall     time.Duration
+		variant       string
+		itemCount     int
+		syncWall      time.Duration
 		readerSamples []time.Duration
 	}
 	results := make([]sample, 0, len(variants))
@@ -164,9 +164,9 @@ func TestDiag_CrossPeerSync_ReadDuringWrite(t *testing.T) {
 			knownPath := "shared/alice-0000"
 
 			var (
-				stop    atomic.Bool
-				samples []time.Duration
-				smu     sync.Mutex
+				stop       atomic.Bool
+				samples    []time.Duration
+				smu        sync.Mutex
 				readerDone sync.WaitGroup
 			)
 			readerDone.Add(1)
@@ -462,8 +462,9 @@ func hasPrefix(s, p string) bool {
 // 14K-path corpus.
 //
 // Usage:
-//   DIAG_REAL_DB=/tmp/qdesktop-snapshot.db DIAG_REAL_DB_IDENTITY=qdesktop \
-//   make test-sdk GOTEST_FLAGS="-count=1" ARGS="-run TestDiag_TreeBrowserModelCost -v -timeout 30s"
+//
+//	DIAG_REAL_DB=/tmp/qdesktop-snapshot.db DIAG_REAL_DB_IDENTITY=qdesktop \
+//	make test-sdk GOTEST_FLAGS="-count=1" ARGS="-run TestDiag_TreeBrowserModelCost -v -timeout 30s"
 func TestDiag_TreeBrowserModelCost(t *testing.T) {
 	dbPath := os.Getenv("DIAG_REAL_DB")
 	if dbPath == "" {
@@ -542,8 +543,8 @@ func TestDiag_TreeBrowserModelCost(t *testing.T) {
 // TestDiag_PathCountCost compares the new LenPrefix-backed PathCount
 // against the old List("")-backed approach against a real corpus.
 //
-//   DIAG_REAL_DB=/tmp/qdesktop-snapshot.db DIAG_REAL_DB_IDENTITY=qdesktop \
-//   make test-sdk GOTEST_FLAGS="-count=1" ARGS="-run TestDiag_PathCountCost -v"
+//	DIAG_REAL_DB=/tmp/qdesktop-snapshot.db DIAG_REAL_DB_IDENTITY=qdesktop \
+//	make test-sdk GOTEST_FLAGS="-count=1" ARGS="-run TestDiag_PathCountCost -v"
 func TestDiag_PathCountCost(t *testing.T) {
 	dbPath := os.Getenv("DIAG_REAL_DB")
 	if dbPath == "" {

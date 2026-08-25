@@ -41,3 +41,6 @@ publish-out/
 
 # Cross-impl fixture output (publish/cmd/crossimpl-fixture)
 .crossimpl-out/
+
+# test-each per-suite logs (make test-each)
+.test-logs/

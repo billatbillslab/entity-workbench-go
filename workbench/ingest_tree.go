@@ -46,12 +46,12 @@ func extractFirstHeading(body string) string {
 
 // TreeIngestResult reports the outcome of a structured ingest run.
 type TreeIngestResult struct {
-	Created  int      // markdown files successfully written
-	Skipped  int      // non-markdown files passed over (counted, not errors)
-	Errors   []string // per-file error messages (continued on, not fatal)
-	BytesIn  int64    // total file bytes read
-	Prefix   string   // tree prefix used (for caller display)
-	SrcRoot  string   // source directory walked (cleaned absolute)
+	Created int      // markdown files successfully written
+	Skipped int      // non-markdown files passed over (counted, not errors)
+	Errors  []string // per-file error messages (continued on, not fatal)
+	BytesIn int64    // total file bytes read
+	Prefix  string   // tree prefix used (for caller display)
+	SrcRoot string   // source directory walked (cleaned absolute)
 }
 
 // IngestMarkdownTree walks srcDir for .md files and writes each one

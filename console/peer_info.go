@@ -30,11 +30,13 @@ func newPeerInfo(peerCtx *wb.PeerContext) *peerInfoContent {
 	return pi
 }
 
-func (pi *peerInfoContent) typeName() string              { return "peer-info" }
-func (pi *peerInfoContent) widget() tview.Primitive       { return pi.view }
-func (pi *peerInfoContent) focusTarget() tview.Primitive  { return pi.view }
-func (pi *peerInfoContent) handleEvent(e, v string) bool  { return false }
-func (pi *peerInfoContent) setHighlight(m highlightMode)  { pi.view.SetBorderColor(borderColorForMode(m)) }
+func (pi *peerInfoContent) typeName() string             { return "peer-info" }
+func (pi *peerInfoContent) widget() tview.Primitive      { return pi.view }
+func (pi *peerInfoContent) focusTarget() tview.Primitive { return pi.view }
+func (pi *peerInfoContent) handleEvent(e, v string) bool { return false }
+func (pi *peerInfoContent) setHighlight(m highlightMode) {
+	pi.view.SetBorderColor(borderColorForMode(m))
+}
 
 func (pi *peerInfoContent) refresh() {
 	pi.view.Clear()

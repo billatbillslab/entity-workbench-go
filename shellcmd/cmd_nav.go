@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"go.entitychurch.org/entity-core-go/core/ecf"
 	"entity-workbench-go/entitysdk"
+	"go.entitychurch.org/entity-core-go/core/ecf"
 )
 
 // cmdLs implements `ls [path]`. At root (no peer in the path) it

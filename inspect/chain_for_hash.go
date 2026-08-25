@@ -23,8 +23,8 @@ package inspect
 import (
 	"strings"
 
-	coretypes "go.entitychurch.org/entity-core-go/core/types"
 	"go.entitychurch.org/entity-core-go/core/hash"
+	coretypes "go.entitychurch.org/entity-core-go/core/types"
 
 	"github.com/fxamacker/cbor/v2"
 

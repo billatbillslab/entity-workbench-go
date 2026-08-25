@@ -313,8 +313,8 @@ exit
 `)
 	mustContain(t, out,
 		`recording enabled for "notes/*"`,
-		"created",  // first write event
-		"updated",  // second write event
+		"created", // first write event
+		"updated", // second write event
 	)
 }
 
@@ -415,7 +415,6 @@ exit
 		"Type:  system/tree/listing",
 	)
 }
-
 
 // TestE2E_FindAndGrep validates the shell-side search verbs against
 // the ingest fixture tree. find = substring path search;

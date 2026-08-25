@@ -17,16 +17,16 @@ import (
 // `tree:diff + tree:extract(Paths=...)`. Validates the data-flow story we
 // plan to take to the arch team:
 //
-//   1. alice has snapshot X (after initial commit) and snapshot Y (after
-//      a tiny incremental commit).
-//   2. bob has X (synced via the canonical tree:extract → tree:merge).
-//   3. bob asks alice: tree:diff(base=X, target=Y). Alice computes diff
-//      from her local store (she has both). Returns DiffData with the
-//      changed paths only.
-//   4. bob asks alice: tree:extract(prefix, Paths=changed_paths). Alice
-//      bundles only the changed paths + the trie nodes needed to walk to
-//      them.
-//   5. bob does tree:merge locally.
+//  1. alice has snapshot X (after initial commit) and snapshot Y (after
+//     a tiny incremental commit).
+//  2. bob has X (synced via the canonical tree:extract → tree:merge).
+//  3. bob asks alice: tree:diff(base=X, target=Y). Alice computes diff
+//     from her local store (she has both). Returns DiffData with the
+//     changed paths only.
+//  4. bob asks alice: tree:extract(prefix, Paths=changed_paths). Alice
+//     bundles only the changed paths + the trie nodes needed to walk to
+//     them.
+//  5. bob does tree:merge locally.
 //
 // The bandwidth assertion: step 4's envelope should be O(diff), not
 // O(workspace). If true, the existing primitives compose into efficient

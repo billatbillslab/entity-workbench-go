@@ -122,13 +122,13 @@ func (sh *Shell) connForPath(p Path) *PeerConn {
 //   - "@alice/foo/bar"        → /{alice_peer_id}/foo/bar
 //   - "/@alice/foo/bar"       → /{alice_peer_id}/foo/bar (canonical)
 //   - "/alice/foo/bar"        → /{alice_peer_id}/foo/bar (legacy
-//                                 absolute-with-alias-as-first-segment;
-//                                 retained because @alias resolves to
-//                                 the peer-id and we accept the
-//                                 already-resolved form too)
+//     absolute-with-alias-as-first-segment;
+//     retained because @alias resolves to
+//     the peer-id and we accept the
+//     already-resolved form too)
 //   - "alias:..." (deprecated)→ /{peer_id}/... — still accepted for
-//                                 one release; users should migrate
-//                                 to "@alias/..."
+//     one release; users should migrate
+//     to "@alias/..."
 //   - everything else         → Resolve(input, sh.WD)
 //
 // Aliases that don't match a connection fall through, leaving the

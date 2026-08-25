@@ -483,7 +483,7 @@ func (a *AppPeer) SubscribeAt(peerID, pattern string, opts SubscribeOpts) (*Subs
 	deliverURI := inboxPath
 	subscriptionHandlerURI := "system/subscription"
 	granteeHash := a.peer.Identity().ContentHash // local default: self
-	var parentCapHash *hash.Hash                  // unused locally; set for cross-peer forward-compat
+	var parentCapHash *hash.Hash                 // unused locally; set for cross-peer forward-compat
 	if peerID != a.PeerID() {
 		deliverURI = fmt.Sprintf("entity://%s/%s", a.PeerID(), inboxPath)
 		subscriptionHandlerURI = extPeerURI(a.PeerID(), peerID, "system/subscription")
@@ -578,14 +578,14 @@ func (a *AppPeer) SubscribeAt(peerID, pattern string, opts SubscribeOpts) (*Subs
 	}
 
 	return &Subscription{
-		id:        id,
-		subID:     subID,
-		pattern:   pattern,
-		inboxPath: inboxPath,
-		events:    events,
-		ap:        a,
-		ch:        ch,
-		handle:    handle,
+		id:         id,
+		subID:      subID,
+		pattern:    pattern,
+		inboxPath:  inboxPath,
+		events:     events,
+		ap:         a,
+		ch:         ch,
+		handle:     handle,
 		remotePeer: peerID,
 	}, nil
 }

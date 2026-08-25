@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"entity-workbench-go/entitysdk"
 	"go.entitychurch.org/entity-core-go/core/crypto"
 	"go.entitychurch.org/entity-core-go/core/peer"
-	"entity-workbench-go/entitysdk"
 )
 
 // TestShell_RemoteConnectAndDispatch wires two AppPeers in-process,
@@ -221,4 +221,3 @@ func TestShell_Phase3Commands(t *testing.T) {
 		t.Errorf("has post-rm: %q", res.Message)
 	}
 }
-

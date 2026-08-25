@@ -403,10 +403,11 @@ func (m *SnakeGameModel) Close() { m.Stop() }
 // record + oracle/replay proofs; change them together).
 //
 // Lowering rules honored (POC findings review doc):
-//   F-D1  integer floor-div = div(sub(a, mod(a,b)), b)
-//   F-E2a partial ops guarded behind lazy if (index only when in-bounds)
-//   F-E2b rare-path work (food filter) inside the if branch, not a let
-//   let* binding order is SORTED-name order — names picked to match.
+//
+//	F-D1  integer floor-div = div(sub(a, mod(a,b)), b)
+//	F-E2a partial ops guarded behind lazy if (index only when in-bounds)
+//	F-E2b rare-path work (food filter) inside the if branch, not a let
+//	let* binding order is SORTED-name order — names picked to match.
 func buildSnakeStepExpr(ap *entitysdk.AppPeer, w, h int, statePath, inputPath string) *entitysdk.Builder {
 	c := ap.Compute()
 	W, H := uint64(w), uint64(h)

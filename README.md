@@ -6,6 +6,64 @@ It demonstrates one coherent way to build an entity-native application — it is
 shapes; the workbench is an opinionated, worked example you can learn from,
 lift from, or ignore.
 
+## Quickstart
+
+```bash
+git clone <this repo>                    # and its sibling, see "Repository layout"
+cd entity-workbench-go
+
+make doctor      # is this machine set up? names anything missing, exits non-zero on blockers
+make build       # every Go binary -> ./bin
+make demo        # a scripted tour of the CLI in a throwaway HOME (deleted on exit)
+```
+
+`make demo` is the fastest way to see whether this works on your machine: it
+creates an identity, writes and reads a tree entity, binds and resolves a
+name, and shows a name failing closed — all through the shipped
+`entity-shell` binary, in a temp directory it removes on exit.
+
+Then pick an interface:
+
+```bash
+make run                 # entity-shell REPL (the CLI)
+make run ARGS="name ls"  # ...or a one-shot command
+make gui                 # the Avalonia desktop app (podman; first build is slow)
+```
+
+And to check the tree's state:
+
+```bash
+make test-each   # EVERY Go suite to completion + a summary table
+make gui-test    # Avalonia headless UI tests
+```
+
+> **Use `make test-each`, not `make test`, when you want to know where things
+> stand.** `make test` is fail-fast: it stops at the first failing package, so
+> a failure count read from it covers one package and is a lower bound.
+> `test-each` runs all ten suites regardless, prints a pass/fail table, and
+> leaves per-suite logs in `.test-logs/`.
+
+`make help` lists everything.
+
+## Requirements
+
+| Need | For | Notes |
+|---|---|---|
+| `make` + `podman` | everything | The only hard requirements. `make build` / `make test` run inside a pinned `golang:1.25-bookworm` image. |
+| sibling `../entity-core-go` | everything | **Required.** Every `go.mod` resolves the kernel through a local `replace`. Without it the build dies at module resolution. See [Repository layout](#repository-layout-sibling-dependency). |
+| Go toolchain (host) | optional | Enables the faster `-native` targets (`make build-native`). The Makefile pins `GOTOOLCHAIN=go1.25.1`; never set it yourself. |
+| .NET SDK | **never** | The Avalonia GUI builds entirely inside podman. Do not install dotnet on the host. |
+
+**Platform: Linux is the only tested host.** The Go sources carry no
+platform-specific code — no `syscall` use, no `golang.org/x/sys`, no
+`//go:build linux` tags anywhere in the shipped modules, and the SQLite driver
+(`modernc.org/sqlite`) is pure Go — so the CLI and TUI have no *known* reason
+not to build elsewhere. That is an argument, not a measurement: **nothing but
+Linux has been run.** The GUI is built and smoke-tested against X11/Xvfb inside
+a Fedora-based container, so it is the least portable piece by construction.
+`make doctor` warns on a non-Linux host rather than pretending. macOS and
+Windows are unvalidated, not unsupported-by-design.
+
 ## Where this sits in the stack
 
 ```
@@ -41,32 +99,51 @@ logging conventions, plus the usage guides).
 
 ## Build & run — everything goes through `make` + `podman`
 
-The native Go binaries need only a Go toolchain (pinned by the Makefile to
-**go 1.25.1** via `GOTOOLCHAIN`; you do not set it yourself). The Avalonia GUI
-needs only **`make` + `podman`** on the host — the .NET SDK, Go, and Skia
-dependencies all live inside the container, never on your machine.
+`make` is the whole interface; `make help` is the index. The table below is
+the full set most people need.
+
+| Command | Does |
+|---|---|
+| `make doctor` | Check prerequisites, the sibling kernel, and the GUI image |
+| `make build` | Every shipped Go binary → `./bin` (in-container) |
+| `make run` | Build + start `entity-shell` (REPL); `ARGS="…"` for one-shot |
+| `make gui` | Build + launch the Avalonia desktop app (podman) |
+| `make demo` | Scripted CLI tour in a throwaway HOME |
+| `make test-each` | Every Go suite **to completion** + summary table |
+| `make test` | Full `-race` sweep — **fail-fast**, stops at the first failure |
+| `make gui-test` | Avalonia headless UI tests (`Avalonia.Headless.XUnit`) |
+| `make lint` / `make fmt` | `go vet` (read-only) / `gofmt -w` (writes) |
+| `make check` | `lint` + `test` — the green gate |
+| `make clean` | Remove build outputs |
+
+The GUI targets are thin passthroughs to `avalonia/Makefile`, which has its own
+richer surface — in particular the X11 smoke drivers that exercise a panel in a
+real window under Xvfb (`make -C avalonia smoke-xvfb-handlers`, `…-life`,
+`…-window`, …). Those catch what headless cannot; see
+`docs/architecture/TESTING-STRATEGY.md`.
+
+Add `-native` to run a Go target on a host toolchain instead of in the
+container (`make build-native`, `make test-each-native`).
+
+### Identity and storage
+
+`entity-shell`, `entity-console`, and the Avalonia frontend share the same
+flags:
 
 ```bash
-# Native (Go) — no container
-make test                 # full race-enabled test sweep across all modules
-make build                # entity-shell + entity-console + CDN corridor tools
-make shell                # go run the entity-shell REPL
-make shell ARGS="info"    # one-shot shell command
-make console-run          # build + run the TUI
-
-# Avalonia desktop GUI — podman only
-make -C avalonia build    # build the multi-stage image
-make -C avalonia up       # build + extract + launch on the host
-make -C avalonia test     # headless UI tests (Avalonia.Headless.XUnit)
+entity-shell   -identity peerA -storage sqlite   # path defaults to ~/.entity/peers/peerA/store.db
+entity-console -identity peerA -storage sqlite
 ```
 
-The `entity-shell`, `entity-console`, and Avalonia frontends share the same
-identity + storage flags:
+> **Use `-identity` whenever you use `-storage sqlite`.** Without a named
+> identity the shell generates a **fresh keypair per invocation**, so each run
+> writes into a different namespace of the same database and nothing you wrote
+> last time is visible. Everything still "works" — it just silently doesn't
+> persist. (Known rough edge; see `docs/status/STATUS.md`.)
 
-```bash
-entity-shell   -identity peerA -storage sqlite -storage-path ~/.entity/peerA.db
-entity-console -identity peerA -storage sqlite -storage-path ~/.entity/peerA.db
-```
+Name resolution is on by default (`EXTENSION-REGISTRY`), which is what the
+`name` verb needs — `name bind` / `resolve` / `ls` / `config`. Turn it off with
+`-disable-registry`.
 
 Markdown and other files enter the workbench via the shell's `mount` verb,
 which bridges a filesystem directory to a tree prefix; GUI edits round-trip

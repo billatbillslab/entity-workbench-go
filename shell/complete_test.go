@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"go.entitychurch.org/entity-core-go/core/crypto"
 	"entity-workbench-go/entitysdk"
 	"entity-workbench-go/shellcmd"
+	"go.entitychurch.org/entity-core-go/core/crypto"
 )
 
 // newTestApp builds an App over a fresh local AppPeer and seeds a few
@@ -43,9 +43,9 @@ func newTestApp(t *testing.T) *App {
 
 func TestSplitPathToken(t *testing.T) {
 	tests := []struct {
-		in      string
-		dir     string
-		leaf    string
+		in   string
+		dir  string
+		leaf string
 	}{
 		{"", "", ""},
 		{"foo", "", "foo"},

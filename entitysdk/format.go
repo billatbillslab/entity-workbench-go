@@ -102,9 +102,9 @@ func SortedMapKeys(m map[interface{}]interface{}) ([]string, map[string]interfac
 
 // FormattedLine is one line in a formatted CBOR tree.
 type FormattedLine struct {
-	Indent int            // nesting depth
+	Indent int             // nesting depth
 	Key    *FormattedValue // non-nil for map entries
-	Index  int            // >= 0 for array entries, -1 otherwise
+	Index  int             // >= 0 for array entries, -1 otherwise
 	Value  *FormattedValue // non-nil for leaf values
 }
 

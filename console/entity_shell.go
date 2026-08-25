@@ -79,12 +79,14 @@ func newEntityShell(shWs *shellcmd.ShellWorkspace, publishWD func(prev, next she
 	return sh
 }
 
-func (sh *entityShellContent) typeName() string              { return "entity-shell" }
-func (sh *entityShellContent) widget() tview.Primitive       { return sh.root }
-func (sh *entityShellContent) focusTarget() tview.Primitive  { return sh.input }
-func (sh *entityShellContent) refresh()                      {} // command-driven, not event-driven
-func (sh *entityShellContent) handleEvent(e, v string) bool  { return false }
-func (sh *entityShellContent) setHighlight(m highlightMode)  { sh.root.SetBorderColor(borderColorForMode(m)) }
+func (sh *entityShellContent) typeName() string             { return "entity-shell" }
+func (sh *entityShellContent) widget() tview.Primitive      { return sh.root }
+func (sh *entityShellContent) focusTarget() tview.Primitive { return sh.input }
+func (sh *entityShellContent) refresh()                     {} // command-driven, not event-driven
+func (sh *entityShellContent) handleEvent(e, v string) bool { return false }
+func (sh *entityShellContent) setHighlight(m highlightMode) {
+	sh.root.SetBorderColor(borderColorForMode(m))
+}
 
 // renderNewOutput writes any new output lines from the model to the tview TextView.
 func (sh *entityShellContent) renderNewOutput() {

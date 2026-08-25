@@ -41,9 +41,9 @@ func TestIngestMarkdownTree_StructureAndCounts(t *testing.T) {
 		}
 	}
 	mustWrite("top.md", "# Top Heading\nhello")
-	mustWrite("sub/nested.md", "no heading here")          // title falls back to filename
-	mustWrite("sub/notes.txt", "not markdown")             // skipped (counted)
-	mustWrite(".git/config", "[core]")                     // .git dir skipped entirely
+	mustWrite("sub/nested.md", "no heading here") // title falls back to filename
+	mustWrite("sub/notes.txt", "not markdown")    // skipped (counted)
+	mustWrite(".git/config", "[core]")            // .git dir skipped entirely
 	mustWrite("deep/a/b/c.md", "# Deep\nx")
 
 	pc, _, _ := testPeerContext(t)

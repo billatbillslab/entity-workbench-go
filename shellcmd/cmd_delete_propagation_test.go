@@ -397,14 +397,14 @@ func TestE2E_Delete_ConcurrentEditDeletionWinsExplicit(t *testing.T) {
 // TestE2E_Delete_ConcurrentSamePathBothDelete verifies that concurrent
 // deletes of the SAME path on both peers converge trivially:
 //
-//   1. Both peers start with entity E bound at P (converged).
-//   2. Concurrent: alice removes P; bob also removes P.
-//   3. Both peers' commits emit the canonical deletion marker at P.
-//      Because the marker is byte-identical across peers (Amendment 1
-//      "canonical" property), both versions carry the SAME marker hash
-//      at P.
-//   4. Three-way merge classifies as "same on both sides" — no divergent
-//      case, no conflict resolution invoked. Trivially convergent.
+//  1. Both peers start with entity E bound at P (converged).
+//  2. Concurrent: alice removes P; bob also removes P.
+//  3. Both peers' commits emit the canonical deletion marker at P.
+//     Because the marker is byte-identical across peers (Amendment 1
+//     "canonical" property), both versions carry the SAME marker hash
+//     at P.
+//  4. Three-way merge classifies as "same on both sides" — no divergent
+//     case, no conflict resolution invoked. Trivially convergent.
 //
 // This directly verifies the canonical-marker convergence claim from
 // PROPOSAL-DELETION-MARKERS Amendment 3: "deletion-vs-deletion is NOT
@@ -470,18 +470,18 @@ func TestE2E_Delete_ConcurrentSamePathBothDelete(t *testing.T) {
 // other peer does the same concurrently on its own paths.
 //
 // Shape:
-//   1. Baseline: both peers have entries baseline-0..baseline-3 (4 entries).
-//   2. Concurrent burst (alice and bob in parallel goroutines):
-//      - alice: puts 3 new (alice-0..alice-2), removes baseline-0, re-puts baseline-1 with new content.
-//      - bob:   puts 3 new (bob-0..bob-2),   removes baseline-2, re-puts baseline-3 with new content.
-//   3. After convergence, expected final state on BOTH peers:
-//      - baseline-1 (alice's re-add wins via "changed" branch — entity supersedes prior).
-//      - baseline-3 (bob's re-add wins).
-//      - alice-0..alice-2 (alice's new puts propagate).
-//      - bob-0..bob-2   (bob's new puts propagate).
-//      - baseline-0 unbound (alice deleted, no concurrent op on this path → propagates cleanly).
-//      - baseline-2 unbound (bob deleted, same).
-//   Total: 8 entries on each peer.
+//  1. Baseline: both peers have entries baseline-0..baseline-3 (4 entries).
+//  2. Concurrent burst (alice and bob in parallel goroutines):
+//     - alice: puts 3 new (alice-0..alice-2), removes baseline-0, re-puts baseline-1 with new content.
+//     - bob:   puts 3 new (bob-0..bob-2),   removes baseline-2, re-puts baseline-3 with new content.
+//  3. After convergence, expected final state on BOTH peers:
+//     - baseline-1 (alice's re-add wins via "changed" branch — entity supersedes prior).
+//     - baseline-3 (bob's re-add wins).
+//     - alice-0..alice-2 (alice's new puts propagate).
+//     - bob-0..bob-2   (bob's new puts propagate).
+//     - baseline-0 unbound (alice deleted, no concurrent op on this path → propagates cleanly).
+//     - baseline-2 unbound (bob deleted, same).
+//     Total: 8 entries on each peer.
 //
 // This stresses:
 //   - Marker emission alongside add emission in the same commit cycle.

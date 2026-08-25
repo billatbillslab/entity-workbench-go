@@ -10,16 +10,16 @@ import (
 	"strings"
 
 	"go.entitychurch.org/entity-core-go/core/types"
-	"go.entitychurch.org/entity-core-go/ext/localfiles"
-	"go.entitychurch.org/entity-core-go/ext/content/chunker"
 	"go.entitychurch.org/entity-core-go/ext/content"
+	"go.entitychurch.org/entity-core-go/ext/content/chunker"
+	"go.entitychurch.org/entity-core-go/ext/localfiles"
 
 	"entity-workbench-go/entitysdk"
 )
 
 // SweepResult reports the outcome of a single mount sweep.
 type SweepResult struct {
-	RootName      string
+	RootName       string
 	FilesystemRoot string
 
 	// SourceRemoved lists tree paths under local/files/{root}/ that

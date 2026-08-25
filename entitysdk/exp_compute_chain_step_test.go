@@ -387,12 +387,12 @@ func TestExpA_2_ScopeParams(t *testing.T) {
 // a language-native recording handler. When the continuation is advanced,
 // the chain should:
 //
-//   1. dispatch system/continuation:advance
-//   2. continuation handler fires, dispatches to the compute-backed handler
-//   3. compute handler evaluates the expression with scope.params = {x: 42}
-//   4. compute handler returns 42 as primitive/any
-//   5. the continuation's deliver_to routes the result to the recording handler
-//   6. recording handler observes 42 in the inbox-delivery payload
+//  1. dispatch system/continuation:advance
+//  2. continuation handler fires, dispatches to the compute-backed handler
+//  3. compute handler evaluates the expression with scope.params = {x: 42}
+//  4. compute handler returns 42 as primitive/any
+//  5. the continuation's deliver_to routes the result to the recording handler
+//  6. recording handler observes 42 in the inbox-delivery payload
 //
 // This is the chain↔compute composition Experiment A was designed to test.
 // A1-A3 proved the floor (compute handler dispatchable in-process). A4
@@ -532,10 +532,12 @@ func TestExpA_4_ChainCompositionViaCompute(t *testing.T) {
 
 // TestExpA_3_ConstructResult — verify multi-field extract + construct.
 // Expression:
-//   construct{
-//     value:   field(params, "x"),
-//     doubled: arithmetic(mul, field(params, "x"), literal(2)),
-//   }
+//
+//	construct{
+//	  value:   field(params, "x"),
+//	  doubled: arithmetic(mul, field(params, "x"), literal(2)),
+//	}
+//
 // Dispatch with params={x: 21}, expect a returned entity with
 // {value: 21, doubled: 42}.
 //

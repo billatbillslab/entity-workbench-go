@@ -12,14 +12,14 @@
 //   - SiteManifest.Nav / Params — omitted when empty
 //   - SitePage.Frontmatter      — omitted when empty
 //   - NavItem.Target            — omitted when "" (section header, per
-//                                 spec `nav-node.? target`)
+//     spec `nav-node.? target`)
 //   - NavItem.Children          — omitted when empty (back-compat with
-//                                 flat-nav wire shape)
+//     flat-nav wire shape)
 //
 // Path layout under the peer's content namespace (peer-id substituted):
 //
-//   /{peer_id}/content/sites/{site_id}/manifest
-//   /{peer_id}/content/sites/{site_id}/pages/{slug}
+//	/{peer_id}/content/sites/{site_id}/manifest
+//	/{peer_id}/content/sites/{site_id}/pages/{slug}
 //
 // See SitePrefix/ManifestPath/PagePath helpers below. `assets/{name}`
 // is reserved for the post-v1 passive-Embed work; not exposed yet.

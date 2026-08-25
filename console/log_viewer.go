@@ -64,9 +64,9 @@ func (lv *logViewerContent) updateTitle() {
 	lv.view.SetTitle(fmt.Sprintf(" %s ", lv.model.Render().Title))
 }
 
-func (lv *logViewerContent) typeName() string              { return "log-viewer" }
-func (lv *logViewerContent) widget() tview.Primitive       { return lv.view }
-func (lv *logViewerContent) focusTarget() tview.Primitive  { return lv.view }
+func (lv *logViewerContent) typeName() string             { return "log-viewer" }
+func (lv *logViewerContent) widget() tview.Primitive      { return lv.view }
+func (lv *logViewerContent) focusTarget() tview.Primitive { return lv.view }
 
 func (lv *logViewerContent) refresh() {
 	entries := lv.model.NewEntries()

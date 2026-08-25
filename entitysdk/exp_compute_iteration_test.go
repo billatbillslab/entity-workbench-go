@@ -197,19 +197,21 @@ func TestExpB_1b_MapShapeFieldWorks(t *testing.T) {
 // the Lisp cons-cell encoding for the list.
 //
 // List shape: nested construct entities
-//   list(1, 2, 3) =
-//     construct{head: 1, tail: construct{head: 2, tail: construct{head: 3, tail: <nil>}}}
+//
+//	list(1, 2, 3) =
+//	  construct{head: 1, tail: construct{head: 2, tail: construct{head: 3, tail: <nil>}}}
 //
 // We use construct{nil: true} as the empty marker (any sentinel works;
 // `field(x, "nil")` will return true on empty, error on cons cells —
 // but recursion stops on the empty check before that).
 //
 // map(fn, list):
-//   if (lookup_scope("list") has "nil") then list                  // empty list, done
-//   else construct{
-//     head: apply(fn, {x: field(list, "head")}),
-//     tail: map(fn, field(list, "tail"))
-//   }
+//
+//	if (lookup_scope("list") has "nil") then list                  // empty list, done
+//	else construct{
+//	  head: apply(fn, {x: field(list, "head")}),
+//	  tail: map(fn, field(list, "tail"))
+//	}
 //
 // Run map(double, [1,2,3]) and verify result is the cons-cell encoded
 // version of [2,4,6].
@@ -369,17 +371,17 @@ func TestExpB_2_MapViaConsCells(t *testing.T) {
 // language-native via compute/apply."
 //
 // Shape:
-//   1. Register language-native handler `app/exp-c/sum-list` that takes
-//      params.numbers (a CBOR array) and returns the sum.
-//   2. Register entity-native (compute) handler `app/exp-c/extract-and-sum`
-//      whose expression:
-//        - extracts `numbers` from scope.params (returns the array as-is)
-//        - uses compute/apply to dispatch `app/exp-c/sum-list:sum` with
-//          {numbers: <extracted array>} as params
-//        - returns the apply result (which is the language-native handler's
-//          response entity)
-//   3. Dispatch the compute handler with params = {numbers: [1,2,3,4,5]}.
-//   4. Expect the result to be the sum (15).
+//  1. Register language-native handler `app/exp-c/sum-list` that takes
+//     params.numbers (a CBOR array) and returns the sum.
+//  2. Register entity-native (compute) handler `app/exp-c/extract-and-sum`
+//     whose expression:
+//     - extracts `numbers` from scope.params (returns the array as-is)
+//     - uses compute/apply to dispatch `app/exp-c/sum-list:sum` with
+//     {numbers: <extracted array>} as params
+//     - returns the apply result (which is the language-native handler's
+//     response entity)
+//  3. Dispatch the compute handler with params = {numbers: [1,2,3,4,5]}.
+//  4. Expect the result to be the sum (15).
 //
 // What this proves about the programming model:
 //   - Compute CAN dispatch to language-native helpers in-process
@@ -514,4 +516,3 @@ func TestExpC_1_DropDownFromComputeToNative(t *testing.T) {
 }
 
 // numEq is defined in the A file; helper reuse across exp test files.
-

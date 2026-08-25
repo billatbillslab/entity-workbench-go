@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"go.entitychurch.org/entity-core-go/core/crypto"
 	"entity-workbench-go/entitysdk"
+	"go.entitychurch.org/entity-core-go/core/crypto"
 )
 
 // TestDispatcher_ResolvesPathArgs confirms Registry.Dispatch applies

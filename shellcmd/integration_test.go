@@ -3,8 +3,8 @@ package shellcmd
 import (
 	"testing"
 
-	"go.entitychurch.org/entity-core-go/core/crypto"
 	"entity-workbench-go/entitysdk"
+	"go.entitychurch.org/entity-core-go/core/crypto"
 )
 
 // TestPersistAliases_RoundTrip verifies the integration helper wires

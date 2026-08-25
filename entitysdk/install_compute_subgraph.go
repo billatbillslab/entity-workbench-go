@@ -200,4 +200,3 @@ func resultPathToID(resultPath string) string {
 	}
 	return string(out)
 }
-

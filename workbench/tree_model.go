@@ -61,9 +61,9 @@ type TreeBrowserModel struct {
 	// All paths the model knows about, by qualified path. Maintained
 	// incrementally by the event handler. Used for search filter
 	// (filterEntries) which scans the known set.
-	mu      sync.Mutex
-	known   map[string]store.LocationEntry
-	dirty   bool // tree needs RebuildVisible on next Refresh
+	mu    sync.Mutex
+	known map[string]store.LocationEntry
+	dirty bool // tree needs RebuildVisible on next Refresh
 
 	lastSyncedPath string
 

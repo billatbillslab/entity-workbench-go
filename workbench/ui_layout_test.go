@@ -207,9 +207,9 @@ func TestNavigate_Vertical(t *testing.T) {
 func TestNavigate_Grid(t *testing.T) {
 	// Layout: [1 | 2] / [3 | 4]
 	n := LeafNode(1)
-	n.Split(1, SplitV, 3)    // top=1, bottom=3
-	n.Split(1, SplitH, 2)    // top-left=1, top-right=2
-	n.Split(3, SplitH, 4)    // bottom-left=3, bottom-right=4
+	n.Split(1, SplitV, 3) // top=1, bottom=3
+	n.Split(1, SplitH, 2) // top-left=1, top-right=2
+	n.Split(3, SplitH, 4) // bottom-left=3, bottom-right=4
 
 	// From 1, go right → 2
 	w, ok := Navigate(n, 1, NavRight)

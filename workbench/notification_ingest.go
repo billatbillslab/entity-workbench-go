@@ -352,10 +352,10 @@ func (h *NotificationIngestHandler) Handle(_ context.Context, req *handler.Reque
 	// we declare the markdown POC explicitly here.
 	if !isMarkdownPath(file.Path) {
 		resultRaw, _ := ecf.Encode(map[string]interface{}{
-			"skipped":      true,
-			"reason":       "type_not_handled",
-			"source_path":  file.Path,
-			"source_uri":   relativeURI,
+			"skipped":     true,
+			"reason":      "type_not_handled",
+			"source_path": file.Path,
+			"source_uri":  relativeURI,
 		})
 		resultEnt, _ := entity.NewEntity("workbench/ingest-from-notification/result", cbor.RawMessage(resultRaw))
 		return &handler.Response{Status: 200, Result: resultEnt}, nil

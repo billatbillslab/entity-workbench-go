@@ -33,17 +33,17 @@ import (
 //
 // What this test confirms (under the manual-Commit, no-markers path):
 //
-//	1. alice removes a leaf and updates another, then commits.
-//	2. diff(X, Y) reports the removed leaf in `Removed` (NOT
-//	   `Changed → marker`).
-//	3. The 4-step recipe's `collect_keys{fields:[added,changed]}`
-//	   does NOT include the bare-removed path → tree:extract(paths)
-//	   doesn't fetch it → bob's binding for it is preserved at the
-//	   original entity hash.
-//	4. Same for the 2-step recipe: tree:extract(since) bundles only
-//	   the diff closure; bare-deleted paths aren't represented as
-//	   bindings to a marker, so the merge leaves bob's prior binding
-//	   in place.
+//  1. alice removes a leaf and updates another, then commits.
+//  2. diff(X, Y) reports the removed leaf in `Removed` (NOT
+//     `Changed → marker`).
+//  3. The 4-step recipe's `collect_keys{fields:[added,changed]}`
+//     does NOT include the bare-removed path → tree:extract(paths)
+//     doesn't fetch it → bob's binding for it is preserved at the
+//     original entity hash.
+//  4. Same for the 2-step recipe: tree:extract(since) bundles only
+//     the diff closure; bare-deleted paths aren't represented as
+//     bindings to a marker, so the merge leaves bob's prior binding
+//     in place.
 //
 // The verdict matches HANDOFF §4: "Bare-removed paths preserve on
 // follower under this disposition. This is by design — bare deletion

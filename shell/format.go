@@ -6,8 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"go.entitychurch.org/entity-core-go/core/entity"
 	"entity-workbench-go/shellcmd"
+	"go.entitychurch.org/entity-core-go/core/entity"
 )
 
 // FormatText writes a renderer-neutral Result as plain text to out.

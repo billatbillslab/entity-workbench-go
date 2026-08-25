@@ -297,10 +297,10 @@ func (h *BlobResolveHandler) Handle(ctx context.Context, req *handler.Request) (
 	if hctx.Store != nil {
 		if existingHash, ok := tryGetLocalFileBlobHash(hctx, targetTreePath); ok && existingHash == file.Content {
 			return ackEntity(200, map[string]interface{}{
-				"skipped":      true,
-				"reason":       "already_current",
-				"target_path":  targetTreePath,
-				"blob_hash":    file.Content.String(),
+				"skipped":     true,
+				"reason":      "already_current",
+				"target_path": targetTreePath,
+				"blob_hash":   file.Content.String(),
 			})
 		}
 	}
@@ -369,10 +369,10 @@ func (h *BlobResolveHandler) Handle(ctx context.Context, req *handler.Request) (
 	}
 
 	return ackEntity(200, map[string]interface{}{
-		"target_path":  targetTreePath,
-		"blob_hash":    file.Content.String(),
-		"source_peer":  sourcePeerID,
-		"size":         file.Size,
+		"target_path": targetTreePath,
+		"blob_hash":   file.Content.String(),
+		"source_peer": sourcePeerID,
+		"size":        file.Size,
 	})
 }
 

@@ -18,17 +18,17 @@ import (
 //
 // Two distinct hypotheses to discriminate between:
 //
-//   H1 — "Auto-versioner skipped some commits."
-//        File a-1 was ingested into alice's tree but no commit
-//        ever captured the tree state with a-1 present. Auto-
-//        versioner missed the tree change (e.g., debounce, race
-//        with the previous commit still in flight).
+//	H1 — "Auto-versioner skipped some commits."
+//	     File a-1 was ingested into alice's tree but no commit
+//	     ever captured the tree state with a-1 present. Auto-
+//	     versioner missed the tree change (e.g., debounce, race
+//	     with the previous commit still in flight).
 //
-//   H2 — "Merge dropped already-committed entries."
-//        File a-1 WAS in some alice commit V_x. Later merges from
-//        bob's revisions produced a new committed state that
-//        doesn't include a-1. The merge's wipe-and-replace lost
-//        the binding.
+//	H2 — "Merge dropped already-committed entries."
+//	     File a-1 WAS in some alice commit V_x. Later merges from
+//	     bob's revisions produced a new committed state that
+//	     doesn't include a-1. The merge's wipe-and-replace lost
+//	     the binding.
 //
 // To distinguish: after the burst settles, for each missing file,
 // walk alice's revision log and check whether ANY ancestor commit

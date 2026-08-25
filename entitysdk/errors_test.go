@@ -38,7 +38,7 @@ func TestStatusOf(t *testing.T) {
 
 func TestStatusPredicates(t *testing.T) {
 	cases := []struct {
-		status                                                                    uint
+		status                                                                         uint
 		notFound, forbidden, conflict, rateLimited, notSupported, client, auth, system bool
 	}{
 		{400, false, false, false, false, false, true, false, false},

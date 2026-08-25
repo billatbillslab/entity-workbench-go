@@ -146,7 +146,7 @@ func TestStage3_Case4_ModifyAfterSync(t *testing.T) {
 
 	// Phase 2: modify with a payload that overlaps ~half of v1.
 	v2 := make([]byte, fileBytes)
-	copy(v2[:fileBytes/2], v1[:fileBytes/2])           // first half identical
+	copy(v2[:fileBytes/2], v1[:fileBytes/2])                  // first half identical
 	copy(v2[fileBytes/2:], makeProbePayload(43, fileBytes/2)) // second half differs
 	modifyTime := time.Now()
 	if err := os.WriteFile(mdPath, v2, 0600); err != nil {

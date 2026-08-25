@@ -274,11 +274,13 @@ func (ec *executeConsoleContent) execute() {
 
 // --- windowContent ---
 
-func (ec *executeConsoleContent) typeName() string              { return "execute-console" }
-func (ec *executeConsoleContent) widget() tview.Primitive       { return ec.root }
-func (ec *executeConsoleContent) focusTarget() tview.Primitive  { return ec.handlerList }
-func (ec *executeConsoleContent) handleEvent(e, v string) bool  { return false }
-func (ec *executeConsoleContent) setHighlight(m highlightMode)  { ec.root.SetBorderColor(borderColorForMode(m)) }
+func (ec *executeConsoleContent) typeName() string             { return "execute-console" }
+func (ec *executeConsoleContent) widget() tview.Primitive      { return ec.root }
+func (ec *executeConsoleContent) focusTarget() tview.Primitive { return ec.handlerList }
+func (ec *executeConsoleContent) handleEvent(e, v string) bool { return false }
+func (ec *executeConsoleContent) setHighlight(m highlightMode) {
+	ec.root.SetBorderColor(borderColorForMode(m))
+}
 
 func (ec *executeConsoleContent) refresh() {
 	if !ec.model.Refresh() {

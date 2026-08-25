@@ -140,4 +140,3 @@ func (m *ShellModel) appendLine(text string, kind wb.ValueKind) {
 type ShellOutput struct {
 	Lines []wb.OutputLine
 }
-

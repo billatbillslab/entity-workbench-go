@@ -20,15 +20,15 @@ import (
 // QueueUpdateDraw; the mutex guards currentPath against the tview
 // render thread reading it.
 type entityDetailContent struct {
-	view  *tview.TextView
-	model *wb.DetailModel
-	ws    *workspace
+	view    *tview.TextView
+	model   *wb.DetailModel
+	ws      *workspace
 	peerCtx *wb.PeerContext
 
-	mu                sync.Mutex
-	currentPath       string
-	cancelSelection   func() // unsubscribe from selection slot
-	cancelContent     func() // unsubscribe from current-path content watch
+	mu              sync.Mutex
+	currentPath     string
+	cancelSelection func() // unsubscribe from selection slot
+	cancelContent   func() // unsubscribe from current-path content watch
 }
 
 func newEntityDetail(ws *workspace, peerCtx *wb.PeerContext, state *wb.WorkspaceState, screenIdx int) *entityDetailContent {
@@ -117,16 +117,19 @@ func (ed *entityDetailContent) close() {
 	}
 }
 
-func (ed *entityDetailContent) typeName() string              { return "entity-detail" }
-func (ed *entityDetailContent) widget() tview.Primitive       { return ed.view }
-func (ed *entityDetailContent) focusTarget() tview.Primitive  { return ed.view }
+func (ed *entityDetailContent) typeName() string             { return "entity-detail" }
+func (ed *entityDetailContent) widget() tview.Primitive      { return ed.view }
+func (ed *entityDetailContent) focusTarget() tview.Primitive { return ed.view }
+
 // refresh is a no-op: render is driven by OnSelectionChange (path
 // changed) + the per-path Store.Watch (entity content changed). The
 // global queueRefresh tick no longer triggers a redraw — keeps
 // heartbeats and other irrelevant writes off the inspector's render
 // path entirely.
 func (ed *entityDetailContent) refresh() {}
-func (ed *entityDetailContent) setHighlight(m highlightMode)  { ed.view.SetBorderColor(borderColorForMode(m)) }
+func (ed *entityDetailContent) setHighlight(m highlightMode) {
+	ed.view.SetBorderColor(borderColorForMode(m))
+}
 
 func (ed *entityDetailContent) handleEvent(event string, value string) bool {
 	switch event {

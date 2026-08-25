@@ -255,4 +255,3 @@ func insertChildSorted(children []*TreeNode, child *TreeNode) []*TreeNode {
 	children[lo] = child
 	return children
 }
-

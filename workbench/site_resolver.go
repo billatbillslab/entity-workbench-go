@@ -121,8 +121,8 @@ type ContentResolver interface {
 // the entitysdk Store. Synchronous L0 reads — no I/O, no HTTP, no
 // goroutine.
 type LocalTreeResolver struct {
-	store      *Store
-	boundPeer  string
+	store     *Store
+	boundPeer string
 }
 
 // NewLocalTreeResolver builds a resolver bound to a peer's store.

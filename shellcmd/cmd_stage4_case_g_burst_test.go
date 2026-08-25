@@ -50,7 +50,7 @@ import (
 func TestStage4_CaseG_BurstHubSpoke(t *testing.T) {
 	const rootName = "sync"
 	const sourcePrefix = "local/files/" + rootName + "/"
-	const numPeers = 5  // 1 hub + 4 spokes
+	const numPeers = 5 // 1 hub + 4 spokes
 	const hubIdx = 0
 	const numFiles = 50 // burst size
 

@@ -168,12 +168,12 @@ func TestPOC_IncrementalSyncRecipes(t *testing.T) {
 
 // drive4StepRecipe executes the four chain steps via direct dispatch:
 //
-//	1.  cross-peer revision:diff(prefix, base=bob_head, target=alice_head)
-//	    (See note in TestPOC_IncrementalSyncRecipes on the diff-since-local-head
-//	    "cross-peer" framing issue surfaced by the POC.)
-//	2.  inline collect_keys{fields:[added,changed], into:paths}
-//	3.  cross-peer tree:extract(prefix, paths=$paths)
-//	4.  local tree:merge(source_envelope=$step3_result)
+//  1. cross-peer revision:diff(prefix, base=bob_head, target=alice_head)
+//     (See note in TestPOC_IncrementalSyncRecipes on the diff-since-local-head
+//     "cross-peer" framing issue surfaced by the POC.)
+//  2. inline collect_keys{fields:[added,changed], into:paths}
+//  3. cross-peer tree:extract(prefix, paths=$paths)
+//  4. local tree:merge(source_envelope=$step3_result)
 func drive4StepRecipe(t *testing.T, ctx context.Context, bob *entitysdk.AppPeer, aliceID, prefix string, base, target hash.Hash) pocMetrics {
 	t.Helper()
 	start := time.Now()
@@ -243,8 +243,8 @@ func drive4StepRecipe(t *testing.T, ctx context.Context, bob *entitysdk.AppPeer,
 
 // drive2StepRecipe executes the two chain steps via direct dispatch:
 //
-//	1.  cross-peer tree:extract(prefix, since=$BOB_LOCAL_TRIE_ROOT)
-//	2.  local tree:merge(source_envelope=$step1_result)
+//  1. cross-peer tree:extract(prefix, since=$BOB_LOCAL_TRIE_ROOT)
+//  2. local tree:merge(source_envelope=$step1_result)
 //
 // `since` is bob's current snapshot trie root for the followed prefix —
 // alice walks her current trie, skips subtrees whose hash matches bob's
@@ -310,8 +310,8 @@ func loadVersionTrieRoot(t *testing.T, ap *entitysdk.AppPeer, versionHash hash.H
 
 // driveFullExtract executes the current production cmdRevisionFollow shape:
 //
-//	1.  cross-peer tree:extract(prefix)   — full subtree closure
-//	2.  local tree:merge(source_envelope) — apply
+//  1. cross-peer tree:extract(prefix)   — full subtree closure
+//  2. local tree:merge(source_envelope) — apply
 func driveFullExtract(t *testing.T, ctx context.Context, bob *entitysdk.AppPeer, aliceID, prefix string) pocMetrics {
 	t.Helper()
 	start := time.Now()

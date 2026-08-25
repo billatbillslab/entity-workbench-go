@@ -11,8 +11,8 @@ type LogLevel int
 
 const (
 	LogInfo    LogLevel = iota // application events (default)
-	LogVerbose                // + executor operations (tree get/list/put)
-	LogDebug                  // + entity data summaries
+	LogVerbose                 // + executor operations (tree get/list/put)
+	LogDebug                   // + entity data summaries
 )
 
 // EventLog is a thread-safe append-only log of application events.

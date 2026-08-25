@@ -74,7 +74,7 @@ export GOTOOLCHAIN ?= go1.25.1
 # includes the same file and uses the caps on every podman build/run.
 include caps.mk
 
-.PHONY: workbench-test console-build console-run test test-native test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-inspect test-publish test-fetch perfreview build build-native shell shell-test shell-help shell-once shell-build publish-build publish-serve vcs-build fetch-build go clean clean-strays ensure-bindir image help lint fmt check lint-native lint-perfreview fmt-native
+.PHONY: workbench-test console-build console-run test test-each test-each-native test-native test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-inspect test-publish test-fetch perfreview build build-native shell shell-test shell-help shell-once shell-build publish-build publish-serve vcs-build fetch-build go clean clean-strays ensure-bindir image help lint fmt check lint-native lint-perfreview fmt-native
 
 # ============================================================
 # make + podman — bare-box entry points
@@ -111,19 +111,121 @@ endef
 help:
 	@echo "entity-workbench-go — make + podman (host needs only make + podman)"
 	@echo
-	@echo "  build    build every shipped Go binary, in-container"
-	@echo "  test     full -race sweep across all modules, in-container"
-	@echo "  lint     go vet ./... across all modules (read-only), in-container"
-	@echo "  fmt      gofmt -w over the tree (writes), in-container"
-	@echo "  check    lint + test (the green gate)"
-	@echo "  clean    remove build outputs (canonical binaries + strays)"
+	@echo "  START HERE"
+	@echo "    make doctor      check prerequisites + sibling kernel; prints what is wrong"
+	@echo "    make run         build and start entity-shell (the CLI; REPL)"
+	@echo "    make gui         build and launch the Avalonia desktop app"
+	@echo "    make demo        one-command tour: a peer, a name, a tree, in one shell"
+	@echo
+	@echo "  BUILD"
+	@echo "    make build       every shipped Go binary, in-container -> ./bin"
+	@echo "    make gui-build   the Avalonia container image (podman)"
+	@echo "    make clean       remove build outputs (canonical binaries + strays)"
+	@echo
+	@echo "  TEST"
+	@echo "    make test-each   EVERY Go suite to completion + a summary table  <- use this"
+	@echo "    make test        full -race sweep; STOPS at the first failing package"
+	@echo "    make gui-test    Avalonia headless UI tests (podman)"
+	@echo "    make lint        go vet across all modules (read-only)"
+	@echo "    make fmt         gofmt -w over the tree (writes)"
+	@echo "    make check       lint + test (the green gate)"
+	@echo
+	@echo "  Why test-each exists: 'make test' is fail-fast, so a count taken from a red"
+	@echo "  run covers ONE package and is a lower bound (AP15). test-each runs all ten"
+	@echo "  suites regardless and leaves per-suite logs in .test-logs/."
 	@echo
 	@echo "  -native variants run on a host Go toolchain; ARGS=… / *-box per the"
-	@echo "  Makefile header. Avalonia builds: cd avalonia (podman-only)."
+	@echo "  Makefile header. Platform: Linux is the only tested host (see README)."
 
 # Pull the toolchain image (optional; `make build`/`test` auto-pull).
 image:
 	podman pull $(TOOLCHAIN_IMAGE)
+
+# ============================================================
+# doctor / run / gui / demo — the "can I actually use this" surface
+# ============================================================
+#
+# These exist because everything below them assumed you already knew the
+# answer. The build interface was complete and the ENTRY was not: there
+# was no way to ask "is my machine set up", no single command that ran
+# every suite to completion, and the GUI was reachable only as
+# `make -C avalonia …` from a README line.
+
+# doctor reports the environment instead of failing at module resolution
+# twenty seconds into a build. Every check prints ok/WARN/FAIL and the
+# target exits non-zero only on FAIL, so it is usable as a CI gate.
+#
+# The sibling check is the load-bearing one: every go.mod resolves the
+# kernel through `replace ../../entity-core-go/{core,ext}`, so without
+# that directory nothing in this repo builds, and the error you get is a
+# module-resolution wall that does not mention the sibling.
+.PHONY: doctor
+doctor:
+	@echo "entity-workbench-go — environment check"
+	@echo
+	@fail=0; \
+	printf '  %-22s ' "podman"; \
+	if command -v podman >/dev/null 2>&1; then echo "ok  $$(podman --version 2>/dev/null)"; \
+	else echo "FAIL  not found — required for 'make build/test' and ALL Avalonia work"; fail=1; fi; \
+	printf '  %-22s ' "go (host, optional)"; \
+	if command -v go >/dev/null 2>&1; then echo "ok  $$(go version 2>/dev/null | cut -d' ' -f3) — '-native' targets available"; \
+	else echo "warn  not found — fine; containerized targets supply go $(GOTOOLCHAIN)"; fi; \
+	printf '  %-22s ' "sibling kernel"; \
+	if [ -d "$(PARENT)/entity-core-go/core" ] && [ -d "$(PARENT)/entity-core-go/ext" ]; then \
+		rev=$$(git -C "$(PARENT)/entity-core-go" rev-parse --short HEAD 2>/dev/null || echo "no-git"); \
+		echo "ok  $(PARENT)/entity-core-go @ $$rev"; \
+	else \
+		echo "FAIL  $(PARENT)/entity-core-go missing (needs core/ and ext/)"; \
+		echo "  $(shell printf '%22s' '')     every go.mod replaces the kernel to ../../entity-core-go;"; \
+		echo "  $(shell printf '%22s' '')     without it the build dies at module resolution."; \
+		fail=1; \
+	fi; \
+	printf '  %-22s ' "avalonia image"; \
+	if podman image exists localhost/entity-avalonia:dev >/dev/null 2>&1; then echo "ok  localhost/entity-avalonia:dev built"; \
+	else echo "warn  not built — run 'make gui-build' (first build is slow; pulls the .NET SDK)"; fi; \
+	printf '  %-22s ' "binaries"; \
+	if [ -x "$(CURDIR)/bin/entity-shell" ]; then echo "ok  ./bin/entity-shell present"; \
+	else echo "warn  ./bin not populated — run 'make build'"; fi; \
+	printf '  %-22s ' "host platform"; \
+	case "$$(uname -s)" in \
+		Linux) echo "ok  Linux — the only tested host";; \
+		*) echo "warn  $$(uname -s) — untested; Linux is what CI and the GUI are exercised on";; \
+	esac; \
+	echo; \
+	if [ $$fail -ne 0 ]; then echo "  -> blocking problems above. Fix those first."; exit 1; fi; \
+	echo "  -> ready. Try 'make run' (CLI), 'make gui' (desktop), or 'make demo'."
+
+# run / gui — the two entry points a person actually wants. `run` builds
+# first so it is never a stale binary; ARGS forwards a one-shot command
+# (`make run ARGS="name ls"`) instead of entering the REPL.
+.PHONY: run gui gui-build gui-test
+run: shell-build
+	@$(BIN_DIR)/entity-shell $(ARGS)
+
+# Avalonia lives behind podman and its own Makefile. These are thin
+# passthroughs so the GUI is discoverable from `make help` at the root
+# rather than from a README line — `up` is build + extract + launch.
+gui:
+	$(MAKE) -C avalonia up
+
+gui-build:
+	$(MAKE) -C avalonia build
+
+gui-test:
+	$(MAKE) -C avalonia test
+
+# demo drives the shipped binary through a scripted tour in a throwaway
+# HOME, so it validates the ACTUAL product end to end and leaves nothing
+# behind. This is the thing to run when you want to see where we are.
+#
+# It uses -identity deliberately: without one, entity-shell generates a
+# fresh keypair per invocation, so each command would write into a
+# different namespace of the same store and nothing would appear to
+# persist. That is a real rough edge (tracked in docs/status/STATUS.md);
+# the demo does not hide it, it just does the supported thing.
+.PHONY: demo
+demo: shell-build
+	@bash tools/demo.sh "$(BIN_DIR)/entity-shell"
 
 build:
 	$(call IN_CONTAINER,make build-native BIN_DIR=bin)
@@ -304,6 +406,55 @@ GOTEST_FLAGS := -race -count=1 -timeout=30m
 
 test-native: test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-inspect test-publish test-fetch
 	@echo "--- full sweep passed ---"
+
+# ============================================================
+# test-each — every suite to completion, then a summary
+# ============================================================
+#
+# `test-native` is a prerequisite list, so make stops at the first suite
+# that fails and every later suite is simply never run. That is correct
+# fail-fast behavior and it is the wrong tool for "what is the state of
+# the tree" — a failure count read through it covers ONE package and is
+# a lower bound, which is AP15 in the discipline charter: we once
+# reported two suites green that had 26 failures between them, and
+# routed the numbers to another repo.
+#
+# The workaround has been a for-loop in AGENTS.md that every contributor
+# had to know. This is that loop, as a target: it runs all ten
+# regardless of failures, keeps per-suite logs, prints a table, and
+# exits non-zero if any suite failed.
+TEST_SUITES := sdk inspect shell shellboot shellcmd shellpanel workbench programs publish fetch
+TEST_LOG_DIR := .test-logs
+
+test-each:
+	$(call IN_CONTAINER,make test-each-native)
+
+test-each-native:
+	@mkdir -p $(TEST_LOG_DIR)
+	@echo "running $(words $(TEST_SUITES)) suites to completion (logs: $(TEST_LOG_DIR)/)"
+	@echo
+	@failed=""; \
+	for t in $(TEST_SUITES); do \
+		printf '  %-11s ' "$$t"; \
+		start=$$(date +%s); \
+		if $(MAKE) --no-print-directory test-$$t > $(TEST_LOG_DIR)/$$t.log 2>&1; then \
+			printf 'PASS  %ss\n' "$$(( $$(date +%s) - start ))"; \
+		else \
+			printf 'FAIL  %ss\n' "$$(( $$(date +%s) - start ))"; \
+			failed="$$failed $$t"; \
+		fi; \
+	done; \
+	echo; \
+	if [ -n "$$failed" ]; then \
+		echo "FAILED:$$failed"; \
+		for t in $$failed; do \
+			echo; echo "  --- $$t: failing tests ---"; \
+			grep -E '^\s*--- FAIL' $(TEST_LOG_DIR)/$$t.log | head -20 || true; \
+			echo "  (full log: $(TEST_LOG_DIR)/$$t.log)"; \
+		done; \
+		exit 1; \
+	fi; \
+	echo "all $(words $(TEST_SUITES)) suites green"
 
 # Native lint/fmt workers (used directly on a Go host AND re-invoked inside the
 # toolchain image by the containerized lint/fmt targets above). lint = go vet

@@ -324,10 +324,10 @@ func TestWorkspaceState_OnPrefixChange(t *testing.T) {
 	store.Put("other/ignored", "test/note", "ignored")
 
 	var (
-		mu        sync.Mutex
+		mu         sync.Mutex
 		lastByPath = make(map[string]ChangeEvent) // final event seen per path
-		anyEvent  = make(chan struct{}, 64)        // signal on every fire
-		nonMatch  []string                          // paths that fired but shouldn't have
+		anyEvent   = make(chan struct{}, 64)      // signal on every fire
+		nonMatch   []string                       // paths that fired but shouldn't have
 	)
 	cancel := ws.OnPrefixChange("docs/", func(ev ChangeEvent) {
 		mu.Lock()
@@ -558,9 +558,9 @@ func TestWorkspaceState_SelectionLegacyFieldsLogViolation(t *testing.T) {
 	payload := map[string]interface{}{
 		"path":          "tree/foo",
 		"updated_at":    uint64(1_700_000_000_000),
-		"content_type":  "entity", // legacy
-		"source_window": uint32(7), // legacy
-		"source_panel":  uint32(3), // legacy
+		"content_type":  "entity",             // legacy
+		"source_window": uint32(7),            // legacy
+		"source_panel":  uint32(3),            // legacy
 		"paths":         []string{"tree/foo"}, // legacy
 	}
 	if _, err := ws.store.Put(path, "app/state/selection", payload); err != nil {

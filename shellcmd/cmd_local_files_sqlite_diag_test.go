@@ -26,6 +26,7 @@ import (
 // default since it depends on host state.
 //
 // Usage:
+//
 //	DIAG_REAL_CORPUS=$HOME/projects/entity-systems \
 //	DIAG_INCLUDE="*.md" \
 //	DIAG_EXCLUDE="target/*,node_modules/*,.git/*" \
@@ -213,11 +214,11 @@ func TestDiag_SqliteVsMemory_BulkIngest(t *testing.T) {
 	}
 
 	const (
-		fileCount       = 30
-		settleWait      = 5 * time.Second
-		rootName        = "diag"
-		sourcePrefix    = "local/files/diag/"
-		targetPrefix    = "docs/"
+		fileCount    = 30
+		settleWait   = 5 * time.Second
+		rootName     = "diag"
+		sourcePrefix = "local/files/diag/"
+		targetPrefix = "docs/"
 	)
 
 	type variant struct {
@@ -247,12 +248,12 @@ func TestDiag_SqliteVsMemory_BulkIngest(t *testing.T) {
 	}
 
 	type result struct {
-		variant      string
-		sourceCount  int
-		targetCount  int
-		sourcePaths  []string
-		targetPaths  []string
-		missing      []string // present at source but not at target
+		variant     string
+		sourceCount int
+		targetCount int
+		sourcePaths []string
+		targetPaths []string
+		missing     []string // present at source but not at target
 	}
 
 	results := make([]result, 0, len(variants))

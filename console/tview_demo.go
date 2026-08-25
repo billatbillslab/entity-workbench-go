@@ -13,12 +13,12 @@ type tviewDemoContent struct {
 	root *tview.Flex
 
 	// Widgets
-	list      *tview.List
-	dropdown  *tview.DropDown
-	input     *tview.InputField
-	checkbox  *tview.Checkbox
-	output    *tview.TextView
-	table     *tview.Table
+	list     *tview.List
+	dropdown *tview.DropDown
+	input    *tview.InputField
+	checkbox *tview.Checkbox
+	output   *tview.TextView
+	table    *tview.Table
 }
 
 func newTviewDemo(ws *workspace) *tviewDemoContent {
@@ -176,10 +176,10 @@ func tabCapture(ws *workspace, next tview.Primitive) func(*tcell.EventKey) *tcel
 	}
 }
 
-func (d *tviewDemoContent) typeName() string  { return "tview-demo" }
-func (d *tviewDemoContent) widget() tview.Primitive { return d.root }
-func (d *tviewDemoContent) focusTarget() tview.Primitive { return d.list }
-func (d *tviewDemoContent) refresh()                     {}
+func (d *tviewDemoContent) typeName() string                            { return "tview-demo" }
+func (d *tviewDemoContent) widget() tview.Primitive                     { return d.root }
+func (d *tviewDemoContent) focusTarget() tview.Primitive                { return d.list }
+func (d *tviewDemoContent) refresh()                                    {}
 func (d *tviewDemoContent) handleEvent(event string, value string) bool { return false }
 func (d *tviewDemoContent) setHighlight(mode highlightMode) {
 	d.root.SetBorderColor(borderColorForMode(mode))

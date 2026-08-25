@@ -112,9 +112,9 @@ func TestMintChainCapability_AcceptedByContinuationInstall(t *testing.T) {
 	// Build a minimal continuation that targets system/tree:put
 	// (within the cap's grant scope) and install it.
 	contData := types.ContinuationData{
-		Target:              "system/tree",
-		Operation:           "put",
-		DispatchCapability:  capEnt.ContentHash,
+		Target:             "system/tree",
+		Operation:          "put",
+		DispatchCapability: capEnt.ContentHash,
 	}
 	contEnt, err := contData.ToEntity()
 	if err != nil {

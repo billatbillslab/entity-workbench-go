@@ -28,8 +28,8 @@ type V7Identity struct {
 
 // Identity-mode discriminators returned by ListIdentities.
 const (
-	ModeV7Flat         = "v7-flat"
-	ModeIdentityAware  = "identity-aware"
+	ModeV7Flat        = "v7-flat"
+	ModeIdentityAware = "identity-aware"
 )
 
 // ErrIdentityNotFound is returned by LoadIdentity when the named

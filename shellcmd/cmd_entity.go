@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"entity-workbench-go/entitysdk"
 	"go.entitychurch.org/entity-core-go/core/ecf"
 	"go.entitychurch.org/entity-core-go/core/entity"
 	"go.entitychurch.org/entity-core-go/core/types"
-	"entity-workbench-go/entitysdk"
 
 	"github.com/fxamacker/cbor/v2"
 )

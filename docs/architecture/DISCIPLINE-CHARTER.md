@@ -451,7 +451,7 @@ Short enough to run on every change. Six inherited, four substrate-native.
 
 ---
 
-## 4. The anti-pattern catalog (AP1-AP22)
+## 4. The anti-pattern catalog (AP1-AP24)
 
 Each a real defect that shipped or a claim that was routed, diagnosed, and
 is now pinned by a regression test.
@@ -584,6 +584,21 @@ mutation-checked (drop the peer-rooted bridge and the cross-impl gate 404s at ho
 layout join and our own gate fails at the first page). AP22 — the same gates are what a
 too-strict guard now fails against, because they run over *another implementation's* bytes: a
 refusal of the unfamiliar cannot survive a fixture that is, by construction, unfamiliar.
+
+**AP23 / AP24 — the name-arc reachability run (2026-08-19).** Earned closing
+EXTENSION-REGISTRY §11.2's owed CLI surface and the last console→Avalonia parity gap.
+
+| AP  | Source | Pattern (the name we use for it) | Discipline |
+|-----|--------|----------------------------------|------------|
+| AP23 | `entitysdk/registry_bootstrap_cost_test.go`, first version | **A measurement with no control arm.** The registry extension was opt-in, justified by a comment claiming the local-name handler re-mints its default-grant caps every bootstrap and grows the store linearly. That claim is what left `entity-shell` with no name resolution at all. Priced it properly per D20 — and the *first* probe reopened one SQLite database five times with a zero-value `PeerConfig`, which **generates a fresh keypair per call**, so it measured five different peers sharing a file, not five restarts. `Store.PathCount` is `LenPrefix("")`, a `COUNT(*)` over the whole index, so it read Δ370 paths per "reopen": a catastrophic leak, entirely manufactured. **The control is what caught it** — the arm *without* the extension was equally catastrophic, which is never the shape of a real per-component leak. With the keypair pinned, the registry's marginal per-restart cost is **zero on both counters** and its whole cost is +8 paths once. **Attributing growth to a component requires the arm without that component; a single-arm measurement can only ever confirm what you already believed.** | D9, D19, D20 |
+| AP24 | `avalonia/tests/…/HandlerBrowserPanelTests.cs`, first version, vs `make smoke-xvfb-handlers` | **A test that asserts on the first item cannot see a bug that needs a second one.** The new handler-browser suite looped over discovered handlers "to find one with operations" and broke at the first match — index 0, which was already selected — so it **never changed the selection**. Five tests green. The X11 driver, which walks all 21, died silently after one iteration: clearing an `ObservableCollection` while its `ListBox` holds a selection makes Avalonia's `SelectionModel` re-read the stale index and throw from inside `SelectingItemsControl`, with no frame of this repo in the stack. The expensive gate found what the cheap one was structurally blind to; the repair is both — `Walking_Every_Handler_Survives_Selection_Churn` now runs the driver's exact loop and reproduces it in 11ms. **When a test iterates to find a subject, the loop is the test — an early break turns a sweep into a single-case assertion, silently.** | D10, D11, D15 |
+
+*Enforcement:* AP23 — `TestRegistryExtension_AddsNoMarginalRestartCost` runs both arms in one
+test and asserts the *differential*, never an absolute count, so it cannot be read without its
+control and does not become a tripwire when core-go adds a handler. AP24 —
+`Walking_Every_Handler_Survives_Selection_Churn` in the headless suite, plus
+`make smoke-xvfb-handlers`, which logs the transition count it actually completed and says so
+explicitly when that count is zero (the same self-check the minimize gate earned).
 
 ---
 

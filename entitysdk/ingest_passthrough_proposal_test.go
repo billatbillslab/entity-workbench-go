@@ -16,10 +16,10 @@ import (
 // chain composition path proposed in
 // `entity-core-architecture/.../EXPLORATION-CHAIN-ENVELOPE-COMPOSABILITY.md` §13.3:
 //
-//   When system/content/ingest-result gains an optional `root` field
-//   that carries envelope.root through unchanged, the merge step's
-//   transform `extract: "data.root.data.head"` can navigate to the
-//   wrapped result's semantic field (the version hash).
+//	When system/content/ingest-result gains an optional `root` field
+//	that carries envelope.root through unchanged, the merge step's
+//	transform `extract: "data.root.data.head"` can navigate to the
+//	wrapped result's semantic field (the version hash).
 //
 // This test builds the proposed ingest-result shape manually
 // (without modifying the kernel), then walks the navigation path
@@ -60,9 +60,9 @@ func TestProposalD_IngestResultPassThrough_NavigationPath(t *testing.T) {
 	// proposed shape by encoding a map directly so we don't need a
 	// kernel change to exercise the transform path. ---
 	proposedShape := map[string]interface{}{
-		"root":           fetchResultEnt,                    // the new field
-		"root_hash":      fetchResultEnt.ContentHash,        // existing field
-		"ingested_count": uint64(5),                          // existing field
+		"root":           fetchResultEnt,             // the new field
+		"root_hash":      fetchResultEnt.ContentHash, // existing field
+		"ingested_count": uint64(5),                  // existing field
 	}
 	proposedDataBytes, err := ecf.Encode(proposedShape)
 	if err != nil {

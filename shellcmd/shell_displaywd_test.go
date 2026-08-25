@@ -3,8 +3,8 @@ package shellcmd
 import (
 	"testing"
 
-	"go.entitychurch.org/entity-core-go/core/crypto"
 	"entity-workbench-go/entitysdk"
+	"go.entitychurch.org/entity-core-go/core/crypto"
 )
 
 // TestShell_DisplayWD_LocalAlias confirms WD on the local peer

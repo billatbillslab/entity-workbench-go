@@ -361,4 +361,3 @@ func pollUntilFileDeadline(fsPath string, timeout time.Duration) time.Time {
 	}
 	return time.Time{}
 }
-

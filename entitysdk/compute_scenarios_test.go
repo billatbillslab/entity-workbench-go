@@ -149,7 +149,7 @@ func TestScenarioA2_FilterAndSum_ParametricThreshold(t *testing.T) {
 		c.Compare("gt", c.LookupScope("elem"), threshold))
 	filtered := c.BuiltinsCall("filter", map[string]*entitysdk.Builder{
 		"collection": c.Field(c.LookupScope("params"), "numbers"),
-		"fn": predicate,
+		"fn":         predicate,
 	})
 	expr := entitysdk.LowerFold(c, filtered, c.Literal(uint64(0)),
 		func(acc, elem *entitysdk.Builder) *entitysdk.Builder {

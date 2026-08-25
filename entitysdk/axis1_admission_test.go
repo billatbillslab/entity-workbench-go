@@ -110,16 +110,16 @@ type admOutcome struct {
 }
 
 type emission struct {
-	Impl          string             `cbor:"impl"`
-	ImplVersion   string             `cbor:"impl_version"`
-	Engine        string             `cbor:"engine"`
-	EngineRole    string             `cbor:"engine_role"`
-	Fallbacks     int                `cbor:"fallbacks"`
-	CorpusSHA256  []byte             `cbor:"corpus_sha256"`
-	CorpusVersion string             `cbor:"corpus_version"`
-	SpecVersion   string             `cbor:"spec_version"`
+	Impl          string                `cbor:"impl"`
+	ImplVersion   string                `cbor:"impl_version"`
+	Engine        string                `cbor:"engine"`
+	EngineRole    string                `cbor:"engine_role"`
+	Fallbacks     int                   `cbor:"fallbacks"`
+	CorpusSHA256  []byte                `cbor:"corpus_sha256"`
+	CorpusVersion string                `cbor:"corpus_version"`
+	SpecVersion   string                `cbor:"spec_version"`
 	Results       map[string]admOutcome `cbor:"results"`
-	Skipped       map[string]string  `cbor:"skipped,omitempty"`
+	Skipped       map[string]string     `cbor:"skipped,omitempty"`
 }
 
 const (

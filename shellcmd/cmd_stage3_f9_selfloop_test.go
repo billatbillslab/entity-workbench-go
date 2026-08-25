@@ -26,22 +26,22 @@ import (
 //   - alice writes ONE file to her FS.
 //
 // Predicted loop chain (the F9 hypothesis):
-//   1. alice's os.WriteFile → fsnotify event → watcher debounce →
-//      flush → tree:put at /alice/local/files/sync/file.md.
-//   2. Tree change → alice's subscription (to her own prefix) fires
-//      → notification delivered to blob-resolve.
-//   3. blob-resolve runs → calls content.AtPeer + EnsureClosure
-//      (no-op; blob already local) + hctx.Execute("local/files",
-//      "write", ...) content-mode to the same tree path.
-//   4. handleWrite executes — overwrites file (atomic + idempotent
-//      content) + binds file entity to tree.
-//   5. **handleWrite's disk write fires another fsnotify event.**
-//      Watcher debounces → flush → tree:put. The reverseTracker
-//      should suppress this, but reverseTracker.markWritten is
-//      ONLY called from reverseWrite (reverse.go:185), NOT from
-//      handleWrite (operations.go:114). So the tracker is empty
-//      and doesn't suppress.
-//   6. Tree change → subscription fires → GOTO 4. Loop.
+//  1. alice's os.WriteFile → fsnotify event → watcher debounce →
+//     flush → tree:put at /alice/local/files/sync/file.md.
+//  2. Tree change → alice's subscription (to her own prefix) fires
+//     → notification delivered to blob-resolve.
+//  3. blob-resolve runs → calls content.AtPeer + EnsureClosure
+//     (no-op; blob already local) + hctx.Execute("local/files",
+//     "write", ...) content-mode to the same tree path.
+//  4. handleWrite executes — overwrites file (atomic + idempotent
+//     content) + binds file entity to tree.
+//  5. **handleWrite's disk write fires another fsnotify event.**
+//     Watcher debounces → flush → tree:put. The reverseTracker
+//     should suppress this, but reverseTracker.markWritten is
+//     ONLY called from reverseWrite (reverse.go:185), NOT from
+//     handleWrite (operations.go:114). So the tracker is empty
+//     and doesn't suppress.
+//  6. Tree change → subscription fires → GOTO 4. Loop.
 //
 // What this test measures:
 //   - entity-count growth over a 5-second window after one user write

@@ -3,20 +3,45 @@
 _Updated: 2026-08-19 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
 
 **Green as of `HEAD`:** ten suites, run **individually to completion** (AP15 — a count from
-`make test` stops at the first failing package). `entitysdk` 200.3s (re-run after the signaling work; the sweep's own 198.4s predated it) · `inspect` 2.4s · `shell` 5.0s ·
-`shellboot` 11.0s · `shellcmd` 286.7s · `shellpanel` 3.5s · `workbench` 3.2s · `programs` 140.2s ·
-`publish` 2.2s · `fetch` 1.3s. Zero failures. `make lint` clean. The command was
+`make test` stops at the first failing package). `entitysdk` 199.5s · `inspect` 2.3s · `shell` 4.1s ·
+`shellboot` 10.9s · `shellcmd` 286.4s · `shellpanel` 1.7s · `workbench` 2.5s · `programs` 137.1s ·
+`publish` 2.0s · `fetch` 1.3s. Zero failures. `make lint` clean, and `gofmt -l` is now empty too
+(`6204630`). The command was
 `for t in sdk inspect shell shellboot shellcmd shellpanel workbench programs publish fetch; do make test-$t; done`.
-**`fetch` is new to the list** — it had no `make` target at all until 2026-08-19 (§6d).
 
-**Latest arch packet read: `ROUTING-2026-08-19-c`** (arch `c984f93`); browser-rust's
-`ROUTING-2026-08-19-d` read at their `fbc2c5c`. D21 — this line is the subtraction that tells the
-next session what it has not opened. Read *every* document naming this repo, `cc` included:
+**Avalonia: 57/57 headless** (`make -C avalonia test`), plus `make smoke-xvfb-handlers` green
+under real X11 + software Skia — 21 handlers walked, exit 0.
+
+**One flake, named rather than buried — and its signature is a lead, not noise.**
+`TestE2E_Bidirectional_BurstWrites_NoFS` failed in **2 of 4** full-suite runs on 2026-08-19, and
+passed 3/3 when run isolated. Both failures were byte-identical in shape:
+
+```
+alice has 10 / 10 expected entries; bob has 9 / 10
+  bob missing archives/notes/a-4.md
+CONVERGENCE FAILED (heads_equal=true) — alice=ecf-sha256:… bob=ecf-sha256:…   (same hash)
+```
+
+**`heads_equal=true` with 9/10 entries is the part worth chasing.** The two peers agree on the
+revision head while disagreeing on the entry set, which is not what a plain delivery drop looks
+like — a dropped notification should leave the heads *different*. Either the test samples entries
+before a final sync settles while comparing heads after (a test-side race, most likely), or a head
+can be reached that does not cover every entry it commits to (a real one). **Nobody has looked
+yet**, and it is filed here rather than absorbed into "the known saturation item" because that
+label would explain away the one observation that does not fit it.
+
+It builds its peers directly via `entitysdk` and is untouched by this session's work. It is
+load-dependent, so `make test-each` reproduces it far more readily than a targeted run.
+
+**Latest arch packet read: `ROUTING-2026-08-19-d`** (arch `fc27873`, carrying **REGISTRY 1.16**
+at arch `d3752ca`); browser-rust's `ROUTING-2026-08-19-d` read at their `fbc2c5c`. D21 — this
+line is the subtraction that tells the next session what it has not opened. Read *every*
+document naming this repo, `cc` included:
 `grep -ril 'workbench-go' ../entity-system-architecture/docs/status/`.
 
-**Inbound this session, all three answered:** `-19-b` §2 (validator widening → §6c), `-19-c` (the
-registry board is closed; our only row was the widening), and browser-rust's `-19-d` (consume-us
-ask → §6d, plus their F6 correction folded in as AP22).
+**Inbound, all answered:** `-19-b` §2 (validator widening → §6c), `-19-c` (the registry board is
+closed; our only row was the widening), browser-rust's `-19-d` (consume-us ask → §6d, plus their
+F6 correction folded in as AP22), and arch's `-19-d` (→ §6e below).
 
 ## Where it is
 
@@ -292,9 +317,9 @@ nobody prices this against our own tree again:**
   mechanism exists anywhere in the corpus** (arch Q18) — build against static config and route the
   wall rather than invent a credential shape.
 
-**Piece 4, started 2026-08-19 — the carrier landed, the backend is blocked upstream.** The D20
-pre-check said "registration + a consumer" and that is right; what it did not check is whether the
-DISCOVERY surface it registers into exists. It does not:
+**Piece 4, started 2026-08-19 — the carrier landed; the backend waits on an editorial fold, not a
+decision.** The D20 pre-check said "registration + a consumer" and that is right; what it did not
+check is whether the DISCOVERY surface it registers into exists. It does not:
 
 ```
 $ grep -rn 'rendezvous' ../entity-system-architecture/specs/extensions/EXTENSION-DISCOVERY.md
@@ -309,6 +334,26 @@ locally is AP20's exact shape one step earlier. `entity-core-go` matches the spe
 (`DiscoveryBackendMDNS` and nothing else) — the gap is upstream of them. Ask routed:
 `docs/architecture/reviews/DISCOVERY-RENDEZVOUS-FOLD-ASK-2026-08-19.md`. **A RULED stamp is a
 decision, not a normative surface** — we read it as landed and had to grep to find out otherwise.
+
+**Re-checked 2026-08-19 against arch HEAD (`05faaa5`), because "blocked" was overstating it.**
+Arch's own `docs/COHORT-OPEN-ITEMS.md` carries this as **R-10, owner `arch`, OPEN** — *"ruled, not
+folded; workbench-go is blocked on it"* — so they hold the same picture we do. What that means
+precisely, and the distinction worth keeping:
+
+- **Nothing here is undecided.** The proposal header reads `Status: RULED 2026-08-17`, and its own
+  §0 states the normative delta is **one enum value** in `EXTENSION-DISCOVERY` §2.1 plus a
+  composition subsection — **no wire change, no new entity type**. The mode split, TOFU, and the
+  successor chain are fully written in §2/§5.
+- **What is missing is arch writing that ruling into the spec.** That is editorial, it is R-10, and
+  it is theirs.
+- **So this is a policy hold, not a technical one.** What stops us is `AGENTS-STANDARD`'s
+  implement-against-the-landed-spec rule plus AP20 (a token we would have to define locally is a
+  defect in one of two documents). Both are ours, and both are the right call at rest.
+- **The cost of the alternative is small and worth stating rather than implying.** Building against
+  the proposal today risks re-cutting a few hundred lines of backend if the token's spelling moves;
+  the enum is open (`<"mdns" | "qr" | ...>`), so an undeclared token is not a conformance violation
+  for a consumer. **This is an operator decision, not a blocker** — if the fold has not landed when
+  piece 4 next comes up, build it against the proposal and say so in the commit.
 
 **The carrier half is landed spec (EXTENSION-SIGNALING v1.1) and is done.** `entitysdk/signaling.go`
 — `AppPeer.Signaling(nodePeerID)` with `Offer` / `Collect` / `Advertise` through `extDispatch` (so
@@ -708,6 +753,88 @@ layer, one lesson. Charter is now D1–D22 / AP1–AP22.
 Packet: `docs/architecture/reviews/CROSSIMPL-CONSUME-RESULT-2026-08-19.md` (to browser-rust, cc arch
 + core-go).
 
+### 6e. REGISTRY 1.16 read — both rulings land outside our code (2026-08-19)
+
+Arch `d3752ca`, routed as `ROUTING-2026-08-19-d` to **core-go**, not to us. Read under D21 because
+its own commit message says it moves a MUST and withdraws a vector row — *"a packet that says it
+changes a table, a default, or a MUST is read the same session regardless of who it is addressed
+to."* §7 confirms our items (R-8/R-9/R-10) are tracked and that nothing in it waits on us.
+
+Two rulings, both verified against our tree rather than assumed:
+
+- **`REG-NAME-CONSTRAINTS-GRAMMAR-1` row 3 withdrawn.** v1.15 required `x/y/z` admitted while
+  §6a name-path safety refuses `/` three subsections earlier — unsatisfiable by every conformant
+  impl. Issuer-side; `name_constraints` is core-go's `cmd/entity-peer` + `validate` surface and
+  appears nowhere in our tree. Nothing owed.
+- **The resolver-side TTL ceiling gets a config site: `resolver_chain[].hints.max_ttl`.** Four
+  seats had built three different keys; py+rust's site is ratified, plus durable-config-read-at-
+  resolution, `0` is undeclared, and a ceiling against a no-ttl binding yields `local_max`. The
+  non-conformant "go" in that finding is **core-go**, and they have already landed it
+  (`ext/registry/localname.Handler.Resolve(hctx, name, localMaxTTL)`, `validate`'s
+  `v4c_ttl_resolver_ceiling`). Our surface is the config we *write* and *validate*:
+  `DefaultResolverConfig` sets no `hints`, and `ValidateResolverConfig` rules only on §4.1 step 2,
+  so a config carrying `max_ttl` passes untouched. **Nothing owed — and R-9 got more load-bearing
+  than it was when we closed it**, since `hints` is now the ratified home of a spec'd control and
+  `19786fb`'s round-trip pin is what keeps a tidy refactor from dropping it.
+
+We deliberately do **not** put a `max_ttl` in `DefaultResolverConfig`. A ceiling is a deployment
+choice, `0` is undeclared, and inventing a default here would ship an opinion the spec does not
+carry.
+
+### 7. The name arc reaches a user, and the handler browser closes the parity gap (2026-08-19)
+
+`ddde4c7` + `27874ad` + `6204630`. Two gaps that were both *reachability*, not features.
+
+**EXTENSION-REGISTRY §11.2 lists "UI / CLI surface for local-name bind / unbind / list" as a
+SHOULD.** We had none, and could not have had one: `shellboot` never set `Extensions.Registry`, so
+**no shipped binary carried the handler a verb would dispatch to.** ResolveName, BindLocalName, the
+resolver-config validator, the v1.13 adoption, the 1.14 re-key, the hints pin — all reachable only
+from unit tests. AP21's shape again: green at every unit boundary, broken at the one seam no test
+crossed.
+
+**The default was guarding a cost that is not there.** `app.go` justified registry-default-OFF with
+a claim about the sibling — local-name default-grant caps "re-minted on every bootstrap", linear
+growth. Priced against the substrate (D20): **zero marginal per-restart cost on both counters**;
+the whole cost is **+8 paths / +8 entities, once**. The growth originally seen is the +2
+entities/restart a **registry-less** peer pays too (core-go's, same family as the waived
+identity-rebootstrap leak). `entitysdk/registry_bootstrap_cost_test.go` asserts the differential,
+never an absolute.
+
+Landed: the three missing local-name SDK ops (`ListLocalNames`, `UnbindLocalName`,
+`UpdateLocalNameTransports`, plus `WithNotes`) — the kernel declared all four since the handler
+landed and we had wrapped one; registry ON by default in `shellboot` with `DisableRegistry` /
+`-disable-registry` to opt out; §4.1a's default resolver-config shipped via `EnsureResolverConfig`
+(a config failing the §4.1 step 2 MUST is fatal at boot, not silently resolved through); and the
+`name` verb — `ls` / `resolve` / `bind` / `unbind` / `config`, with `@alias` targets and failures
+that name the **rung** they stopped at.
+
+**Driven through `bin/entity-shell` across separate processes**, not only in tests. That found a
+pre-existing property worth knowing: **without `-identity` the peer-id is regenerated per
+invocation**, so each process writes a different namespace of the same SQLite DB and nothing
+appears to persist. Affects every persistent surface, not just names. Under `-identity` the whole
+cycle round-trips.
+
+**The handler browser** (`27874ad`) closes the last console→Avalonia parity gap.
+`wb.HandlerBrowserModel` was complete and renderer-neutral all along; only tview drove it. The
+bridge is handle lifecycle + a JSON projection, the panel is controls. A real-X11 driver
+(`make smoke-xvfb-handlers`) found a crash headless was structurally blind to — see AP24. 21
+handlers walked, 53 output rows, exit 0; `system/registry` and `system/registry/local-name` appear
+in that walk, which is the shellboot default confirmed live in the GUI rather than argued from
+source.
+
+**Ratchet: AP23 + AP24.** *A measurement with no control arm* (the probe that manufactured a
+Δ370/restart leak in both arms), and *a test that asserts on the first item cannot see a bug that
+needs a second one* (the headless suite that never changed the selection). Charter is now
+D1–D22 / **AP1–AP24**.
+
+Also this session: **60 files of gofmt drift** cleared in its own commit (`6204630`) — `make lint`
+is `go vet` only and has never gated formatting.
+
+**Owed, not done:** `UpdateLocalNameTransports` has no verb, because a binding's transports are
+hash references to transport-profile entities and no surface hands a user one. A `-transports`
+flag that can only take a hash nobody can obtain is worse than none. Wants the profile-hash story
+first.
+
 ## Open bugs
 
 - **Managed stack overflow on window minimize** (Avalonia, software-render path). A tight
@@ -818,8 +945,8 @@ Packet: `docs/architecture/reviews/CROSSIMPL-CONSUME-RESULT-2026-08-19.md` (to b
 - No headless test exercises a *populated* nearby list (would need mDNS in the test container).
 
 **UI / renderer**
-- **Handler-browser panel** — the one surface where `console` is still ahead of Avalonia;
-  closing it ends the console→Avalonia parity gap.
+- ~~**Handler-browser panel**~~ — **DONE 2026-08-19** (`27874ad`). The console→Avalonia parity
+  gap is closed; `console` is no longer ahead on any surface.
 - **Console multi-peer UX** (deferred): peer-picker modal, status bar, `peer create`/`destroy`.
 - **Manifest-driven panel registration** (deferred from the multi-peer plan).
 - Avalonia drives feature work and may outpace the frozen `console` renderer; console-parity
@@ -829,13 +956,28 @@ Packet: `docs/architecture/reviews/CROSSIMPL-CONSUME-RESULT-2026-08-19.md` (to b
 - **SDK ergonomic helpers (compute "S4–S8").** Owed a research-first session.
 - **Compute DSL parser.** Deferred; built *on top of* the S4–S8 helpers, only once an
   authoring workflow actually needs one.
-- **Wire a real consumer of the `resolve()` seam** (`entitysdk/resolve_chain.go`).
+- ~~**Wire a real consumer of the `resolve()` seam**~~ — **DONE 2026-08-19** (`ddde4c7`). The
+  `name` verb is that consumer, and it needed the substrate turned on in `shellboot` before it
+  could be one.
 
 **Hardening / cleanup**
 - Revision-recovery diagnostic: hub-spoke fetch-diff recovery with auto-version *off* logs
   an independent transport failure mode; captured as an observation, the test passes.
 - Selection-state reader hardening: replace the silent legacy-tolerance path in
   `entitysdk/workspace_state.go` with log-on-violation or reject-on-decode.
+- **An ephemeral shell silently re-namespaces a persistent store.** `entity-shell -storage sqlite`
+  with no `-identity` generates a fresh keypair per invocation, so every process writes under a
+  new peer-id in the same DB and nothing written by the last run is visible to the next. Found
+  driving the `name` verb end-to-end (§7); it affects every persistent surface, not names. The DB
+  accretes a full bootstrap per run. Candidate fixes: derive+persist a keypair alongside the
+  store, or refuse `-storage sqlite` without `-identity` the way sqlite-without-storage-path is
+  already refused. **The second is honest and cheap**; the first is friendlier and needs a home
+  for the key. Not decided.
+- **Registry restart baseline (core-go, observed 2026-08-19).** A peer with NO registry extension
+  and NO identity ceremony still accretes **+2 entities per restart** of the same SQLite DB
+  (paths stay flat). Measured as the control arm in
+  `entitysdk/registry_bootstrap_cost_test.go`. Same family as the waived identity-rebootstrap
+  leak; not ours, and owed a routing packet to core-go.
 
 ## Guardrail — do not merge `dev` to `master` yet
 

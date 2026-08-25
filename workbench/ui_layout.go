@@ -132,7 +132,7 @@ const (
 
 // WindowRect describes a window's position in normalized (0-1) space.
 type WindowRect[W comparable] struct {
-	Win        W
+	Win         W
 	X, Y, W2, H float64
 }
 

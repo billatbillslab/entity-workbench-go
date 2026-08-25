@@ -18,13 +18,13 @@ import (
 //   - identity list           — enumerate keypairs under ~/.entity/identities/
 //   - identity create <name>  — generate + persist a fresh keypair
 //   - identity use <name>     — switch the local peer's identity (only when
-//                                no remote connections are active)
+//     no remote connections are active)
 //
 // Identity-aware mode subcommands:
 //   - identity bootstrap [-members N] [-threshold K] [-name STRING]
-//                              — run the L0 identity ceremony on the
-//                                local peer; mints quorum + controller
-//                                cert; issues the local→controller cap
+//     — run the L0 identity ceremony on the
+//     local peer; mints quorum + controller
+//     cert; issues the local→controller cap
 //
 // Future (deferred): configure (post-bootstrap re-config),
 // create-attestation, publish, revoke.

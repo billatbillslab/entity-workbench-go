@@ -148,7 +148,7 @@ func TestSortedMapKeys(t *testing.T) {
 
 func TestFormatCBOR_SimpleMap(t *testing.T) {
 	data := map[interface{}]interface{}{
-		"name": "test",
+		"name":  "test",
 		"count": uint64(5),
 	}
 	lines := FormatCBOR(data)

@@ -67,9 +67,9 @@ const (
 
 // Life run-stop reasons — why the clock stopped on its own.
 const (
-	LifeRunning    = uint64(0) // still evolving
-	LifeExtinct    = uint64(1) // population hit 0
-	LifeStillLife  = uint64(2) // grid identical to the previous generation
+	LifeRunning   = uint64(0) // still evolving
+	LifeExtinct   = uint64(1) // population hit 0
+	LifeStillLife = uint64(2) // grid identical to the previous generation
 )
 
 // LifeGameOutput is the renderer contract: everything a display driver
