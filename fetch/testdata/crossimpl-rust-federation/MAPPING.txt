@@ -1,0 +1,12 @@
+entitychurch.org             foundation   2KGTrr4LxfFJjUBUD74XJZoze74TrQFpXqWA19qeskz9sS
+protocol.entitychurch.org    protocol     2KAdu6wwTNAoQiqXmN93vbjHxk3QosG7hxhXGZtN8wZF31
+docs.entitychurch.org        docs         2KFRBJ9feEPCZZiNaCEKsCAVkGkp1htWZk9a8jz5n5D2sS
+lab.entitychurch.org         lab          2KEb7HgmoCRF1VpNeCYusiubnn94ke4uK1hUxBcQ1PTtNA
+
+registry peer (THE PIN — the only thing a consumer holds a priori):
+  2KBLkCxvkgobuauPA6zPfKarpuRRnnWHL98n8Gv1GNmybr
+
+each domain's /entity-deployment.json SEEDS that pin at /registry,
+so a user who types nothing still resolves names. `name pin` overrides it.
+
+resolution: name → registry's signed root → peer-id → THAT peer's signed root → page

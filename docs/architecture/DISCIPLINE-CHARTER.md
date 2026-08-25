@@ -81,13 +81,13 @@ L0-L3's actual behavior gets documented forensically.
 
 ---
 
-## 2. The 23 disciplines
+## 2. The 24 disciplines
 
 D1-D11 are inherited verbatim from the entity-OS discipline charter
 (originating in godot-entity-core-rust, ratified by egui-entity-core-rust).
 They are stack-agnostic; they govern how we use the substrate.
 
-D12-D23 are native to our stack (Avalonia + .NET + cgo + Go + the
+D12-D24 are native to our stack (Avalonia + .NET + cgo + Go + the
 two-renderer architecture). They are **earned** by shipped bugs and
 explicit feedback episodes. Each cites the commit or pin that proved
 we needed it.
@@ -108,7 +108,7 @@ we needed it.
 | D10 | Real-session coverage | Cross-boot + headed + real-store paths for load-bearing changes. Headless green is necessary, not sufficient. Eight crash-hunt commits proved this on the Avalonia side. |
 | D11 | Inventory-boundary declaration (meta) | At audit open: name what's in scope **and what's not.** Findings that surface outside the boundary extend the boundary for the next audit. |
 
-### Native to our stack — earned by shipped bugs (D12-D17, D19-D23) and feedback episodes (D18)
+### Native to our stack — earned by shipped bugs (D12-D17, D19-D24) and feedback episodes (D18)
 
 **D12 — Cross-language lifetime accounting.**
 *Source:* the cgo + GCHandle FFI discipline.
@@ -481,6 +481,55 @@ Plus the panel-mount tier: `PeerConnectionsPanelTests` now asserts the
 liveness handle is allocated and its envelope parses
 (`Mount_Opens_Liveness_Handle_And_Renders_Counts`).
 
+**D24 — A negative result is evidence only about the region the
+instrument can reach. Name the region, or the result is worthless.**
+*Source:* three instances, different shapes, the first two
+self-reported as rigour. (1) The **four repro negatives** for the managed stack overflow
+(2026-07-18 → 2026-08-20): headless collapse-to-zero, `WindowState`
+cycling, the Xvfb window driver, and a 60-iteration verified-transition
+sweep. All four were honestly run, honestly logged, and recorded as
+narrowing the search. **They narrowed nothing** — every one of them
+drove a *model method* and none could emit an X11 pointer event, and the
+bug lived only in input dispatch. One real-input run
+(`smoke-xvfb-click`) hit on the first seed. (2) **AP32**, the same error
+inverted: four headless tests reported green while settling on a
+property that was true before the work began, so the region they
+measured was empty.
+(3) **AP36 + AP37**, 2026-08-21 — the strongest instance, because
+nobody was even claiming a negative. Interactive Life's controller was
+inert from the day it shipped, through **two** independent defects, and
+every suite on both sides of the seam was green: `programs`' four
+life-edit tests write the input mask and then call `tickOnce()`
+themselves, so the sampling window a real driver races cannot exist for
+them; the Avalonia suite drove `StartForTests` and asserted on a status
+label, so it never dispatched a pointer event. Each side's tests were
+complete *about its own side*. **A two-language seam needs a test that
+crosses it** — the one that did found both defects in a single run.
+*Why:* an instrument that cannot reach the defect returns the same
+answer as a fixed bug. Absence of evidence gets written down as evidence
+of absence, and — worse — it *accumulates confidence*: four negatives
+read as "we have looked hard", which is what let a month-old entry keep
+steering work while the one instrument that could see the bug did not
+exist. The failure is not the negative result; it is stating it without
+its reach.
+*How:*
+- Every negative result records **what the instrument could not do**, in
+  the same sentence as the result. "Headless survived 25 collapse
+  cycles" is incomplete; "…and headless runs no X11 backend, so it
+  cannot reach input dispatch" is the finding.
+- Before adding a repro attempt, ask which boundary
+  (`MODEL-AVALONIA-RUNTIME.md §6`) it touches. If it is the same one the
+  last three touched, it is not a new rung.
+- A gate that is green because it measured nothing is worse than a
+  missing gate — prefer a completion signal the *producer* owns
+  (a monotonic counter) over one the *consumer* derives (AP32).
+*Enforcement:* `make -C avalonia smoke-xvfb-click` and `crash-hunt` are
+the input-region instruments, named in `AGENTS.md` beside the suites;
+`run-xvfb-smoke.sh` prints an explicit "this run is NOT evidence" line
+when its own transition counter is zero (the pattern the window driver
+already established). STATUS entries carrying a negative are reviewed
+for a named region at audit.
+
 ---
 
 ## 3. The ten review questions (run on every diff)
@@ -516,7 +565,7 @@ Short enough to run on every change. Six inherited, four substrate-native.
 
 ---
 
-## 4. The anti-pattern catalog (AP1-AP28)
+## 4. The anti-pattern catalog (AP1-AP37)
 
 Each a real defect that shipped or a claim that was routed, diagnosed, and
 is now pinned by a regression test.
@@ -691,6 +740,8 @@ DISCOVERY backend, which is the first time the substrate had more than one.
 | AP26 | `entitysdk/app.go`'s `if cfg.ListenAddr != ""` around `discovery.NewHandler()`, before `021e5c2` | **The first consumer's precondition became the substrate's.** The `system/discovery` substrate was wired only for peers with a `ListenAddr`. That is not a property of discovery; it is a property of **mDNS**, which announces a port and has nothing to say without one. When mDNS was the only backend the two were indistinguishable, so the gate was written in terms of the mechanism. The second backend inverted it exactly: a `rendezvous` peer stands at a mailbox **because it has no reachable listener**, so the gate excluded precisely the peers the backend exists to serve. Nothing was broken before, which is the trap — the constraint is invisible until a second consumer arrives, and by then it reads as load-bearing. **The tell is a substrate gate expressed in terms of a mechanism (a port, a socket, a file) rather than in terms of what the substrate does.** Ask what the *abstraction* needs, not what today's only implementation needs; when they differ, the implementation carries its own precondition and the substrate carries none. | D4, D5, D18 |
 | AP27 | `reviews/COMPUTE-HOLD-IMPACT-2026-08-20.md` §2, first version — corrected within the hour | **Our own stale record used as the substrate.** Asked what a parked upstream proposal cost us, we read the review packet that named the blocker (*"the generic panel cannot show program-specific status; the honest fix is a `text` HUD"*), priced the work from it, and routed the cost to arch. The HUD had shipped **ten days after that packet was written**, a month before we read it — `programs/authoring.go::buildStatusTextExpr`, whose own doc comment also answered the open question we were about to ask (*"no string or concat primitive, so the line is assembled by an indexed map over fixed positions"*). Both facts were one grep away. **D20 says price against the substrate rather than our own tree; this is the same error one level in — pricing against our own *documents* rather than our own *code*.** A dated packet is a snapshot of a moment, and the tree moves underneath it; the older the packet, the more confidently wrong it reads, because nothing about a well-written record signals that it has expired. The tell is a plan whose blocker is quoted from a document rather than demonstrated from a file. **Before reporting that something is blocked, grep for the thing you say does not exist** — the search that proves the absence is the same search that would have found it. | D19, D20, D8 |
 | AP28 | `reviews/PROPOSAL-GENERIC-HOST-POINTER-INPUT-DEVICE-2026-07-27.md` — authored 07-27, found undelivered 08-20 | **A packet we never sent, recorded as sent.** The proposal is addressed *"To: arch + entity-browser-rust"*, `STATUS.md` carried it for 24 days as *"stays blocked on arch, as before"*, and an exhaustive search of both sibling trees — by filename and by five distinctive phrases — returns **zero** hits; arch's board has no row for it. **Writing a packet and routing a packet are two actions, and only the first leaves evidence in our own tree**, which is the only tree we look at when we update our own status. This is **AP12's mirror image**: that one was a routed finding nobody opened, this one is an unopened finding nobody routed, and ours is the worse failure mode because the ledger reads *waiting on them* — it converts our own inaction into an entry on someone else's account and then stops asking. Deferral by decision (§ compute) is a state a counterpart can confirm; deferral by silence is indistinguishable from a lost packet, and the driver cannot tell them apart from inside. **The tell is a "waiting on X" row whose only citation is a path inside our own repo.** A `To:` line is an intention; delivery is a fact, and D21's outbound direction needs the same evidence its inbound direction already demands. | D19, D21, D8 |
+| AP29 | `core/tree.CollectAllBindings` / `CollectNodeClosure`, and `entity-core-go`'s WS-A handoff §3.3 telling us to use the first one | **A best-effort helper reused across a trust boundary it was not written for.** The handoff's build list said to walk the published trie with `tree.CollectAllBindings(cs, rootHash, "")` — a three-line delegation, and the same walk their own consumer uses. Both helpers document the behaviour that makes that wrong here: *"Missing nodes are skipped — the walk is best-effort."* Over a **local** store that is correct, because the store is ours and a missing node is our bug. Over an **HTTP origin** it converts a withholding origin into a smaller site, silently — which is precisely the B4 defect (`entity-core-go` `dabd076`, a `0xC0C1C2…` literal root) the walk was added to catch, and which every per-leaf consumer in this cohort had already reported green against. **A helper whose error path is `continue` encodes a trust assumption about its backing store, and that assumption does not travel with the function.** Caught at design time by reading the helper before calling it (D18), not by a failing test — there is no test that fails, which is the point. The repair is to re-implement the traversal over the same kernel **types** (the Layer-2 contract that must not vary) while failing closed on the first unresolvable node. | D18, D20, D6 |
+| AP30 | `fetch/consume.go::PointerFor`, first version, against EXTENSION-TREE §3.3's three-shape table | **A join that is correct for every publisher you have, and wrong by construction.** Reconstructing a committed key's absolute path is `absolute_prefix + relative_key`, and the field on the wire is the **configured** prefix, which §3.3 resolves through a three-row table. Our first version concatenated the field verbatim. That is right for `entity-browser-rust`'s peer-qualified `/{peer}/` **and** right for our own peer-relative `docs/` — for two different reasons, neither of them the rule. Both live publishers passed. The tell is a reconstruction written from the emissions in front of you rather than from the rule's own table, and the failure mode is what makes it expensive: **a mis-joined path is a 404, and at a consumer a 404 is indistinguishable from a withholding origin** — so the bug reports as the other side's defect. | D18, D8, D19 |
 
 *Enforcement:* the D21 session-start sweep gains an **outbound arm**, recorded in `AGENTS.md` beside
 the inbound one — before carrying a *"waiting on X"* row forward, grep the counterpart's board and
@@ -702,6 +753,64 @@ our paths. The pointer proposal is the one that failed on **subject** too — fi
 phrases, both trees, zero hits, no row on arch's board — which is what separates *undelivered* from
 *delivered and quiet*. **A discipline whose gate fires on everything is theater in the other
 direction**; the subject test fired once out of twelve.
+
+| AP31 | `avalonia/bridge/browse.go::BrowseGo`, first version | **A C string read after the call that owns it returned.** The bridge's async exports return immediately and do the work on a goroutine — that is the whole P3′ shape. `BrowseGo` took the address as a `*C.char` and called `C.GoString` **inside** the goroutine. The buffer belongs to the .NET marshaller and is freed when the P/Invoke returns, so by then it is freed memory. **It does not crash.** It reads as the empty string, an empty address fails to parse, and the panel reports *"an address needs at least a name or a peer-id"* — a user error, in a panel the user typed an address into. Every layer is individually correct: the marshaller freed what it owned, cgo converted what it was given, the model refused what it was handed. **The rule: an async export must copy every C-owned argument into Go memory before the goroutine that uses it is launched** — the lifetime that matters belongs to the caller and ends at the return, and the synchronous exports beside it (`BrowsePin`, `VerifyConfigure`) are safe for a reason that does not transfer. Caught by a headless panel test asserting on the error text, not by a crash. | D14, D3 |
+| AP32 | `avalonia/frontend/Panels/BrowserPanel.cs`, first test harness | **A completion signal that is a race in the direction that makes the test pass.** The headless tests settle an async operation by polling `Refresh()` until a control re-enables — `_goButton.IsEnabled = !view.Running`. But `Running` is set by the model when the *goroutine enters* the operation, and the bridge call returns before that: there is a window where the operation has been started, `Running` is still false, and the button is still enabled. Settle returned inside it, and every assertion downstream ran against an empty view — four tests green on nothing, one test failing for an unrelated reason, which is how it was found at all. **A derived UI property is not a completion signal.** The repair is a monotonic completed-op counter on the bridge handle, surfaced on the render envelope, which the harness waits to *increase*; it also lets the panel ignore a wake for an operation it has already drawn. | D10, D14 |
+
+| AP33 | `shellcmd/cmd_tree.go::cmdPut`, and the two bugs in it | **A fallback that turns malformed input into a well-formed entity.** `put <path> <type> <json>` read `args[2]` alone — so any payload containing a space was truncated at the first one — and then, when the fragment failed to parse, silently stored it *as a literal string*: `// Not valid JSON — treat as literal string.` The put succeeded, printed a content hash, and wrote an entity nothing can decode. **The cost is paid a layer and an hour away**: the failure surfaces in a consumer as `cbor: cannot unmarshal UTF-8 text string into Go value of type SiteManifest`, which reads as the *consumer's* bug — the same displacement AP30 and the §6a.3a signature trap have. A tolerant fallback is right for input that was never trying to be structured and wrong for input that plainly was; the discriminator is one `HasPrefix("{")`. Found by seeding a site by hand to demo the browser, not by any test — every layer's tests passed, because each layer did exactly what it was told. | D8, D19 |
+| AP34 | the 2026-08-21 crash hunt, and a month of reading the wrong signal | **Believing a signal that was re-raised.** CoreCLR's handler re-raises any fault it cannot classify, so what reaches the coredump carries `si_code 128` (SI_KERNEL), `si_addr 0`, and a register context belonging to the *handler*. Two desktop dumps were read as null dereferences on exactly that evidence; the real fault was `si_code 2` (SEGV_ACCERR) with `si_addr = rsp-8` and rip on a `call` — a guard-page hit, i.e. a stack overflow, and on the **alternate signal stack** rather than the managed one. That is also why the runtime never printed `Stack overflow.` and createdump never fired: by the time it faults there is no stack to report on. Three further forensic channels were dead ends that each *looked* like a finding — the DAC rejects a systemd ELF core (`0x80004002`), the shipped `dotnet-dump` cannot run on the host at all (framework-dependent beside a self-contained publish), and `make crash` only ever decoded Go symbols for a crash with zero Go frames. **Read `si_code` before `si_addr`; catch the FIRST signal live before trusting any dump.** | D13, D19 |
+| AP35 | four "negative" repro attempts, 2026-07-18 → 2026-08-20 | **A harness that drives the model under the control cannot find a bug in the control.** Every driver here called the method the click would have called — `NavigateForTests`, `HandlerBrowserModel`, the window driver — which is a deliberate and good design for testing models, and by construction executes no input dispatch, no hit-testing, no focus transfer, and nothing that runs before a panel's own handler. A fatal crash lived in exactly that gap for a month while four separate repro attempts came back negative and were honestly recorded as narrowing the search. **They narrowed nothing**: the search space they covered never contained the bug. A negative result is only evidence about the region the instrument can reach — so name the region. The instrument that was missing is real input (`make -C avalonia smoke-xvfb-click`), and it hit on the first seed. | D10, D23 |
+
+| AP36 | `programs/host.go::Input`, from the generic host's first day until 2026-08-21 | **A periodic sampler used as an event sink.** A driver wrote the held-key mask straight to the input port; the tick read that port and only that port, at its own rate. Both halves are individually correct and the composition drops input: at interactive Life's 6 Hz the window is **166.7 ms**, a mouse click is ~25 ms, and a press that is superseded by its own release before the next tick **was never observed by anything**. Measured on a clocked host: **1 of 6 d-pad clicks moved the cursor; 6 of 6 when the button was held past a tick** — and 25/166.7 ≈ 15% is exactly 1-in-6, so the arithmetic and the observation agree. Nothing was broken in the panel, the bridge, the keymap or the step. The tell is **a producer and a consumer on different clocks sharing one cell**; the repair is a queue with the contract stated — *every value offered is observed by exactly one tick, in order* — bounded, coalescing at the tail, and shape-agnostic so the host still never decodes a program's bytes. | D10, D24 |
+| AP37 | `avalonia/frontend/Panels/ProgramPanel.cs::HookPressRelease`, shipped 2026-07-27, dead the whole time | **`btn.PointerPressed += …` on an Avalonia `Button` never runs.** `Button` marks `PointerPressed` and `PointerReleased` **handled** in its own class handler, and class handlers are added to the event route *ahead of* instance handlers on the same element — so a plain `+=` subscription is silently discarded. The on-screen controller therefore never set the bit on press and never cleared it on release: a click was byte-for-byte indistinguishable from no click. **It shipped in a session that verified the controller pixel-for-pixel** (`smoke-xvfb-program`), which is the point — the buttons *rendered* perfectly, and rendering was the only thing measured. `AddHandler(…, Tunnel \| Bubble, handledEventsToo: true)` is the form that works; the duplicate write it can produce is free because the same value twice is one value. Note this defect is invisible from Go and AP36 is invisible from C#: **two independent breaks in one seam, each hidden from one side's tests, both found by the first test that crossed it.** | D10, D18, D24 |
+
+*Enforcement (AP36 + AP37):* `avalonia/tests/Workbench.Headless.Tests/ProgramPanelInputTests.cs`
+is the crossing test — real `MouseDown`/`MouseUp` at the d-pad's hit-tested coordinates, through
+Avalonia's own dispatch, asserting on **program state** (the cursor's cell index, read out of the
+rendered display list) rather than on any UI property. Its diagnostic case reports each stage of
+the route — hit test, tunnel, bubble, bubble-with-handled — *in the failure message*, so the next
+break says which layer dropped the press. Go side: `programs/host_input_queue_test.go`, whose
+`TestHostInput_SubTickClicksReachAClockedProgram` drives a **running clock** from outside, the
+one thing `life_edit_test.go`'s `press` helper (write, then `tickOnce()` yourself) structurally
+cannot do.
+
+*Enforcement (AP34):* `make -C avalonia smoke-xvfb-click GDB=1` runs the app under gdb with
+`handle SIGSEGV stop print nopass`, so the first fault is caught before the re-raise, and the
+target prints `si_code`/`si_addr`/rip/the guard-page mapping. `make -C avalonia crash` now
+prints the triage discriminators (GPU-module count, libbridge frame count, si_code) with the
+SI_KERNEL caveat inline, and runs the managed half inside the builder image instead of
+invoking a tool on the host that could never have worked.
+
+*Enforcement (AP35):* `smoke-xvfb-click` and `crash-hunt` are the input-path gates, listed in
+`AGENTS.md`'s build-and-test section beside the suites. Clicks are seeded and every coordinate
+is logged to `clicks.log`, so a crashing run replays with `CLICK_SEED=n` rather than being
+retold as a story about randomness.
+
+*Enforcement (AP33):* `cmdPut` joins `args[2:]`, and refuses a payload that opens with `{` or
+`[` and does not parse — with the fix in the message, because the shell's `SplitArgs` strips
+quotes as *shell* quoting and the honest instruction is "single-quote the whole payload".
+`TestPutTakesTheWholePayloadNotTheFirstToken` and
+`TestPutRefusesBrokenJSONRatherThanStoringAString` are the gates.
+
+*Enforcement (AP31):* `BrowseGo` copies with `addr := C.GoString(cAddr)` above the
+`browseNavigate` call and the reason is in the body, not a commit message. The behavioural
+gate is `BrowserPanelTests.Open_By_Name_Renders_A_Page_With_The_Whole_Chain`, which asserts
+the error line is **empty** — a panel that silently navigated nowhere fails it.
+
+*Enforcement (AP32):* `BrowseRender`'s envelope carries `ops`, and `BrowserPanel.Settle`
+takes the pre-call value and waits for it to pass. The counter is on the **bridge**, not the
+panel, because the panel is the layer that cannot see when the goroutine started.
+
+*Enforcement (AP29):* the walk lives in `fetch/consume.go::Consumer.Walk` with the reason in its
+doc comment, and `publish`'s `TestConsumeWithholdingInteriorNode` withholds **one interior CHAMP
+node** from an otherwise perfect emission and requires `ErrIncompleteWalk`. A best-effort walk
+passes that test with fewer keys and no error, which is exactly how it would ship.
+
+*Enforcement (AP30):* `fetch.AbsolutePrefix` implements §3.3's table as a table, and
+`TestAbsolutePrefixResolvesAllThreeShapes` pins all three rows — including the universal case,
+whose trim is a **no-op** and which must therefore *not* be peer-joined. The third shape is also
+measured live: `entity-core-go`'s federation origin publishes `prefix: "system/"`, and
+`make crossimpl-go` reconciles every committed key through it.
 
 *Enforcement (AP26):* `TestRendezvous_SubstrateNeedsNoListener` stands up a peer with **no** `ListenAddr`,
 asserts the substrate is present and a backend registers on it — and carries a **control arm**

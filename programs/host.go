@@ -40,6 +40,7 @@ package programs
 // — those are the dynamic-k upgrade and item 2, declared but not yet driven here.
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"time"
@@ -99,8 +100,14 @@ type Host struct {
 	ap   *entitysdk.AppPeer
 	desc *ProgramDescriptor
 
-	mu        sync.Mutex
-	ports     map[string]PortValue
+	mu    sync.Mutex
+	ports map[string]PortValue
+
+	// pending is the per-input-port FIFO of values offered by a driver that no
+	// tick has observed yet — see Input. Keyed by port name; empty queues are
+	// deleted rather than kept, so a program nobody is touching costs nothing.
+	pending map[string][]entity.Entity
+
 	running   bool
 	ticks     uint64
 	status    int
@@ -156,6 +163,7 @@ func Mount(ap *entitysdk.AppPeer, descriptorPath string) (*Host, error) {
 		ap:             ap,
 		desc:           desc,
 		ports:          make(map[string]PortValue, len(desc.OutputPorts)),
+		pending:        make(map[string][]entity.Entity, len(desc.InputPorts)),
 		status:         HostStopped,
 		parallelShards: true,
 		computePattern: ComputeEngineSystem,
@@ -222,6 +230,10 @@ func (h *Host) reseed() error {
 	h.ticks = 0
 	h.status = HostStopped
 	h.lastErr = ""
+	// Queued input belongs to the run that was just discarded. Carrying it
+	// across a restart would make the fresh program's first ticks replay the
+	// old one's last presses.
+	clear(h.pending)
 	h.mu.Unlock()
 	return h.refreshPorts()
 }
@@ -277,6 +289,13 @@ func (h *Host) eval(path string) (string, cbor.RawMessage, error) {
 // decode it — so the sharded path adds no program knowledge to the host.
 // Returns false to stop the loop (a fault).
 func (h *Host) tickOnce() bool {
+	// Advance the input ports FIRST: the step reads them out of the tree, so a
+	// value that lands after the eval belongs to the next tick, not this one.
+	if err := h.applyPendingInputs(); err != nil {
+		h.fault(err)
+		return false
+	}
+
 	var typ string
 	var data cbor.RawMessage
 	var err error
@@ -460,8 +479,33 @@ func (h *Host) refreshPorts() error {
 	return nil
 }
 
-// Input writes a value to a named input port. The host does not interpret it —
+// Input offers a value to a named input port. The host does not interpret it —
 // the driver encoded it per the port's shape.
+//
+// It ENQUEUES rather than writing straight through, and that is the whole point.
+// A clock-driven program reads its input ports at tick time and only at tick
+// time, so a write that is superseded before the next tick was never observed by
+// anything. At a 6 Hz rate hint that window is 167 ms, and a mouse click is
+// ~25 ms: measured on interactive Life before this existed, **1 of 6 d-pad
+// clicks moved the cursor** (and 6 of 6 when the button was held past a tick).
+// Every renderer was wiring input correctly; the sampler was dropping it.
+//
+// The contract this establishes: **every value offered to a port is observed by
+// exactly one tick, in the order it was offered.** That is stronger than a latch
+// and it is shape-agnostic — the host still never decodes a program's bytes, so
+// this holds for `key-set`, `direction`, and any shape added later. It matters
+// most for an edge-triggered program (interactive Life fires on a 0→1 transition
+// in the held-key mask), and costs a level-triggered one at most one extra tick
+// of a held bit, which is the correct reading of a real press anyway.
+//
+// Overflow coalesces at the TAIL (see inputQueueMax): under a backlog the newest
+// value wins, so the port can lag reality briefly but can never diverge from it
+// permanently.
+//
+// The known limit, stated rather than hidden: a bit released and re-pressed
+// between two ticks presents as one continuous hold, because the queue carries
+// port VALUES and not an event stream. Closing that needs the third input device
+// (shapes.go's "keyboard → pointer → events" lineage), not a deeper queue.
 func (h *Host) Input(portName string, typeRef string, data cbor.RawMessage) error {
 	for _, p := range h.desc.InputPorts {
 		if p.Name != portName {
@@ -474,12 +518,75 @@ func (h *Host) Input(portName string, typeRef string, data cbor.RawMessage) erro
 		if err != nil {
 			return err
 		}
-		if _, err := h.ap.PutEntity(p.Path, ent); err != nil {
-			return fmt.Errorf("input port %q: put %s: %w", p.Name, p.Path, err)
+		h.mu.Lock()
+		q := h.pending[p.Name]
+		switch {
+		case len(q) > 0 && sameEntity(q[len(q)-1], ent):
+			// A repeat of the value already queued is not a new observation,
+			// and spending a tick on it would halve the drain rate. The C#
+			// controller alone offers a duplicate on every press: both
+			// PointerReleased and PointerCaptureLost clear the same bit.
+		case len(q) >= inputQueueMax:
+			q[len(q)-1] = ent // overflow: coalesce at the tail, newest wins
+		default:
+			q = append(q, ent)
 		}
+		h.pending[p.Name] = q
+		h.mu.Unlock()
 		return nil
 	}
 	return fmt.Errorf("no input port named %q", portName)
+}
+
+// sameEntity reports whether two port values are indistinguishable to a
+// program. Byte comparison, not decoding — the host stays shape-agnostic, and a
+// driver that re-encodes the same value canonically produces the same bytes.
+func sameEntity(a, b entity.Entity) bool {
+	return a.Type == b.Type && bytes.Equal(a.Data, b.Data)
+}
+
+// inputQueueMax bounds the per-port backlog. Eight entries is ~1.3 s of runway
+// at the 6 Hz rate hint — enough that no human press sequence is lost, small
+// enough that a stopped host cannot accumulate input without bound.
+const inputQueueMax = 8
+
+// applyPendingInputs advances every input port by one queued value, if it has
+// one. Called at the top of tickOnce, so the step evaluates against exactly the
+// values this tick is meant to observe.
+//
+// Ports drain INDEPENDENTLY: a program with two input ports is not made to wait
+// on the quieter one.
+func (h *Host) applyPendingInputs() error {
+	type write struct {
+		path string
+		name string
+		ent  entity.Entity
+	}
+	var writes []write
+
+	h.mu.Lock()
+	for _, p := range h.desc.InputPorts {
+		q := h.pending[p.Name]
+		if len(q) == 0 {
+			continue
+		}
+		writes = append(writes, write{path: p.Path, name: p.Name, ent: q[0]})
+		if len(q) == 1 {
+			delete(h.pending, p.Name)
+		} else {
+			h.pending[p.Name] = q[1:]
+		}
+	}
+	h.mu.Unlock()
+
+	// Outside the lock: PutEntity dispatches, and holding h.mu across a
+	// dispatch is how a host deadlocks against its own change listeners.
+	for _, w := range writes {
+		if _, err := h.ap.PutEntity(w.path, w.ent); err != nil {
+			return fmt.Errorf("input port %q: put %s: %w", w.name, w.path, err)
+		}
+	}
+	return nil
 }
 
 // Start clocks the tick. No-op if already running.

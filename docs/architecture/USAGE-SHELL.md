@@ -359,6 +359,12 @@ treated as a peer-id.
 
 ## 10. Known limitations (today)
 
+- **`put`'s payload must be single-quoted.** `SplitArgs` strips `"` and `'` as *shell*
+  quoting, so an unquoted JSON object arrives with its string quotes gone. Write
+  `put P T '{"a":1}'`. Since 2026-08-21 `put` **refuses** a payload that opens with `{` or
+  `[` and does not parse, rather than storing it as a literal string — the old behaviour
+  wrote an entity that decoded nowhere and surfaced as the *consumer's* bug an hour later.
+
 - Remote peers configured with non-open grants will reject the
   shell's ephemeral keypair at handshake. Pass `-identity NAME`
   with a named identity authorized on the remote, or use
@@ -366,6 +372,89 @@ treated as a peer-id.
 - One-shot mode spins up a fresh peer per invocation — no
   connection caching across `make shell ARGS="…"` calls. Pair with
   `-storage sqlite -storage-path …` if you need state to persist.
+
+---
+
+## 10a. Browsing a published federation
+
+The shell reads the CDN corridor two ways, and they answer different questions.
+
+**`site verify <origin>`** is the **inspector**: you already know an origin and you want to
+know whether it is serving what it signed. It renders the verification chain and never a
+page.
+
+**`registry` + `browse`** is the **journey**: you hold one pinned peer-id and end up looking
+at a page, with the chain printed under it.
+
+```
+registry pin <origin> -peer <id> [-pin-* …]   trust a name authority
+registry ls                                   the names it carries (WALKS the signed root)
+registry show                                 what is pinned, and how fresh
+registry resolve <name>                       one name, every §6a.4 check reported
+registry unpin
+
+open <name>[/<site>[/<page>]]                 go there  (alias for `browse open`)
+browse back / forward                         history, across publishers
+browse where                                  what is on screen and what verified it
+browse sites                                  every site the target's SIGNED ROOT commits to
+```
+
+And the other direction — **being** a registry (§6a.8 curated registration; this peer's own
+key signs, so this peer's peer-id is what a consumer pins):
+
+```
+registry issue <name> <target-peer-id> -target-origin <url> [-ttl 720h]
+registry revoke <binding-hash> [-reason ...]
+```
+
+`-target-origin` is **fetched**, and the binding carries the profile the target itself
+advertises. A registry asserting a reach it read is asserting something it checked; one
+asserting a reach it composed is asserting something it invented, and a consumer cannot tell
+those apart. `issue` refuses if the origin advertises a different peer than you named.
+
+Then publish it:
+
+```
+entity-publish -prefix system/ -out ./reg -origin https://your-host/reg
+```
+
+**The prefix is `system/`, not `system/registry/`.** A binding's signature lives at
+`system/signature/{hex}` (V7 §5.2's invariant pointer), which is outside every
+`system/registry/…` prefix — so the narrower publish emits bindings with no signatures over
+them, enumeration works, and every resolve 404s at the signature step. Measured; routed to
+arch as a defect in §6a.3a's recommended prefix.
+
+Worked example, against the frozen cross-impl federation in the tree:
+
+```bash
+python3 -m http.server 8731 --directory fetch/testdata/crossimpl-rust-federation &
+P=2KBLkCxvkgobuauPA6zPfKarpuRRnnWHL98n8Gv1GNmybr
+make run                       # a REPL: the pin is workspace state, so one-shot won't do
+```
+
+```
+entity:/ > registry pin http://127.0.0.1:8731 -peer $P \
+             -pin-tree /registry/$P -pin-content /registry/content \
+             -pin-manifest /registry/$P/system/peer/published-root -pin-layout sharded-2-4
+entity:/ > registry ls
+entity:/ > open docs.entitychurch.org
+```
+
+**Three things the output is trying to teach, and they are not decoration:**
+
+- **The name list comes from a WALK of the registry's signed root**, not from the listing the
+  origin serves. A hostile origin can drop a name from a listing undetectably; it cannot drop
+  a node from a walk without the walk failing (`EXTENSION-REGISTRY` §6a.3a). When the two
+  disagree, both are shown and the uncommitted row is marked `!!`.
+- **Every step of the chain prints what a green verdict on *that step* proves.** Most of them
+  are satisfiable by an origin that is lying — only the trie walk is not.
+- **Nothing is ever reported as plain "verified".** A green chain is *verified as of* the
+  publisher's `published_at`, because a quiet publisher and a withholding origin are
+  indistinguishable from a consumer.
+
+`-pin-*` is needed only when the origin serves no `transport-profile`, which is **conformant**
+(`EXTENSION-NETWORK` §6.5.4 makes profile distribution out-of-band in v1) — and the shell says
+which mode it ran in, because a wrong pin and a withholding origin look identical from here.
 
 ---
 
@@ -387,6 +476,14 @@ put <path> <type> <json>     store an entity
 rm <path>                    remove a binding
 has <path>                   yes/no
 cp <src> <dst>               copy entity (cross-peer-capable)
+registry pin <origin> -peer <id>
+                             trust a name authority (see §10a)
+registry ls                  the names it carries — from the signed-root WALK
+registry issue <name> <peer> -target-origin <url>
+                             mint + sign a binding (be a registry)
+open <name>[/site[/page]]    go there, and print the chain that verified it
+browse back|forward|where|sites
+site verify <origin>         the inspector: the chain, not the page
 connect <alias> <host:port>  open a session to a remote peer
 disconnect <alias>           close & evict from pool
 info [alias]                 connection details

@@ -1,0 +1,20 @@
+{
+  "home_site": {
+    "loc": "",
+    "peer": "2KGTrr4LxfFJjUBUD74XJZoze74TrQFpXqWA19qeskz9sS",
+    "site": "demo"
+  },
+  "name_registry_pin": {
+    "origin": "/registry",
+    "peer_id": "2KBLkCxvkgobuauPA6zPfKarpuRRnnWHL98n8Gv1GNmybr"
+  },
+  "origins": {
+    "2KGTrr4LxfFJjUBUD74XJZoze74TrQFpXqWA19qeskz9sS": ""
+  },
+  "site_mode": {
+    "enabled": false,
+    "show_toggle": false
+  },
+  "surface": "window",
+  "window_type": "Site Browser"
+}

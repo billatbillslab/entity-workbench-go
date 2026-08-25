@@ -317,6 +317,81 @@ public static class Bridge
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "SiteClose")]
     public static extern void SiteClose(long siteHandle);
 
+    // Publisher verification (the CDN corridor's consume stack).
+    //
+    // VerifyOpen takes NO peer handle, and that is deliberate: a Mode A2
+    // consumer is not a peer (EXTENSION-NETWORK §6.5.3) — no dispatch,
+    // no ingest, no store. The corridor's whole point is that a stranger
+    // with a URL can check a publisher's work.
+    //
+    // VerifyStart returns immediately and the wake fires ONCE, on
+    // completion. Every other panel here wakes on tree events; this one
+    // wakes on an operation the operator started. Never call
+    // VerifyStart's work on the UI thread — the bridge already moved it
+    // to a goroutine, which is why Start is not Render.
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "VerifyOpen")]
+    public static extern IntPtr VerifyOpen();
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "VerifyRegisterWake")]
+    public static extern IntPtr VerifyRegisterWake(long verifyHandle, IntPtr callback);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "VerifyConfigure")]
+    public static extern IntPtr VerifyConfigure(long verifyHandle,
+        [MarshalAs(UnmanagedType.LPStr)] string configJson);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "VerifyStart")]
+    public static extern IntPtr VerifyStart(long verifyHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "VerifyRender")]
+    public static extern IntPtr VerifyRender(long verifyHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "VerifyClose")]
+    public static extern IntPtr VerifyClose(long verifyHandle);
+
+    // The consume-side BROWSER (registry pin -> name -> page).
+    //
+    // Same no-peer rule as Verify above, and the same
+    // operation-triggered wake. The difference worth knowing at this
+    // seam: the single-flight guard is PER OPERATION, not per panel.
+    // BrowseNames and BrowseGo do not block each other — clicking a name
+    // while the list is still loading is a reasonable thing to do — but a
+    // second BrowseGo while one is in flight is refused, because two
+    // chains interleaved into one step list read as one journey.
+    //
+    // BrowsePin is synchronous: pinning does at most one profile fetch
+    // and verifies nothing, so there is no wake to wait for. Everything
+    // that actually checks something is async.
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "BrowseOpen")]
+    public static extern IntPtr BrowseOpen();
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "BrowseRegisterWake")]
+    public static extern IntPtr BrowseRegisterWake(long browseHandle, IntPtr callback);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "BrowsePin")]
+    public static extern IntPtr BrowsePin(long browseHandle,
+        [MarshalAs(UnmanagedType.LPStr)] string pinJson);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "BrowseNames")]
+    public static extern IntPtr BrowseNames(long browseHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "BrowseGo")]
+    public static extern IntPtr BrowseGo(long browseHandle,
+        [MarshalAs(UnmanagedType.LPStr)] string address);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "BrowseBack")]
+    public static extern IntPtr BrowseBack(long browseHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "BrowseForward")]
+    public static extern IntPtr BrowseForward(long browseHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "BrowseRender")]
+    public static extern IntPtr BrowseRender(long browseHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "BrowseClose")]
+    public static extern IntPtr BrowseClose(long browseHandle);
+
     // The three per-program panels (Snake / Life / Asteroids) that used to
     // sit here were retired 2026-08-20 along with their bridge surfaces.
     // The generic host below drives all three from descriptors, including

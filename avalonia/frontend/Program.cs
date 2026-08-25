@@ -38,6 +38,11 @@ Flags:
     [System.STAThread]
     public static int Main(string[] args)
     {
+        // FIRST thing, before argv parsing and before Avalonia exists.
+        // A crash during startup is exactly as undiagnosable as one an
+        // hour in, and this costs nothing when nothing goes wrong.
+        CrashDiagnostics.Install();
+
         if (!ParseArgs(args, out var avaloniaArgs))
         {
             Console.Error.Write(Usage);
@@ -225,6 +230,18 @@ public class App : Application
             (handle, host) => new HandlerBrowserPanel(handle, host));
         PanelRegistry.Register("site-view", "Site",
             (handle, host) => new SiteViewPanel(handle, host));
+        // The reader's surface is above; this is the operator's. Same
+        // published bytes, opposite question — "what does it say" vs
+        // "is it serving what it signed". Both shapes exist on purpose;
+        // the contrast is the UX research.
+        PanelRegistry.Register("publisher-verify", "Publisher Verify",
+            (handle, host) => new PublisherVerifyPanel(handle, host));
+        // The browser is the journey; Publisher Verify is the inspector.
+        // Both stay: they answer different questions about the same
+        // bytes, and an operator debugging an origin does not want a
+        // page in the way.
+        PanelRegistry.Register("browser", "Browser",
+            (handle, host) => new BrowserPanel(handle, host));
         PanelRegistry.Register("shell", "Shell",
             (handle, host) => new ShellPanel(handle, host));
         PanelRegistry.Register("peer-connections", "Peer Connections",
@@ -267,9 +284,19 @@ public class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        // The dispatcher exists by now, so the UI-thread fault channel
+        // can be hooked. Do it BEFORE constructing MainWindow — panel
+        // mount is itself a place a fault can land.
+        CrashDiagnostics.InstallDispatcher();
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            desktop.MainWindow = new MainWindow();
+            var window = new MainWindow();
+            desktop.MainWindow = window;
+            // Global input breadcrumbs. Tunnelled, so a click is recorded
+            // before the target handler runs — the 2026-08-21 dump died
+            // in that exact window and left no trace of the click.
+            CrashDiagnostics.AttachInput(window);
         }
         base.OnFrameworkInitializationCompleted();
     }

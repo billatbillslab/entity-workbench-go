@@ -104,6 +104,9 @@ export DOTNET_DbgEnableMiniDump=1
 export DOTNET_DbgMiniDumpType=4
 export DOTNET_DbgMiniDumpName="$OUT_DIR/managed.%d.dmp"
 export LD_LIBRARY_PATH=.
+# Keep the crash record inside the run's artifact dir rather than the
+# default ~/.entity/crash, so a harness run is self-contained.
+export WB_CRASH_DIR="$OUT_DIR/crash"
 
 # WB_SMOKE_INGEST / WB_SMOKE_CYCLE_PATHS / WB_SMOKE_CYCLE_GAP_MS are
 # passed through from the caller's environment. The driver inside
@@ -116,8 +119,93 @@ fi
 # at intervals during the run. The last few survive on disk; if
 # the app crashes mid-run they show what was visible at each
 # capture point.
-./entity-avalonia > "$LOG" 2>&1 &
-APP_PID=$!
+# WB_SMOKE_GDB=1 runs the app under gdb and stops at the FIRST SIGSEGV.
+#
+# This exists because the signal that reaches the coredump is not the
+# one that matters. CoreCLR's handler runs, fails to convert the fault,
+# and RE-RAISES — so every dump we have carries si_code 128 (SI_KERNEL)
+# with si_addr 0 and a register context that is the handler's, not the
+# fault's. `nopass` keeps gdb from delivering the signal onward, so we
+# stop on the ORIGINAL fault with the true rip/si_addr intact.
+if [ -n "${WB_SMOKE_GDB:-}" ]; then
+    echo "    running under gdb (stop at first SIGSEGV)"
+    gdb -batch -nx -q \
+        -ex "set pagination off" \
+        -ex "set confirm off" \
+        -ex "handle all nostop noprint pass" \
+        -ex "handle SIG34 SIG35 SIG36 SIG37 SIG38 nostop print pass" \
+        -ex "handle SIGINT stop print nopass" \
+        -ex "handle SIGSEGV stop print nopass" \
+        -ex "handle SIGBUS stop print nopass" \
+        -ex "run" \
+        -ex "echo \n===== TRUE FAULT SITE =====\n" \
+        -ex "print \$_siginfo" \
+        -ex "info registers rip rsp rbp rax rbx rcx rdx rsi rdi" \
+        -ex "echo \n===== BACKTRACE =====\n" \
+        -ex "bt 60" \
+        -ex "echo \n===== DISASM AROUND RIP =====\n" \
+        -ex "x/8i \$rip" \
+        -ex "echo \n===== THREADS =====\n" \
+        -ex "info threads" \
+        -ex "echo \n===== STACK EXTENT =====\n" \
+        -ex "info proc mappings" \
+        -ex "dump binary memory $OUT_DIR/stack.bin \$rsp \$rsp+2097152" \
+        --args ./entity-avalonia > "$LOG" 2>&1 &
+    APP_PID=$!
+else
+    ./entity-avalonia > "$LOG" 2>&1 &
+    APP_PID=$!
+fi
+
+# ---- click fuzz --------------------------------------------------
+#
+# Real X11 pointer input, injected with xdotool. **This is the rung
+# every other smoke target skips.** smoke-xvfb-site drives the model
+# directly (SiteViewPanel.NavigateForTests), which by construction
+# cannot reach input dispatch, hit-testing, focus movement, or any
+# handler that runs BEFORE a panel's own code — and the 2026-08-21
+# SIGSEGV landed in exactly that gap: the operator clicked one link
+# and the fault preceded `SiteViewPanel.NavigateTo`'s first log line.
+# A driver that calls the method under the click cannot reproduce a
+# bug in the click.
+#
+# Deterministic by seed, and every click is logged with its
+# coordinates, so a crashing run is replayable rather than a story
+# about randomness. Bash's $RANDOM is seeded from WB_SMOKE_CLICK_SEED.
+CLICKS="${WB_SMOKE_CLICK_FUZZ:-0}"
+if [ "$CLICKS" -gt 0 ]; then
+    if ! command -v xdotool >/dev/null 2>&1; then
+        echo "ERROR: WB_SMOKE_CLICK_FUZZ set but xdotool is not installed in this image"
+        kill "$APP_PID" 2>/dev/null || true
+        exit 4
+    fi
+    CLICK_SEED="${WB_SMOKE_CLICK_SEED:-1}"
+    CLICK_GAP_MS="${WB_SMOKE_CLICK_GAP_MS:-120}"
+    CLICK_LOG="$OUT_DIR/clicks.log"
+    : > "$CLICK_LOG"
+    # Screen geometry, minus a margin so we stay inside the window
+    # rather than clicking the root desktop.
+    SCREEN_W="${SCREEN%%x*}"
+    _rest="${SCREEN#*x}"
+    SCREEN_H="${_rest%%x*}"
+    echo "    click fuzz: $CLICKS clicks seed=$CLICK_SEED gap=${CLICK_GAP_MS}ms -> $CLICK_LOG"
+    (
+        RANDOM=$CLICK_SEED
+        # Let the window map and do its first paint before poking it.
+        sleep 3
+        i=0
+        while [ "$i" -lt "$CLICKS" ] && kill -0 "$APP_PID" 2>/dev/null; do
+            x=$(( RANDOM % (SCREEN_W - 20) + 10 ))
+            y=$(( RANDOM % (SCREEN_H - 20) + 10 ))
+            echo "$i $x $y" >> "$CLICK_LOG"
+            xdotool mousemove "$x" "$y" click 1 >/dev/null 2>&1 || true
+            i=$((i + 1))
+            sleep "$(awk "BEGIN{print $CLICK_GAP_MS/1000}")"
+        done
+        echo "click fuzz finished after $i clicks" >> "$CLICK_LOG"
+    ) &
+    CLICK_PID=$!
+fi
 
 # Capture a screenshot every ~2s. Keep all frames; small + cheap.
 # Numbered by capture-time so they sort chronologically (frame-00.png
@@ -153,10 +241,28 @@ fi
 wait "$APP_PID"
 EXIT_CODE=$?
 
+kill "${CLICK_PID:-}" 2>/dev/null || true
+
 echo "==> entity-avalonia exited $EXIT_CODE"
 if [ "$EXIT_CODE" -ne 0 ]; then
-    echo "==> last 20 log lines:"
-    tail -20 "$LOG"
+    echo "==> last 40 log lines:"
+    tail -40 "$LOG"
+    # The three channels that make a crash actionable instead of a
+    # story. Print them here so a CI/loop run captures them without
+    # anyone going to look.
+    if [ -s "$OUT_DIR/clicks.log" ]; then
+        echo "==> last 15 clicks (x y, replay with WB_SMOKE_CLICK_SEED=${WB_SMOKE_CLICK_SEED:-1}):"
+        tail -15 "$OUT_DIR/clicks.log"
+    fi
+    for cl in "$OUT_DIR"/crash/*.log; do
+        [ -e "$cl" ] || continue
+        echo "==> crash diagnostics: $cl"
+        cat "$cl"
+    done
+    for dmp in "$OUT_DIR"/managed.*.dmp; do
+        [ -e "$dmp" ] || continue
+        echo "==> managed minidump present: $dmp"
+    done
     exit 2
 fi
 

@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -581,10 +582,36 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
     private const string AxisLeft = "left";
     private const string AxisRight = "right";
 
+    // HookPressRelease binds one control to one bit of the held-key mask.
+    //
+    // **It must not use `btn.PointerPressed += …`, and that is not a style
+    // preference.** Avalonia's Button marks PointerPressed and PointerReleased
+    // HANDLED in its own class handler, and class handlers are added to the
+    // event route ahead of instance handlers on the same element — so a plain
+    // `+=` subscription on a Button never runs. That is the form this code
+    // shipped in, and it is why the on-screen controller did nothing at all:
+    // the bit was never set on press and never cleared on release, so a click
+    // was indistinguishable from no click. Measured 2026-08-21 through real
+    // input dispatch (ProgramPanelInputTests) — the first test here able to see
+    // it, because every earlier driver called SetHeldBit directly and therefore
+    // proved only that the mask arithmetic worked.
+    //
+    // Registering for Tunnel AND Bubble with handledEventsToo means we see the
+    // press whichever way the routed event is declared, and a duplicate write
+    // is free: the same mask twice is one value, which the Go host's input
+    // queue collapses (programs/host.go, sameEntity).
     private void HookPressRelease(Button btn, InputDto input, int bit)
     {
-        btn.PointerPressed += (_, _) => SetHeldBit(input, bit, true);
-        btn.PointerReleased += (_, _) => SetHeldBit(input, bit, false);
+        const RoutingStrategies BothWays = RoutingStrategies.Tunnel | RoutingStrategies.Bubble;
+        btn.AddHandler(InputElement.PointerPressedEvent,
+            (object? _, PointerPressedEventArgs _) => SetHeldBit(input, bit, true),
+            BothWays, handledEventsToo: true);
+        btn.AddHandler(InputElement.PointerReleasedEvent,
+            (object? _, PointerReleasedEventArgs _) => SetHeldBit(input, bit, false),
+            BothWays, handledEventsToo: true);
+        // Capture loss is not marked handled by Button, and it is the path that
+        // clears a bit when the pointer leaves the control still pressed —
+        // without it a drag off the d-pad leaves the key held forever.
         btn.PointerCaptureLost += (_, _) => SetHeldBit(input, bit, false);
     }
 
@@ -597,6 +624,20 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
 
     internal string StatusTextForTests => _statusLine?.Text ?? "(no status)";
     internal string ProgramNameForTests => _programName;
+    internal ulong TicksForTests => _lastFrame?.Ticks ?? 0;
+
+    // The raw kind tags of a display-list output port, as of the last frame the
+    // bridge delivered.
+    //
+    // Deliberately RAW. This file must not learn that some program's kind 2 is a
+    // cursor — that is the no-program-specific-symbol rule at the top of this
+    // file and host.go §5.4. A test that already knows which program it mounted
+    // is entitled to know what its kinds mean; the panel is not.
+    internal ulong[]? DisplayKindsForTests(string portName)
+    {
+        if (_lastFrame?.Ports == null) return null;
+        return _lastFrame.Ports.TryGetValue(portName, out var p) ? p.DisplayList?.Kinds : null;
+    }
 
     public void Dispose()
     {

@@ -15,7 +15,7 @@ IMAGE    := entity-avalonia:dev
 # below is fenced with $(PODMAN_BUILD_CAPS) / $(PODMAN_RUN_CAPS).
 include $(WB_DIR)/caps.mk
 
-.PHONY: help build run extract host-run up test smoke-xvfb smoke-xvfb-driver smoke-xvfb-site smoke-xvfb-connections smoke-xvfb-handlers smoke-xvfb-program smoke-xvfb-window crash clean
+.PHONY: help build run extract host-run up test smoke-xvfb smoke-xvfb-driver smoke-xvfb-site smoke-xvfb-connections smoke-xvfb-handlers smoke-xvfb-program smoke-xvfb-window smoke-xvfb-click crash-hunt crash clean
 
 help:
 	@echo "avalonia — podman build targets for the Avalonia desktop renderer"
@@ -36,7 +36,11 @@ help:
 	@echo "                         drive the compute host panel: one panel, any program"
 	@echo "  make smoke-xvfb-window  collapse/restore the WINDOW while a program paints"
 	@echo "                         (MODE=resize|minimize|both) — the open-minimize-crash gate"
-	@echo "  make crash      decode the most recent libbridge.so coredump"
+	@echo "  make smoke-xvfb-click  REAL X11 clicks (xdotool) — the only input-path gate"
+	@echo "                         CLICKS=200 CLICK_SEED=1 CLICK_GAP=120 WM=1"
+	@echo "  make crash-hunt        run the click fuzz over HUNT_SEEDS seeds, stop at"
+	@echo "                         the first crash and print the replay command"
+	@echo "  make crash      decode the most recent coredump (Go frames + managed stack)"
 	@echo "  make run        run the container with X11 forwarded from host"
 	@echo "  make extract    copy /app out of the image to ./dist-native/"
 	@echo "  make host-run   launch (extract if needed; does NOT rebuild)"
@@ -147,19 +151,64 @@ crash:
 	          | tr '\n' '\t'; echo ""; \
 	      done; \
 	  echo ""; \
-	  DMP=$$(ls -t $(APP_DIR)/dist-native/managed.*.dmp 2>/dev/null | head -1); \
-	  if [ -z "$$DMP" ]; then \
-	    echo "==> no managed minidump (managed.*.dmp) found."; \
-	    echo "    Next time, \`make up\` sets DOTNET_DbgEnableMiniDump=1 — the"; \
-	    echo "    crash will drop a dump that this target can analyze."; \
-	  else \
-	    echo "==> analyzing managed minidump: $$DMP"; \
-	    echo "    (using bundled dotnet-dump from dist-native/tools/)"; \
-	    cd $(APP_DIR)/dist-native && \
-	      LD_LIBRARY_PATH=. \
-	      ./tools/dotnet-dump analyze $$DMP \
-	        -c 'clrstack -all' -c 'pe' -c 'exit' 2>&1 | head -200; \
-	  fi
+	  echo "==> triage discriminators (recorded so they are comparable run to run)"; \
+	  GPUN=$$(coredumpctl info $$PID 2>/dev/null | grep -icE 'gallium|GLX_mesa|libGL\.|swrast'); \
+	  BRN=$$(coredumpctl info $$PID 2>/dev/null | grep -c 'libbridge\.so'); \
+	  SICODE=$$(coredumpctl info $$PID 2>/dev/null | grep -oE 'si_code: [0-9]+' | head -1); \
+	  echo "    GPU/mesa modules on faulting thread : $$GPUN   (21-ish = the mesa driver bug; 0 = ours)"; \
+	  echo "    libbridge.so frames                 : $$BRN   (0 = not the Go bridge)"; \
+	  echo "    $${SICODE:-si_code: <not reported by coredumpctl>}"; \
+	  echo "    NOTE si_code 128 (SI_KERNEL) with si_addr 0 means the signal was RE-RAISED:"; \
+	  echo "         the register context is NOT the fault site, and si_addr is meaningless."; \
+	  echo ""; \
+	  $(MAKE) crash-managed CORE_PID=$$PID
+
+# crash-managed — the managed half of the post-mortem.
+#
+# Two things this target exists to get right, both learned 2026-08-21:
+#
+#  1. **The host cannot run dotnet-dump.** dist-native/tools/dotnet-dump
+#     is framework-dependent ("You must install .NET to run this
+#     application"), and the dist beside it is a SELF-CONTAINED publish,
+#     which is not a shared-framework layout. The old target invoked it
+#     on the host and it could never have worked. Analysis runs in the
+#     builder image, which has the SDK — consistent with "the host never
+#     needs .NET".
+#
+#  2. **A systemd ELF core is not a managed dump.** The DAC refuses it
+#     (`Failed to load data access module, 0x80004002`), so clrstack is
+#     unavailable no matter how the tool is invoked. Only createdump's
+#     own minidump carries what the DAC needs. Say that out loud instead
+#     of printing a mystery hex code.
+CORE_PID ?=
+crash-managed:
+	@DMP=$$(ls -t $(APP_DIR)/dist-native/managed.*.dmp $(APP_DIR)/dist-native/xvfb-smoke-out*/managed.*.dmp 2>/dev/null | head -1); \
+	 if [ -n "$$DMP" ]; then \
+	   echo "==> analyzing managed minidump: $$DMP"; \
+	   $(MAKE) --no-print-directory crash-image; \
+	   podman run --rm -i $(PODMAN_RUN_CAPS) \
+	     -v $$DMP:$$DMP:ro,z \
+	     -v $(APP_DIR)/dist-native:$(APP_DIR)/dist-native:ro,z \
+	     entity-avalonia-builder:dev \
+	     /build/dist/tools/dotnet-dump analyze $$DMP \
+	       -c 'clrstack -all' -c 'pe -lines' -c 'exit' 2>&1 | head -300; \
+	 else \
+	   echo "==> no managed minidump (managed.*.dmp) found."; \
+	   echo "    run-with-dump.sh DOES export DOTNET_DbgEnableMiniDump=1, so this is not"; \
+	   echo "    a missing env var — the runtime did not invoke createdump for this fault."; \
+	   echo "    A systemd coredump cannot substitute: the DAC rejects an ELF core, so"; \
+	   echo "    there is no managed stack to be had from it. What IS available from the"; \
+	   echo "    core: thread/frame layout, module list, and raw JIT disassembly via gdb."; \
+	 fi
+
+# crash-image tags the builder stage (SDK + dotnet-dump). Cached after
+# the first build, so this is a no-op on a warm tree.
+.PHONY: crash-image crash-managed
+crash-image:
+	@cp $(APP_DIR)/containerignore $(CTX_DIR)/.containerignore
+	@podman image exists entity-avalonia-builder:dev || \
+	  podman build $(PODMAN_BUILD_CAPS) --target builder \
+	    -t entity-avalonia-builder:dev -f $(APP_DIR)/Containerfile $(CTX_DIR)
 
 # Xvfb smoke run. Boots the REAL binary against the REAL X11 paint
 # pipeline inside a virtual framebuffer — closes the gap between
@@ -303,6 +352,115 @@ smoke-xvfb-site: build extract
 # executions return error statuses by design, since an arbitrary op
 # dispatched with no params is exactly the case a user hits while
 # exploring and exactly the one nobody tests.
+# CLICK FUZZ — real X11 pointer input, the rung no other smoke target
+# reaches.
+#
+# Every existing driver calls the model method that sits UNDER the
+# control (SiteViewPanel.NavigateForTests, HandlerBrowserModel, …). That
+# is a deliberate design and it is also a blind spot with a shape: it
+# cannot execute input dispatch, hit-testing, focus transfer, pointer
+# capture, or any handler that runs before a panel's own code. The
+# 2026-08-21 SIGSEGV lived precisely there — one click on a link, and
+# the fault arrived before the panel logged anything at all.
+#
+# CLICKS/SEED/GAP are the knobs. The seed makes a crashing run
+# replayable: every click is written to clicks.log with coordinates, so
+# "it crashed randomly" becomes "it crashed on click 37 at 812,455 with
+# seed 4".
+CLICKS      ?= 200
+CLICK_SEED  ?= 1
+CLICK_GAP   ?= 120
+# A window manager is ON by default here, unlike every other smoke
+# target. The desktop the operator crashes on has one, and the WM owns
+# focus transfer and pointer grabs — the very machinery a click fuzz is
+# trying to exercise. WM= (empty) turns it off.
+WM          ?= 1
+# CRASH_TRACE=1 turns on first-chance exception logging for the run.
+# Noisy by design — a healthy Avalonia session throws internally — but a
+# managed exception thrown immediately before a hard fault is the best
+# lead available when the fault itself leaves no managed dump.
+CRASH_TRACE ?=
+# GDB=1 runs the app under gdb and stops at the FIRST SIGSEGV, which is
+# the only way to see the real fault site: the runtime re-raises, so the
+# coredump's register context is the handler's, not the fault's.
+GDB         ?=
+
+smoke-xvfb-click: build extract
+	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
+	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh
+	@echo "==> CLICK-FUZZ Xvfb smoke (timer=$(DRIVER_SECS)s clicks=$(CLICKS) seed=$(CLICK_SEED))"
+	@cd $(APP_DIR)/dist-native && \
+	  podman run --rm $(PODMAN_RUN_CAPS) \
+	    --userns=keep-id \
+	    -v $(APP_DIR)/dist-native:/app:Z \
+	    -e WB_SMOKE_CLICK_FUZZ=$(CLICKS) \
+	    -e WB_SMOKE_CLICK_SEED=$(CLICK_SEED) \
+	    -e WB_SMOKE_CLICK_GAP_MS=$(CLICK_GAP) \
+	    -e WB_SMOKE_WM=$(WM) \
+	    -e WB_CRASH_TRACE=$(CRASH_TRACE) \
+	    -e WB_SMOKE_GDB=$(GDB) \
+	    $(if $(GDB),--cap-add=SYS_PTRACE,) \
+	    -w /app \
+	    --entrypoint bash \
+	    $(IMAGE) \
+	    /app/run-xvfb-smoke.sh $(DRIVER_SECS); \
+	  status=$$?; \
+	  if [ $$status -ne 0 ]; then \
+	    echo ""; \
+	    echo "==> smoke-xvfb-click FAILED (exit $$status) seed=$(CLICK_SEED)"; \
+	    echo "    replay: make -C avalonia smoke-xvfb-click CLICK_SEED=$(CLICK_SEED)"; \
+	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
+	    exit $$status; \
+	  fi
+	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
+
+# CRASH-HUNT — the unattended version. Runs the click fuzz over a range
+# of seeds and STOPS at the first non-zero exit, leaving that run's
+# artifacts (clicks.log, crash/*.log, managed dump, frames) in place and
+# printing the exact replay command.
+#
+# This is the target to reach for when the answer to "can you reproduce
+# it?" has to be yes without a person sitting there. HUNT_SEEDS bounds
+# the search; a clean sweep is a NEGATIVE result and is reported as one,
+# not as "fixed".
+HUNT_SEEDS ?= 12
+
+crash-hunt: build extract
+	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
+	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh
+	@echo "==> CRASH HUNT: $(HUNT_SEEDS) seeds x $(CLICKS) clicks, $(DRIVER_SECS)s each"
+	@failed=0; \
+	 for seed in $$(seq 1 $(HUNT_SEEDS)); do \
+	   echo ""; echo "---- seed $$seed ----"; \
+	   cd $(APP_DIR)/dist-native && \
+	   podman run --rm $(PODMAN_RUN_CAPS) \
+	     --userns=keep-id \
+	     -v $(APP_DIR)/dist-native:/app:Z \
+	     -e WB_SMOKE_CLICK_FUZZ=$(CLICKS) \
+	     -e WB_SMOKE_CLICK_SEED=$$seed \
+	     -e WB_SMOKE_CLICK_GAP_MS=$(CLICK_GAP) \
+	     -e WB_SMOKE_WM=$(WM) \
+	     -e WB_CRASH_TRACE=$(CRASH_TRACE) \
+	     -e WB_SMOKE_OUT=/app/xvfb-smoke-out-seed$$seed \
+	     -w /app \
+	     --entrypoint bash \
+	     $(IMAGE) \
+	     /app/run-xvfb-smoke.sh $(DRIVER_SECS) || { \
+	       echo ""; \
+	       echo "==> CRASH HUNT HIT on seed $$seed"; \
+	       echo "    replay: make -C avalonia smoke-xvfb-click CLICK_SEED=$$seed CLICKS=$(CLICKS)"; \
+	       echo "    artifacts: $(APP_DIR)/dist-native/xvfb-smoke-out-seed$$seed/"; \
+	       echo "    COPY THEM NOW — \`extract\` (which every build target runs) does"; \
+	       echo "    rm -rf on dist-native, so the next make invocation deletes this."; \
+	       failed=1; break; }; \
+	 done; \
+	 if [ $$failed -eq 0 ]; then \
+	   echo ""; \
+	   echo "==> crash hunt clean across $(HUNT_SEEDS) seeds."; \
+	   echo "    This is a NEGATIVE result, not a fix: it bounds the search, it does not close it."; \
+	 fi; \
+	 exit $$failed
+
 smoke-xvfb-handlers: build extract
 	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
 	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh

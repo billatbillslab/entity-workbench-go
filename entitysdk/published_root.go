@@ -48,12 +48,13 @@ package entitysdk
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
+
+	"entity-workbench-go/entitysdk/publishedroot"
 
 	"go.entitychurch.org/entity-core-go/core/crypto"
 	"go.entitychurch.org/entity-core-go/core/entity"
-	"go.entitychurch.org/entity-core-go/core/hash"
 	"go.entitychurch.org/entity-core-go/core/types"
 )
 
@@ -201,62 +202,32 @@ func (a *AppPeer) ReadPublishedRoot(ctx context.Context, peerID string, opts ...
 	return PublishedRoot{Entity: ent, Data: data, Signature: sig}, nil
 }
 
-// checkPublishedRootEntity validates everything about a served
-// published-root that can be decided from its own bytes, and returns
+// sdkError maps a publishedroot.Fault onto the SDK's own error type so
+// callers keep `*entitysdk.Error` and its predicates. Anything else
+// passes through untouched.
+//
+// The gates themselves live in `entitysdk/publishedroot` because the
+// wire consumer in `fetch` applies the identical seven, and two copies
+// of a normative check is one copy too many — see that package's note.
+func sdkError(err error) error {
+	var f *publishedroot.Fault
+	if errors.As(err, &f) {
+		return &Error{Status: f.Status, Code: f.Code, Message: f.Message, Cause: f.Cause}
+	}
+	return err
+}
+
+// checkPublishedRootEntity applies the byte-decidable gates and returns
 // the entity with its content hash corrected to the recomputed value.
 //
 // Split out from ReadPublishedRoot so it is reachable without a
-// hostile peer: the corruption branch below cannot be provoked through
+// hostile peer: the corruption branch cannot be provoked through
 // a real store, which computes hashes rather than accepting claimed
 // ones, and an unreachable check is an unverified one.
 func checkPublishedRootEntity(peerID, path string, ent entity.Entity) (entity.Entity, types.PublishedRootData, error) {
-	var zero types.PublishedRootData
-
-	if ent.Type != types.TypePeerPublishedRoot {
-		return ent, zero, NewError(500, "unexpected_result_type",
-			fmt.Sprintf("%s holds type %q, want %s", path, ent.Type, types.TypePeerPublishedRoot))
-	}
-
-	// Recompute from the bytes served. The claimed hash is the
-	// signature's target, so a host that could alter the payload and
-	// restate the hash would otherwise be verifying its own claim
-	// against itself. Published-roots are authored under the
-	// publisher's process-global content_hash_format (v7.67 §2.3), so
-	// the claimed algorithm selects the function.
-	alg := ent.ContentHash.Algorithm
-	if ent.ContentHash.IsZero() {
-		alg = hash.AlgorithmSHA256
-	}
-	computed, err := hash.ComputeFormat(alg, ent.Type, ent.Data)
+	ent, data, err := publishedroot.Check(peerID, path, ent)
 	if err != nil {
-		return ent, zero, WrapError(500, "hash_failed",
-			"recompute published-root content hash", err)
-	}
-	if !ent.ContentHash.IsZero() && ent.ContentHash != computed {
-		return ent, zero, NewError(500, "content_hash_mismatch",
-			fmt.Sprintf("published-root content_hash disagrees with served bytes: served=%s computed=%s",
-				ent.ContentHash, computed))
-	}
-	ent.ContentHash = computed
-
-	data, err := types.PublishedRootDataFromEntity(ent)
-	if err != nil {
-		return ent, zero, WrapError(500, "decode_failed",
-			"decode published-root payload", err)
-	}
-	if data.PeerID != peerID {
-		return ent, zero, NewError(500, "peer_id_mismatch",
-			fmt.Sprintf("published-root at %s declares peer_id %s", path, data.PeerID))
-	}
-	if data.Prefix == "" {
-		return ent, zero, NewError(500, "missing_prefix",
-			"published-root omits `prefix`, REQUIRED per EXTENSION-TREE §3.3a — "+
-				"without it the relative keys under root_hash cannot be rebuilt into absolute paths")
-	}
-	if !strings.HasSuffix(data.Prefix, "/") {
-		return ent, zero, NewError(500, "invalid_prefix",
-			fmt.Sprintf("published-root prefix %q does not end in \"/\" (EXTENSION-TREE §3.3a MUST); "+
-				"`absolute_prefix + relative_key` would concatenate into a wrong path", data.Prefix))
+		return ent, types.PublishedRootData{}, sdkError(err)
 	}
 	return ent, data, nil
 }
@@ -268,11 +239,17 @@ func publisherKey(peerID string, o *publishedRootOpts) ([]byte, byte, error) {
 	if o.havePK {
 		return o.publisherPK, o.publisherKT, nil
 	}
-	pub, keyType, ok := crypto.DerivePeerFromPeerID(crypto.PeerID(peerID))
-	if !ok {
-		return nil, 0, NewError(400, "unverifiable_peer_id",
-			fmt.Sprintf("peer-id %s is not identity-form, so the publisher's public key is not "+
-				"derivable from it; supply it out-of-band with WithPublisherKey", peerID))
+	pub, keyType, err := publishedroot.DeriveKey(peerID)
+	if err != nil {
+		var f *publishedroot.Fault
+		if errors.As(err, &f) {
+			// The SDK's own message names the option that fixes it;
+			// the shared gate cannot, since `fetch` has no such option.
+			return nil, 0, NewError(f.Status, f.Code,
+				fmt.Sprintf("peer-id %s is not identity-form, so the publisher's public key is not "+
+					"derivable from it; supply it out-of-band with WithPublisherKey", peerID))
+		}
+		return nil, 0, err
 	}
 	return pub, keyType, nil
 }
@@ -285,7 +262,7 @@ func publisherKey(peerID string, o *publishedRootOpts) ([]byte, byte, error) {
 // the one the host served, so a host cannot steer us at a signature it
 // prepared for different bytes.
 func (a *AppPeer) verifyPublishedRootSignature(peerID string, ent entity.Entity, pub []byte, keyType byte) (types.SignatureData, error) {
-	sigPath := "/" + peerID + "/" + types.LocalSignaturePath(ent.ContentHash)
+	sigPath := "/" + peerID + "/" + publishedroot.SignatureRelPath(ent.ContentHash)
 	sigEnt, found, err := a.Get(sigPath)
 	if err != nil {
 		return types.SignatureData{}, WrapError(StatusOf(err), "signature_get_failed",
@@ -295,32 +272,9 @@ func (a *AppPeer) verifyPublishedRootSignature(peerID string, ent entity.Entity,
 		return types.SignatureData{}, NewError(404, "missing_signature",
 			"no signature bound at "+sigPath+" — the published-root is unverifiable")
 	}
-	if sigEnt.Type != types.TypeSignature {
-		return types.SignatureData{}, NewError(500, "unexpected_result_type",
-			fmt.Sprintf("%s holds type %q, want %s", sigPath, sigEnt.Type, types.TypeSignature))
-	}
-	sig, err := types.SignatureDataFromEntity(sigEnt)
+	sig, err := publishedroot.VerifySignature(sigPath, ent, sigEnt, pub, keyType)
 	if err != nil {
-		return types.SignatureData{}, WrapError(500, "decode_failed",
-			"decode published-root signature", err)
-	}
-	if sig.Target != ent.ContentHash {
-		return types.SignatureData{}, NewError(403, "signature_target_mismatch",
-			fmt.Sprintf("signature at %s targets %s, not %s", sigPath, sig.Target, ent.ContentHash))
-	}
-	sigKeyType, ok := crypto.KeyTypeByte(sig.Algorithm)
-	if !ok {
-		return types.SignatureData{}, NewError(501, "unsupported_algorithm",
-			fmt.Sprintf("signature algorithm %q is not a known key type", sig.Algorithm))
-	}
-	if sigKeyType != keyType {
-		return types.SignatureData{}, NewError(403, "signature_algorithm_mismatch",
-			fmt.Sprintf("signature algorithm %q does not match the publisher key type 0x%02x",
-				sig.Algorithm, keyType))
-	}
-	if !crypto.Verify(sigKeyType, pub, ent.ContentHash.Bytes(), sig.Signature) {
-		return types.SignatureData{}, NewError(403, "signature_invalid",
-			"published-root signature does not verify against the publisher's key")
+		return types.SignatureData{}, sdkError(err)
 	}
 	return sig, nil
 }

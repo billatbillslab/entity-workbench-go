@@ -218,6 +218,43 @@ func init() {
 		Handler: cmdName,
 	})
 	r.Register(Command{
+		Name:  "registry",
+		Usage: "registry <pin|ls|show|resolve|unpin> [args]",
+		Help: "Pin a name authority and browse what it carries (EXTENSION-REGISTRY §6a). " +
+			"'registry pin <origin> -peer <id>' is the one fact you supply out of band — for an " +
+			"identity-form peer-id the pin IS the key, so the host serving the bytes is trusted " +
+			"for nothing. 'registry ls' WALKS the signed root for the name set (§6a.3a): a served " +
+			"listing can hide a name undetectably, a walk cannot hide one without failing.",
+		Handler: cmdRegistry,
+	})
+	r.Register(Command{
+		Name:  "browse",
+		Usage: "browse <open|back|forward|where|sites> [args]",
+		Help: "Go somewhere by name and see what verified it. 'browse open <name>' runs the whole " +
+			"chain — registry pin, binding signature, association, revocation, freshness, " +
+			"transport, the target's own signed root, the trie walk, the page — and prints the " +
+			"page with that chain under it. 'browse where' repeats the chain with what each step " +
+			"proves. History crosses publishers.",
+		Handler: cmdBrowse,
+	})
+	r.Register(Command{
+		Name:  "open",
+		Usage: "open <name>[/<site>[/<page>]] [-origin <url>]",
+		Help:  "Alias for 'browse open' — the verb you type most.",
+		Handler: func(sh *Shell, args []string) (Result, error) {
+			return cmdBrowse(sh, append([]string{"open"}, args...))
+		},
+	})
+	r.Register(Command{
+		Name:  "site",
+		Usage: "site verify <origin> [-peer <id>] [-keys] [-absent <key>] [-pin-* ...]",
+		Help: "Verify a published origin over the CDN corridor: manifest -> signature -> " +
+			"CHAMP trie walk from the signed root -> leaves. Reports the CHAIN (which link " +
+			"held and what each proves), not the site's pages — the trie walk is the only " +
+			"step a withholding origin cannot pass.",
+		Handler: cmdSite,
+	})
+	r.Register(Command{
 		Name:    "identity",
 		Usage:   "identity <list|create|use|bootstrap> [args]",
 		Help:    "Manage V7 identities + run the identity-aware bootstrap ceremony on the local peer.",

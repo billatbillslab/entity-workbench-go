@@ -94,6 +94,7 @@ require a doc edit here (this section).
 | `detail` | `DetailPanel` | mount, ShowEntity (bridge EntityGet), dispose |
 | `site-view` | `SiteViewPanel` | Mount, Navigate, GoBack, SwapBody, Render, Dispose |
 | `peer-connections` | `PeerConnectionsPanel` | mount, render, connect, disconnect, nearby-render |
+| `verify` | `PublisherVerifyPanel` | Mount, Start (+ the bridge's reply envelope), render-decode failures, Dispose |
 | `main-window` | `MainWindow` | startup, peer-tab swap, shutdown |
 | `peer-resolver` | `PeerResolver` | resolve, alias lookup |
 | `smoke-driver` | `SmokeDriver` | cycle N, ingest, exit-timer |

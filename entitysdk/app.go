@@ -66,6 +66,13 @@ type AppPeer struct {
 	// / OnDiscoveredPeerChange route through this.
 	discoveryHandler *discovery.Handler
 
+	// resolverHandler is the meta-resolver (system/registry). Retained
+	// on the AppPeer — not just on builtOptions — because PinRegistry
+	// registers a backend AFTER construction: a registry is pinned by an
+	// operator at runtime, not declared in PeerConfig, and a handler
+	// reachable only during assembly makes that impossible.
+	resolverHandler *registry.Handler
+
 	// subEngine is set when the subscription extension is enabled
 	// via PeerConfig.Extensions.Subscription. Nil otherwise. The
 	// subscription bridge (AppPeer.Subscribe, pass 2 step 3) needs
@@ -961,6 +968,7 @@ func assembleAppPeer(bo *builtOptions) (*AppPeer, error) {
 		bo.localNameHandler.SetupStore(p.Store(), p.LocationIndex(), p.PeerID(), nil)
 		bo.registryHandler.RegisterBackend(bo.localNameHandler)
 	}
+	ap.resolverHandler = bo.registryHandler
 
 	// Finish subscription extension wiring — the delivery function
 	// and engine location index both need the fully-constructed peer.

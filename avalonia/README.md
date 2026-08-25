@@ -8,7 +8,7 @@ uses. All business logic (entity resolution, formatting, tree and
 selection state, the content models) lives renderer-neutral in
 `workbench/`; nothing in `frontend/` reimplements it.
 
-**Status:** shipped, not a spike. 12 panel types (15 registry entries),
+**Status:** shipped, not a spike. 14 panel types (17 registry entries),
 95 bridge exports, headless
 UI tests plus real-X11 smoke drivers per panel. The `console/` (tview)
 renderer is kept frozen and single-peer as a discipline enforcer — it is
@@ -110,7 +110,7 @@ avalonia/
     MainWindow.cs  window chrome, peer tabs
     PeerView.cs    per-peer slot layout; implements IPanelHost
     Bridge.cs      P/Invoke surface (one DllImport per export)
-    Panels/        12 panel types + PanelRegistry, PanelStack, PanelSlot
+    Panels/        14 panel types + PanelRegistry, PanelStack, PanelSlot
   tests/           Workbench.Headless.Tests (Avalonia.Headless.XUnit)
   Containerfile    multi-stage Fedora build (Go + .NET SDK + tester stage)
   Makefile         podman build / extract / run / smoke targets
@@ -155,6 +155,60 @@ liveness, a connection evicted without a demotion leaves liveness saying
 away. `PeerConnectionsPanel` renders both, labelled separately. Neither
 exposes `last_seen`: the status entity is transition-written (§5.4.1
 MUST), so that stamp is not a freshness signal.
+
+### Three views of a published site, deliberately
+
+`BrowserPanel` is the **journey**: pin one name authority, walk it for the
+names it carries, open one, and read a page — with the ten-step trust
+chain in the right-hand column, showing the provenance of the bytes in
+the middle column and no others. The address bar takes a name
+(`docs.entitychurch.org/demo/index`) or a peer-id; history crosses
+publishers.
+
+**It is not a second Site Browser.** `entity-browser-rust` renders the
+pages with trust in the chrome — the reader's browser, and the right
+shape for a reader. This one keeps the chain **beside** the page because
+its user is the person deciding whether to believe it. Two rules the
+model enforces and the panel must not undo: a step that could not be
+established is drawn **failing**, never omitted (a rail with six green
+rows that stops looks green at a glance), and the rail is **cleared** when
+a navigation starts (a stale chain beside fresh bytes is the exact lie
+the surface exists to prevent).
+
+Addressing a peer-id directly draws the six naming steps as `skip`, with
+the reason — a browser that simply started at "target root" would render
+a shorter, cleaner, equally-green chain for a materially weaker claim.
+
+Its shape departures are `GUIDE-AVALONIA-PANEL-PATTERNS` §9's **P3″**:
+per-operation single flight (enumerating and navigating do not block each
+other; a second navigation is refused) and a monotonic completed-op
+counter on the render envelope, because a derived UI property is not a
+completion signal (AP32).
+
+### Two views of the same origin, deliberately
+
+`SiteViewPanel` renders a published site's **pages** — the reader's
+surface, the same question `entity-browser-rust`'s Site Browser answers.
+`PublisherVerifyPanel` renders the **verification chain** over the same
+bytes: manifest → signature → CHAMP trie walk from the signed root →
+leaves → enumerate → reconcile → absent control, each step with its
+verdict *and what a green verdict on that step proves*.
+
+**The `proves` line is the design.** Five of those seven steps are
+satisfiable by an origin that is lying — an origin serving a
+correctly-signed root that commits to nothing passes the layout, the
+manifest, the signature and every per-leaf fetch anyone makes; only the
+trie walk catches it. A UI that collapses the chain into one tick
+teaches an operator that "verified" is one fact. It is seven, and one of
+them (`published_at`) is a **moment**, which is why a green verdict is
+always followed by the freshness bound and never by the bare word.
+
+Two shape departures, both intentional (`GUIDE-AVALONIA-PANEL-PATTERNS`
+§9, P3′): the wake is **operation-triggered** (once per run, on
+completion — not a tree event, so nothing to debounce; the single-flight
+guard sits on `VerifyStart` instead), and `VerifyOpen()` takes **no peer
+handle**, because an EXTENSION-NETWORK §6.5.3 Mode A2 consumer is not a
+peer.
 
 ## Validating the bridge without Avalonia
 

@@ -456,6 +456,7 @@ public sealed class SiteViewPanel : UserControl, IDisposable
         if (_handle < 0 || string.IsNullOrEmpty(target)) return;
         PanelLog.Write("site-view", $"Navigate h={_handle} target={target}");
         Bridge.TakeString(Bridge.SiteNavigate(_handle, target));
+        PanelLog.Write("site-view", $"Navigate-returned h={_handle}");
         // Wake fires asynchronously via OnChange; no need to re-render
         // here. The wake path coalesces rapid navigation through the
         // single-flight + DispatcherTimer guard.
@@ -519,6 +520,7 @@ public sealed class SiteViewPanel : UserControl, IDisposable
         }
         _bodyStack.Children.Add(block);
         BodyRecreateCountForTests++;
+        PanelLog.Write("site-view", $"SwapBody-done h={_handle} blocks={_bodyStack.Children.Count}");
     }
 
     private static SelectableTextBlock NewBlock() => new SelectableTextBlock

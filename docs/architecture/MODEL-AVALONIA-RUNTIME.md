@@ -313,7 +313,7 @@ non-disposable, and they're backed up out-of-band.
 
 ---
 
-## 6. Boundary map — the six rows where bugs live
+## 6. Boundary map — the seven rows where bugs live
 
 Adapted from EGUI's `MODEL-BROWSER-WASM-RUNTIME §10`. Every shipped
 bug we've forensically diagnosed sits at one of these boundaries.
@@ -327,6 +327,7 @@ bug we've forensically diagnosed sits at one of these boundaries.
 - **Pattern:** `GUIDE-AVALONIA-PANEL-PATTERNS.md` P1 (adaptive emit), P2 (persistent container), P3 (wake debounce — *new lever for open #4*), P4 (bounded list).
 - **What Avalonia retains (from deep-dive + source archaeology):** A detached `Visual` is *not* immediately GC-eligible. The `LayoutManager`'s measure/arrange queues hold references until the next layout pass drains; the `Compositor`'s `_objectSerializationQueue` holds visual proxies until `CommitCore()` serializes them into a `CompositionBatch`; the render-thread `ServerCompositor._batches` queue holds those batches (with their serialized payload of visual + text-shaping state) until `ApplyPendingBatches()` + `NotifyBatchesRendered()` complete on a future render-thread tick. The two-stage pipeline is the leading candidate for open follow-on #4's cross-render accumulation (see §4 — confirmation awaits direct measurement of `_batches.Count`). This is also why `Inlines.Clear()` mid-batch made things worse historically — the cleared inlines were still in the composition queue, their parents in the layout queue.
 - **What does **not** auto-clear:** A `TextBlock`'s internal `_textLayout` / `_textRunCache` is not cleared when its `Inlines` mutate. The old layout dies with the TextBlock (or with the next remeasure that overwrites it). The native text-shaping output transiently lives at Boundary B but is **pinned from Boundary A**.
+- **Routed-event delivery order, and the trap in it (2026-08-21, AP37).** At a single element the route carries **class handlers before instance handlers**, and a control's own `OnPointerPressed` override *is* a class handler. `Button` sets `e.Handled = true` for a left press (and again on release), so **`btn.PointerPressed += …` on a `Button` never runs** — the subscription is accepted, is never invoked, and produces no warning at build or run time. This is not a niche case: it is the ordinary way anyone wires press-and-hold behaviour, and it shipped here as an on-screen game controller that rendered perfectly and did nothing. The forms that work are `AddHandler(…, RoutingStrategies.Tunnel)` (the tunnel pass reaches the element before the bubble class handler) or `handledEventsToo: true`; registering both is safe when the write is idempotent. **Corollary for testing:** because the failure is *silent subscription*, no unit test that calls the handler's target directly can see it — only dispatch through `TopLevel` can. `Avalonia.Headless`'s `MouseDown`/`MouseUp`/`KeyPressQwerty` run the real route and are cheap; `ProgramPanelInputTests` is the worked example.
 
 ### Boundary B — Avalonia ↔ Skia / HarfBuzz
 
@@ -375,6 +376,48 @@ bug we've forensically diagnosed sits at one of these boundaries.
 - **Discipline:** D17 (persistence honesty).
 - **Status:** wipe-and-rebuild is the operational posture; identity bundles are the exception. No Avalonia-side persistence yet (all state lives in the underlying peer's tree).
 
+### Boundary G — the process's POSIX signal layer
+
+**Added 2026-08-21, by a crash that no other boundary could explain.** Six boundaries
+described everything we had diagnosed and none of them described this one, which is
+the tell that the map was short a row rather than that the bug was exotic.
+
+- **Currency:** POSIX signals, `sigaction` handlers, and the per-thread **alternate signal
+  stack** (`sigaltstack`). Three parties install handlers in this process and none of them
+  knows about the others: CoreCLR's PAL (`SIGSEGV`/`SIGBUS`/`SIGFPE` for null checks and
+  GC write barriers, `SIGRTMIN`/SIG34 to inject thread suspension), the Go runtime inside
+  `libbridge.so`, and glibc.
+- **Bug class:** **alternate-signal-stack exhaustion.** The PAL gives a thread a **16 KB**
+  altstack. Handlers run there, and handlers can nest — a signal arriving while the thread
+  is already on the altstack does not switch stacks, it keeps consuming the same 16 KB. When
+  it runs out, the next `call` pushes its return address into the guard page below.
+- **Why it is nearly invisible:** the failure has no honest signature by default.
+  1. CoreCLR cannot classify the fault, so it **re-raises**. What reaches the coredump is
+     the *second* signal: `si_code 128` (SI_KERNEL), `si_addr 0`, and the handler's register
+     context. Read naively, that is a null dereference. It is not.
+  2. The runtime never prints `Stack overflow.` and `createdump` never fires — by the time
+     it faults there is no stack left to report on.
+  3. The DAC refuses a systemd ELF core (`0x80004002`), so there is no managed stack either.
+  4. `libbridge.so` appears in **zero** frames, so the bridge looks innocent — and is.
+  The true signature is only visible by catching the FIRST signal live:
+  `si_code 2` (SEGV_ACCERR), `si_addr = rsp-8`, rip on a `call`, `rsp` inside a `PROT_NONE`
+  page whose mapping is the altstack rather than the managed stack.
+- **Amplifier:** real pointer input. Clicking drives hit-testing, focus transfer and layout,
+  which raises signal traffic; the model-level drivers that call the method *under* the
+  control raise none of it and cannot reach this boundary at all.
+- **Forensic record:** the month-long "managed stack overflow on minimize" (STATUS) was this,
+  reached by a different route. Four repro attempts came back negative because every one of
+  them drove the model, not the input.
+- **Discipline:** D13 (observability surface), D19 (measure, don't argue), D24 (name the
+  instrument's region), AP34, AP35.
+- **Status:** **mitigated, not fully explained.** The UI thread now installs a 1 MB altstack
+  at startup (`CrashDiagnostics.EnlargeAltStack`, `WB_ALTSTACK_BYTES=0` restores stock).
+  A/B on the click fuzz: **6/8 seeds crash at 16 KB, 0/8 at 1 MB**, same binary, same seeds.
+  **Every other managed thread still runs the stock 16 KB**, and *what* consumes more than
+  16 KB remains unidentified — nested delivery is the leading candidate, with Go's async
+  preemption (`GODEBUG=asyncpreemptoff=1`), `DOTNET_gcConcurrent=0` and
+  `DOTNET_TieredCompilation=0` all ruled out as the trigger.
+
 ---
 
 ## 7. Invariants
@@ -398,6 +441,28 @@ The invariants the model establishes. Every change is checked against these.
 12. **HiDPI multiplies cross-render workload ~3-4×.** Every per-render workload bound on the X11 backend must be reverified under HiDPI before being declared safe. Today this is the strongest amplifier for the open #4 compositor-retention bug.
 13. **SkiaSharp finalizers don't reach old text-blob wrappers when they're upstream-pinned.** A native handle whose managed wrapper is GC-eligible is released on the finalizer thread; but if the wrapper is held by Avalonia's compositor / layout retention (which it is, between renders), GC never marks it eligible at all. Forcing `GC.Collect()` + `WaitForPendingFinalizers()` between renders reclaims nothing in this case. **Do NOT add forced-GC barriers between renders** without a measurement-driven justification; we tried and it made the crash worse by racing the compositor.
 14. **Render-priority and Background-priority work can interleave.** Avalonia's dispatcher drains highest priority first per tick, but a Background-priority callback can be running when a Render-priority measure pass starts. Mutations to visual *structure* (Add/Remove children) during a Background-priority callback race the paint pipeline. Mutations to `Inlines` on already-attached blocks are safe. (This is the structural rationale for the P1 adaptive-emit pattern.)
+15. **The alternate signal stack is a bounded resource, and 16 KB of it is not enough.** The
+    PAL default is 16384 bytes per thread; handlers nest on it; exhaustion presents as a
+    SIGSEGV that is indistinguishable from a null dereference *after* CoreCLR re-raises it.
+    The UI thread now runs a 1 MB altstack. **Do not "clean up" that startup call**, and do
+    not read `si_addr` on any .NET Linux crash without checking `si_code` first — 128
+    (SI_KERNEL) means the signal was re-raised and the register context is the handler's.
+16. **A driver that calls the model method under a control cannot exercise the control.** No
+    amount of `NavigateForTests`-style coverage reaches input dispatch, hit-testing or focus
+    transfer. Real input needs real input (`make -C avalonia smoke-xvfb-click`). A negative
+    result from a model-level driver is evidence about the model, not about the app.
+17. **A `+=` subscription on a routed event is not a guarantee of delivery.** Class handlers
+    precede instance handlers at the same element, and a control that handles the event in
+    its own override — `Button` does, for `PointerPressed` and `PointerReleased` — silently
+    discards every `+=` subscriber. Use `AddHandler` with `Tunnel` and/or
+    `handledEventsToo: true` for any control-level input wiring, and gate it with a test that
+    dispatches through `TopLevel`. There is no build-time or run-time signal for getting this
+    wrong; the only symptom is that nothing happens.
+18. **Headless is enough to test input, and cheaper than Xvfb.** `Avalonia.Headless`'s
+    `MouseDown` / `MouseUp` / `KeyPressQwerty` run the *real* route — hit test, capture, class
+    and instance handlers — so invariant 16's gap is closable in the xunit suite for anything
+    that is not a *platform* bug. Xvfb + `xdotool` remains the instrument for faults below
+    Avalonia (Boundary D and G); headless covers Boundary A. Use the cheap one first.
 
 ---
 

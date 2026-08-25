@@ -95,6 +95,8 @@ RUN dnf install -y \
         xorg-x11-server-Xvfb \
         openbox \
         ImageMagick \
+        xdotool \
+        gdb \
     && dnf clean all
 
 WORKDIR /app

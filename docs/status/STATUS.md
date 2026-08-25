@@ -1,19 +1,96 @@
 # entity-workbench-go — status
 
-_Updated: 2026-08-20 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
+_Updated: 2026-08-21 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
 
-> **Start here:** `docs/status/HANDOFF-2026-08-20-bearings-and-audit.md` is the audit —
+> **Start here:** `docs/status/HANDOFF-2026-08-21-c-the-controller-that-was-never-wired.md`
+> is the newest session: **interactive Life's controller was inert from the day it shipped,
+> through two independent defects** — the generic host sampled its input ports only at tick
+> time (a 25 ms click inside a 167 ms window; **1 of 6** presses landed) and Avalonia's
+> `Button` was silently discarding the panel's `+=` handlers entirely. Both fixed, both
+> gated, and the gate is this repo's first test that dispatches real input and asserts on
+> program state. `entity-browser-rust` had independently found and fixed the first one at a
+> different layer — routed as `reviews/GENERIC-HOST-SUBTICK-INPUT-2026-08-21.md`.
+> Before it: `docs/status/HANDOFF-2026-08-21-b-the-crash-that-was-reading-the-wrong-signal.md`
+> — the month-old Avalonia crash is **reproduced, characterized and
+> fixed** (alternate-signal-stack exhaustion, 6/8 seeds → 0/8), the input-path gate that
+> found it now exists, and the next session's work is named at its end.
+> `docs/status/HANDOFF-2026-08-21-the-journey-and-a-federation-that-does-not-interoperate.md`
+> is the session before that (the naming hop, the browser over it, and a cross-impl
+> divergence that stops a Go peer resolving any Rust-issued name).
+> `docs/status/HANDOFF-2026-08-20-bearings-and-audit.md` is the audit —
 > where every arc actually stands, what gates us, and what nobody has scheduled.
 > §8 below is what the session after it landed. **`dev` is pushed** (`2f285f7` → `origin/dev`,
 > 2026-08-20): all four review packets are readable now, including the two naming live core-go
 > bugs. There is **no roadmap doc and there never was one** — "what's next" is the newest
 > handoff's recommended order plus "Waiting on" at the bottom of this file.
 
-**Green as of `2efeb9d` (2026-08-20, `make test-each`):** all ten suites run **to completion**
-(AP15 — a count from `make test` stops at the first failing package). `sdk` 196s · `inspect` 3s ·
-`shell` 4s · `shellboot` 14s · `shellcmd` 287s · `shellpanel` 2s · `workbench` 3s · `programs` 140s ·
-`publish` 2s · `fetch` 1s. **Zero failures.** `make lint` clean; `gofmt -l` empty. This is the
-**merge gate** run — the sweep that preceded `dev` → `master`.
+**Tree state (2026-08-21-c, the newest sweep).** `make test-each` to completion: **eight PASS,
+two FAIL** — `sdk` 201s · `shellcmd` 307s · `programs` 155s · rest ≤13s.
+**Neither failure is in this session's diff** (which is `programs/host.go` plus two C# files):
+
+| suite | failing test | disposition |
+|---|---|---|
+| `shellcmd` | `TestE2E_Bidirectional_BurstWrites_NoFS` | **the known one** — the terminal last-burst-write loss, routed as `reviews/CORE-GO-LAST-BURST-WRITE-LOSS-2026-08-20.md`, load-dependent. Documented below. |
+| `sdk` | `TestAxis1Equivalence_Differential` case 9 | **NEW, and it is real — see §0 below.** Our Axis-1 engine has not adopted `EXTENSION-COMPUTE` v3.26's contained-error semantics, which `entity-core-go` landed **today**. |
+
+`make lint` clean · `gofmt -l` empty · `make reachability` clean · **Avalonia 74/74 headless**
+(three new `ProgramPanelInputTests`) · `make -C avalonia smoke-xvfb-program PROGRAM=life-edit`
+exit 0 · `make -C avalonia smoke-xvfb-click` exit 0 (200 real clicks, seed 1, through the
+rewired handlers).
+
+## §0 NEW — Axis-1 has drifted from COMPUTE v3.26, and our own differential gate caught it
+
+`TestAxis1Equivalence_Differential` (300-case fuzz, fixed seed 20260716) diverges at case 9:
+
+```
+stage1: entity:ecf-sha256:c71e6433776fe58280ee9cfa69bebf6e07bce058546dd7eb75a3f2e5df013f95
+axis1:  error(index_out_of_range: index 4 out of range for array of length 2)
+```
+
+**Stage-1 CONTAINS the error and returns a value; Axis-1 short-circuits.** That is the exact
+direction of six `entity-core-go` compute commits dated **2026-08-21** — `7f39eb3` (COMPUTE
+v3.26 contained-error), `ded9ea0` / `4519554` (a consumed operand short-circuits an error, not
+`type_mismatch`), `eea0a6e` / `9ad0110` / `d5e318d` (§3.5 Corner 1: filter/fold/map closure
+results contain and recover). Our last green `sdk` sweep was **2026-08-20**, before all six.
+
+**Why this matters more than a red suite.** Axis-1 is not a research toy — it is a
+**conformance-admitted alternate engine** (AE-5 / `EXTENSION-COMPUTE` §11, 330 vectors, LOCKED
+2026-07-23), and it is **workbench-owned**, so this is ours to fix and nobody else's. The
+admission is stale until it adopts the new semantics.
+
+**Not started, deliberately.** It is a real piece of work (error containment touches every
+collection primitive and the fold accumulator) and it was not this session's ask. Two things
+that will save the next session time:
+- The five core-go commits above are the spec of the change, and each names its arch ruling.
+- **Do not read arch's "compute stays sequenced / deferred for you" as covering this.** That
+  deferral is about the compute-floor research track (T5). This is an admitted engine drifting
+  from a landed spec revision, surfaced by our own gate — a different thing that happens to
+  share the word.
+
+**Previously (2026-08-20, after the consume leg — §12).** `make test-each` was run **twice** this
+session and both runs are reported, because the difference between them is the point:
+
+| run | result |
+|---|---|
+| before the last edits | **all ten PASS** — sdk 201s · shellcmd 288s · programs 138s · rest ≤13s |
+| **final tree** | **nine PASS, `shellcmd` FAIL** — sdk 194s · shellcmd 307s · programs 142s · rest ≤13s |
+
+**The one failure is `TestE2E_Bidirectional_BurstWrites_NoFS`, and it is the known one** — the
+terminal last-burst-write loss documented below and routed as
+`reviews/CORE-GO-LAST-BURST-WRITE-LOSS-2026-08-20.md`. Our own classifier named it at the moment of
+failure: **VERDICT (B1) — NEVER CAPTURED**, `archives/notes/a-4.md` still held by the writer and in
+no version. It is the documented load-dependent failure, it is the only failing test in the suite,
+and **nothing in this session's diff is in its path** (the reproducer builds its peers straight
+through `entitysdk` with no filesystem, no localfiles and no workbench/fetch code). Per AGENTS.md a
+passing targeted re-run would **not** be evidence it was spurious, so none is quoted here — one of
+two full sweeps hit it, which is the same shape the bug has had since it was diagnosed.
+
+`make lint` clean · `gofmt -l` empty · `make reachability` clean · **Avalonia 63/63 headless**
+(three new `PublisherVerifyPanelTests`) · **`make crossimpl-go` green** (live, cross-impl).
+
+**Previous merge gate, for the record:** green as of `2efeb9d` — all ten suites to completion, zero
+failures, `sdk` 196s · `shellcmd` 287s · `programs` 140s. That was the sweep that preceded
+`dev` → `master`.
 
 **Avalonia: 60/60 headless** (`make -C avalonia test`, 2026-08-20 — three new liveness tests),
 plus `make smoke-xvfb-handlers` green under real X11 + software Skia — 21 handlers walked,
@@ -56,7 +133,34 @@ read as a paradox and got the failure shelved under a label that could not expla
 **`applyBindings` was our prime suspect from source reading and the measurement ruled it out** for
 this failure; the B1/B2 split is what keeps that honest.
 
-**Latest arch packet read: `ROUTING-2026-08-20-e` + `-h` + `-i` + `STATUS-2026-08-20-c`,
+**Latest arch packets read: `ROUTING-2026-08-21-c` / `-f` / `-i` / `-k` (all addressed to us) plus
+`-n`, at arch `b61bafb`** — read 2026-08-21-c. Four packets naming us had landed since the previous
+marker and none had been opened (D21). What they move:
+
+| packet | disposition |
+|---|---|
+| **`-k`** §1/§3 — *arch folded `EXTENSION-REGISTRY` 1.21 on a document that exists in no commit*: our whole registry session was untracked, so the provenance chain for a normative spec revision terminated in a working tree | **Closed, first action of this session.** Three commits, `dev` at **`a6b5e9d`**, pushed. The packet arch folded on is `reviews/REGISTRY-BINDING-TRANSPORTS-DIVERGENCE-2026-08-21.md` at `a6b5e9d`; the code that produced it is `64dcc81`. Replied with the pin: `reviews/COMMIT-PIN-REGISTRY-1.21-PROVENANCE-2026-08-21.md`. Our own fixture README had stated this exact rule about **someone else's** gitignored artifact hours before we left our own packet uncommitted — folded into AGENTS.md as *a packet that is not committed has not been routed*. |
+| **`-f`** / **`-c`** — `transports` is **RULED our way and folded**, REGISTRY 1.20 → **1.21**: `[<system/hash, BARE>]` at all five declaration sites, plus D8a (a publishing registry MUST serve what its bindings reference) and D8b (**our finding #3**, the unimplementable §6a.3a prefix, corrected) | **Closed in our favour, three of four findings folded.** No code change owed yet; the consequences are the re-cut below. Arch records our posture — liberal decode, forms kept distinguishable, *"did not make our SDK succeed where the reference implementation fails"* — as the reference one. |
+| **`-i`** §2 — **re-cut `fetch/testdata/crossimpl-rust-federation/`** from `entity-browser-rust`'s now-**committed** `tests/fixtures/registry-federation/` at `54f31a7` | **OPEN, unblocked, and the next item on this track.** `TestKernelCannotDecodeARustBinding` should flip (honour its own in-file guard rather than deleting it), the inline branch of `fetch.NameBinding`'s decoder goes, `TransportRef.Kind` **stays** (a decoder that can name the rejected shape is the better diagnostic), and the README's provenance caveat is discharged. Also: their `.list` files are now `system/tree/listing` ECF entities with a **canonical-CBOR** `entries` map — length-first then lexicographic — so **sort in the reader**. |
+| **`-i`** §2.1 | Arch had our step and core-go's in series; they are parallel. **Nothing is waiting on us.** |
+| **`-k`** §5 / **`-i`** §3 — compute | T5 stays **DEFERRED**; `EXTENSION-COMPUTE`'s fold to v3.27 is explicitly **not addressed to us**. *(Note §0 above: that deferral does **not** cover Axis-1's drift from v3.26's contained-error semantics, which is a different thing sharing a word.)* |
+
+**Previously: `ROUTING-2026-08-21-b` (addressed to us), at arch `bded94c`** — read
+mid-session on 2026-08-21, *before* the build it concerns had landed, and it moved three things:
+
+| what | disposition |
+|---|---|
+| §1 — the **content-URL shape** we filed is **RULED our way**, `EXTENSION-SUBSTITUTE` 1.2 → 1.3: `{hash}` is `hex(H.Bytes())`, format byte included, fleet-wide | **Closed in our favour.** `TestContentURLUsesWireHexNotDigestHex` stops being a local pin and becomes the spec's rule. No code change here; `fetch` already did this. |
+| §3 — **build `EnumerateNames`**: §6a.3a is *specified, one producer, **zero consumers***, and arch records that browse was cut from v1 on a **false premise** (*"the shipping application has the browse surface"*) — corrected to *"`entity-browser-rust`'s browse surface has never walked a registry"* | **Built this session.** `fetch.Registry.Enumerate`. Arch's only ask — *"say which produced a row **in the artifact**, not only in the code"* — is satisfied: `RegistryRow.Committed`/`.Listed` + `BrowseOutput.NamesAuthority`/`.NamesNote`, and every surface prints it. Arch is explicit this does **not** reopen v1: a new consumer is a build, not a finding. |
+| §5 — **R-9 (`hints` round-trip) goes LIVE the moment `PinRegistry` writes chain entries**, which it now does | **Answered both halves.** Our `InstallResolverConfig` takes the whole decoded struct and re-encodes it — no field-by-field rebuild — and `Hints` is `map[string]cbor.RawMessage`, so an unknown key survives untouched; `addPeerIssuedChainEntry` **appends** rather than reconstructing. And the *authoring* side, which genuinely was absent, now exists: `PinnedRegistry.MaxTTLMillis` / `.NegTTLMillis`. |
+
+§5 also confirms **W-1 (the pointer proposal) is still arch's and still sequenced** — nothing
+blocked on us.
+
+**Previously: `ROUTING-2026-08-20-l` (addressed to us), at arch `f3e81e2`** — plus
+`-k` / `-m` / `-n` / `-o` and the `WORKSTREAMS` rows naming us in the same pass (D21: a `cc` is a
+packet). **`-l` closes the AP28 loop from the other end** and nothing in it is blocked on us; see
+§12. **Before that: `ROUTING-2026-08-20-e` + `-h` + `-i` + `STATUS-2026-08-20-c`,
 at arch `8dd5689`** (§11). `-e` is addressed to us and carries the compute disposition; `-h`/`-i`
 are core-go's and name us in their fold order (D21 — a `cc` is a packet), and neither asks anything.
 **Before that: the whole earlier 2026-08-20 set** — `STATUS-2026-08-20-b`,
@@ -1220,9 +1324,150 @@ third session that runs it.
 (sdk 199s · shellcmd 287s · programs 144s · the rest under 15s), `make lint` clean, `gofmt -l` empty,
 `make reachability` clean, working tree clean at `2d79fa2`.
 
+### 12. The cross-impl consume leg — BUILT, RUN LIVE, and shipped to a UI (2026-08-20)
+
+**`entity-core-go` handed us WS-A and it is done.** Their
+`HANDOFF-2026-08-20-workbench-go-federation-consume-leg.md` asked for the axis
+`entity-browser-rust` structurally cannot cover: **a reader in a different language than the
+emitter**, over a live host boundary. `make crossimpl-go` is green.
+
+Result packet, with everything below in full:
+**`docs/architecture/reviews/CROSSIMPL-CONSUME-LEG-RESULT-2026-08-20.md`**.
+
+**The operation that was missing, stated once so nobody re-derives it.** We had both halves and
+neither walked the trie: `entitysdk.ReadPublishedRoot` verified a signature but over the **local
+store**; `fetch.Fetch` crossed a wire but resolved by the **advertised leaf path**. Joined, the
+chain is manifest → signature → **CHAMP trie walk from the signed root** → leaves, and **only the
+walk can tell a complete origin from a withholding one** — every other step is satisfiable by an
+origin serving a correctly-signed root that commits to nothing. That is not hypothetical: core-go
+shipped exactly that for a week (a `0xC0C1C2…` literal root, fixed at their `dabd076`) and every
+per-leaf consumer in this cohort reported green against it.
+
+| measured | result |
+|---|---|
+| **live**, core-go's publisher on a podman bridge, our consumer in a second container | signature VERIFIED (ed25519, key from their peer-id) · 3 keys · **3/3 reconciled** · absent control fired |
+| **offline**, browser-rust's frozen emission (their `fbc2c5c`) | signature VERIFIED · 15 keys · **15/15 reconciled** |
+| **our own** publisher, 64 keys, 5 CHAMP nodes | exact enumeration + three mutation controls |
+
+**Reconciliation is ours and nobody else in the cohort does it.** Every committed key is resolved
+**twice** — through the signed trie and through the publisher's own advertised tree-leaf URL — and
+the two must agree. *An origin that answers differently on the two paths is serving two trees and
+only one of them is signed.* Green on all three emissions.
+
+**What ships, in one line each:**
+- `entitysdk/publishedroot/` — the seven published-root gates, extracted so the store-side reader
+  and the wire consumer apply the **same** checks. Dependency-light so `entity-fetch` links no peer.
+- `fetch/consume.go` — `Consumer`, the **strict** walk, `PinnedLayout`, `AbsolutePrefix`, the
+  reconcile pass, typed `ErrIncompleteWalk` / `ErrAbsent` / `ErrEmptyEnumeration` / `ErrContractMismatch`.
+- `scripts/crossimpl-go.sh` + `make crossimpl-go` — outside `test-native` on purpose (podman + a
+  sibling checkout).
+- **Three operator surfaces (D23):** `entity-fetch -verify [-json]`, `entity-shell`'s **`site
+  verify`**, and the Avalonia **Publisher Verify** panel over `workbench.ConsumeModel`.
+
+**The UI is deliberately the opposite of browser-rust's.** Their Site Browser renders the *pages* —
+the reader's surface. Ours renders the **chain**: seven steps, each with its verdict *and what a
+green verdict on that step actually proves*, because five of the seven are true of an origin that is
+lying. A UI that collapses this into one tick teaches an operator that "verified" is one fact. It is
+seven, and one of them (`published_at`) is a **moment** rather than a state — which is what the
+freshness line under a green verdict says, on every surface, and never omits.
+**That contrast is the UX research, not a duplication of theirs.**
+
+**Two things building it found, both routed:**
+- **AP29 — the handoff's own advice would have produced a blind consumer.** It said to walk with
+  `core/tree.CollectAllBindings`. That helper (and `CollectNodeClosure`) is documented best-effort —
+  *"Missing nodes are skipped"* — which over an HTTP origin turns a withholding origin into a
+  **smaller site**, silently. Ours re-implements the traversal over their `core/types` and fails
+  closed. Mutation-checked: `publish`'s `TestConsumeWithholdingInteriorNode` removes one **interior**
+  node and requires `tree/incomplete-walk`; a best-effort walk passes it with fewer keys and no error.
+- **AP30 — §3.3's prefix, and we were right by luck.** The wire field is the **configured** prefix
+  and all three admissible shapes are live at once (browser-rust `/{peer}/`, ours `docs/`, core-go
+  `system/`). Concatenating it verbatim is correct for two of the three, for two different reasons,
+  neither of them the rule. **A mis-joined path is a 404, and at a consumer a 404 is
+  indistinguishable from a withholding origin** — the bug reports as the other side's defect. Fixed
+  as `fetch.AbsolutePrefix`, pinned across all three rows, and confirmed live against core-go's
+  `system/` shape.
+
+**Charter is now D1–D23 / AP1–AP30.** Neither is promoted; each has bitten once.
+
+**Not claimed:** two physical machines, the public internet, TLS, a CDN, NAT. And **B5**
+(name → binding → transports → fetch) is not in this leg — core-go's origin publishes no registry
+or bindings, exactly as `ROUTING-2026-08-20-m` §3 says.
+
+### 12a. What `ROUTING-2026-08-20-l` settled (2026-08-20)
+
+- **The pointer proposal was delivered by pushing `dev`** and arch read it at `98ff6de`. It is
+  `COHORT-OPEN-ITEMS` §1d row **W-1, owner arch, blocked on us: nothing**. Not ruled this session
+  **by stated decision** (the T5/T4 seam; the design axis stays deferred) — which is the
+  confirmable kind of deferral, and the whole point of AP28.
+- **Arch adopted AP28 verbatim** and filed their half: for 24 days nobody noticed a driver had gone
+  silent, because *a blocked-on-us row and a paused-by-us row look identical from the outside*.
+- **R-10 is folded — `EXTENSION-DISCOVERY` 1.0 → 1.1**, with all four of our rendezvous build
+  findings landed in full. `entitysdk/rendezvous.go` now sits on landed spec; the fold-ask closes.
+- **R-9 (`hints` round-trip) — answered here, both halves.** Arch's worry was an SDK that rebuilds
+  `resolver_chain` entries field-by-field and drops the new `max_ttl` / `neg_ttl` keys, disarming a
+  security control with every test green. **Refuted for this seat:** `ResolverConfig()` decodes
+  straight into `types.ResolverChainEntry` (whose `Hints` is `map[string]cbor.RawMessage`,
+  `registry_ext.go:303`) and `InstallResolverConfig` encodes the caller's struct — nothing
+  reconstructs an entry. **Their other half confirmed:** we author no ceiling and consume none.
+- **Compute, corrected:** `concat` / `range` / `group-by` / `assoc` **are** implemented in core-go
+  (`ext/compute/builtins_v324.go`, `eb80750`, corrected at v3.25 `4cd1ee8`). §11's *"implemented
+  nowhere, at core-go `0332c90`"* was measured **before** that commit — `0332c90` is an ancestor of
+  `eb80750`. **Lever 1 is no longer waiting on anybody.** Compute stays post-release by operator
+  decision; what changed is the *state of the lever*, and two consequences are now ledger rows:
+  `programs/` still routes around `concat` in four places, and **Axis-1 — our conformance-admitted
+  alternate engine — implements none of the four**, against a corpus that has grown to 350 vectors.
+
+### 13. The naming hop — BUILT both directions, and four cross-impl findings (2026-08-21)
+
+**The journey is closed.** Consume: pin a name authority → **walk** it for its names (§6a.3a)
+→ resolve one with every §6a.4 check → follow the binding to its publisher → verify *that*
+peer's signed root → walk it → render the page. Serve: `registry issue` mints and signs a
+binding into this peer's tree, and publishing `system/` emits it as a static registry another
+peer can pin and browse (§6a.8 / §7.4). Ran end to end by hand, both directions.
+
+**Three surfaces (D23):** `entity-shell`'s `registry` / `browse` / `open`, the Avalonia
+**Browser** panel (page in the middle, the ten-step trust chain in the right column), and
+`entity-fetch -registry -names / -name`.
+
+**D20 paid for itself before a line was written.** `entity-core-go`'s
+`ext/registry/peerissued` already has all of §6a.4 including the association check plus an
+`HTTPPollReader`, so the gap was **wiring, not a backend** — `entitysdk/registry_pin.go`
+implements no spec logic. What the kernel lacks is the §6a.3a **enumeration**, which arch
+(`ROUTING-2026-08-21-b` §3) records as *the one registry surface in the corpus with a producer
+and zero consumers*; ours is the first.
+
+**Routed:** `reviews/REGISTRY-BINDING-TRANSPORTS-DIVERGENCE-2026-08-21.md` — four findings.
+
+| § | finding | who |
+|---|---|---|
+| §0 | `transports` has two live readings (`Vec<Value>` inline vs `[]hash.Hash`); **core-go's backend cannot decode any binding in the cohort's only live federation** | arch to rule; core-go or core-rust changes |
+| §6 | **§6a.3a's recommended publishing prefix is unimplementable** — a binding's signature is at `system/signature/{hex}`, outside every `system/registry/…` prefix, so a conforming registry enumerates fine and resolves nothing | arch |
+| §4 | core-go's `httplive.Outbound` implements one branch of the §6.5.3.1 tree-URL join, so fed browser-rust's own profile it builds `/{peer}/{peer}/…` | arch's existing AP30 ruling |
+| §7 | the `.list` artifact is a `system/tree/listing` **entity** per spec; browser-rust emits newline text | browser-rust |
+
+Plus one declinable ask to core-go (§5): **export `normalizeName`** — a Layer-2
+canonicalization we had to transcribe.
+
+**Held together by a differential test, not by intent.** `workbench/registry_differential_test.go`
+runs core-go's backend and ours over the same frozen bytes and requires the same verdict; it
+currently **records the divergence as measured state** and fails if it widens *or* silently
+closes.
+
+**Frozen fixture:** `fetch/testdata/crossimpl-rust-federation/` — browser-rust's `make
+federation` emission (a registry signing four names + the four domains, 784K). It exercises
+both layout modes in one run: the registry serves no `transport-profile` (conformant, §6.5.4,
+R-28) so it is pinned; the domains advertise one so they are discovered.
+
+**Three anti-patterns earned.** AP31 (an async cgo export read a C string after the P/Invoke
+freed it — no crash, it reads as `""`), AP32 (a derived UI property used as a completion
+signal: four headless tests green while measuring nothing), and **AP33** — two pre-existing
+`put` bugs found by seeding a site by hand for the demo, not by any test.
+
 ## Open bugs
 
-- **Managed stack overflow on window minimize** (Avalonia, software-render path). A tight
+- **~~Managed stack overflow on window minimize~~ — RESOLVED 2026-08-21** (it was never
+  minimize; see the dated block at the end of this entry). Kept in full because the *way* it
+  stayed open for a month is the lesson, and D24/AP34/AP35 were earned on it. A tight
   alternating A↔B JIT recursion into the .NET guard page, **zero GPU/GL modules in the
   faulting thread** — so it is ours, not the driver. Full forensics:
   `docs/status/HANDOFF-2026-07-18-avalonia-64x64-segfault.md`.
@@ -1283,6 +1528,61 @@ third session that runs it.
   had). **If the next occurrence produces no dump, close it as unreproducible** rather than
   keeping a month-old symptom on an open-bug list, which is how a stale entry starts steering
   work it can no longer justify.
+
+  ### 2026-08-21 — REPRODUCED, CHARACTERIZED, FIXED. Closing.
+
+  The operator capture arrived (two desktop SIGSEGVs, PIDs 619966 and 1462191, both preserved
+  before rotation this time). It was **not** the minimize path, and the harness never had a
+  chance of finding it, for a reason worth keeping:
+
+  **Root cause: the alternate signal stack overflows.** The PAL gives the UI thread a
+  **16384-byte** alternate signal stack (measured at startup, not inferred:
+  `CrashDiagnostics.ReportAltStack`). Under real pointer input the handler chain on that stack
+  exceeds 16 KB and the next `call` pushes its return address into the guard page. Caught live
+  under gdb with `nopass`, twice, identical:
+
+  ```
+  Thread 1 received signal SIG34, Real-time event 34       <- runtime thread-suspend injection
+  Thread 1 received signal SIGSEGV
+    si_code = 2 (SEGV_ACCERR)   si_addr = rsp - 8   rip on a `call`
+    rsp inside a PROT_NONE page; the mapping is the PAL altstack, not the managed stack
+  ```
+
+  **Every previous reading of this bug was taken from the wrong signal.** CoreCLR's handler
+  cannot classify the fault, so it **re-raises** — and the re-raised signal is what lands in
+  the coredump, carrying `si_code 128` (SI_KERNEL) and `si_addr 0`. That artefact is why the
+  cores read as a null dereference and why the runtime never printed `Stack overflow.` and
+  createdump never fired: by the time it faults there is no stack left to report on. Rule:
+  **on a .NET Linux crash, check `si_code` before believing `si_addr`.**
+
+  **Fix:** install a 1 MB alternate signal stack on the UI thread at startup, default on
+  (`CrashDiagnostics.EnlargeAltStack`, `WB_ALTSTACK_BYTES=0` restores stock for re-measuring).
+  A `PRIVATE|ANONYMOUS` mapping commits lazily, so the cost is the pages a handler actually
+  touches, against an unrecoverable process kill.
+
+  **Evidence — A/B, same binary, same seeds, only the env differs:**
+
+  | arm | crashes |
+  |---|---|
+  | control, stock 16 KB (`WB_ALTSTACK_BYTES=0`) | **6 / 8 seeds** |
+  | 1 MB altstack (default) | **0 / 8 seeds** |
+
+  Plus 5/5 → 0/5 on an earlier pass over the seeds that had failed 5/5.
+
+  **Still open, narrowly:** *what* consumes more than 16 KB is not identified — nested signal
+  delivery on the altstack is the leading candidate, and `GODEBUG=asyncpreemptoff=1` (5/5 still
+  crashed), `DOTNET_gcConcurrent=0` and `DOTNET_TieredCompilation=0` are all ruled out as the
+  trigger. The enlargement removes the crash without explaining the appetite. Also **only the
+  UI thread is protected** — every other managed thread still runs the stock 16 KB, and a
+  crash on one of those would look identical.
+
+  **Why four harness attempts missed it, which is the part that generalizes:** every driver in
+  this repo called the model method *under* the control
+  (`SiteViewPanel.NavigateForTests`, `HandlerBrowserModel`, the window driver). None of them
+  ever produced an X11 pointer event, so none could execute input dispatch, hit-testing or
+  focus transfer — and this bug lives only there. `make -C avalonia smoke-xvfb-click` (real
+  `xdotool` clicks, seeded and logged) reproduces in under 45 s; `make crash-hunt` sweeps
+  seeds unattended and stops at the first hit with a replay command.
 - **GPU-driver SIGSEGV** (distinct, older): the mesa hardware-GL path crashes under
   sustained compositor load. **The product call is made (2026-08-19): software Skia is the
   DEFAULT, hardware GL is opt-in via `WB_GPU_RENDER=1`.** Auto-detect was the other
@@ -1435,7 +1735,33 @@ implementation of Life around is the cheapest oracle we will ever have.
 What that removes from the shipped app: nothing a user can do. What it removes from the tree: the
 duplicate path, which is what made `dev` a comparison surface instead of a release.
 
+## Open — the compute/programs track (named by the operator, 2026-08-21)
+
+- **Interactive Life "isn't working" — discriminate before building.** The program itself is
+  healthy: `make -C avalonia smoke-xvfb-program PROGRAM=life-edit` is green (mounts, host tick
+  clock runs, 60 samples, `tick 55 · running · shapes: display-list, text`). The complaint is
+  about *interaction*, and `programs/life_edit.go`'s own header says interactive Life is a
+  **d-pad on a `key-set` port** — four axis bits plus three action bits — and that
+  **click-a-cell does not exist**, because no input shape we have can carry a coordinate.
+  Two hypotheses: **(a)** the operator expected to click cells (the documented, unimplemented
+  pointer-input capability), or **(b)** the d-pad/action bits are not reaching the program
+  from `ProgramPanel` (which does wire `KeyDown` + on-screen held-bit buttons).
+  **`smoke-xvfb-click` can now test (b)** — that region was unreachable by any harness until
+  this session.
+- **`entity-browser-rust` serves the old, non-interactive Life.** That is `app/life`, the
+  phase-1 falsification fixture — pure Life, deliberately boring, and correct as such.
+  Publishing `app/life-edit` to it rides on the CDN corridor; note it inherits the item above,
+  since shipping interactive Life to a browser that cannot deliver the input is half a
+  feature (D23).
+
 ## Waiting on
+
+- **⚠ arch — the generic host's third input device (pointer/`click`), and it was NEVER SENT.**
+  `PROPOSAL-GENERIC-HOST-POINTER-INPUT-DEVICE-2026-07-27.md` is AGENTS.md's worked AP28
+  example: no filename hit, **no subject hit** across five distinctive phrases in both sibling
+  trees, no row on arch's board, after 24 days recorded here as "blocked on arch". **This row
+  is not blocked — it was never delivered.** It is now on the critical path for interactive
+  Life if the answer to (a) above is yes. Route it before carrying it forward again.
 
 > **"Waiting on" means the content is undecided.** A ruling that has not been folded into spec
 > text is **not** on this list — that is an editorial queue item on the authoring repo's board,
@@ -1443,20 +1769,53 @@ duplicate path, which is what made `dev` a comparison surface instead of a relea
 > piece 4 and `AGENTS.md`). Putting a decided-but-unfolded surface here is how a self-inflicted
 > stop gets laundered into a dependency.
 
+- **⚠ arch — `transports` on a §3 registry binding: rule the sentence.** Two live readings,
+  both conformant to the text, and the consequence is not latent: **`entity-core-go`'s
+  peer-issued backend cannot decode any binding in `entity-browser-rust`'s federation**, for
+  every name. Routed 2026-08-21 as
+  `reviews/REGISTRY-BINDING-TRANSPORTS-DIVERGENCE-2026-08-21.md` §0/§2 (cc core-go, core-rust,
+  browser-rust). **Blocked on us: nothing** — our consumer reads both shapes and keeps them
+  distinguishable, and our emitter writes inline and says so. What is blocked is Go peers
+  resolving Rust-issued names. *(Per AP28: delivery to be established by grepping arch's board
+  for the SUBJECT, not this filename.)*
+- **⚠ arch — §6a.3a's recommended publishing prefix is unimplementable** (same packet, §6).
+  A binding's signature lives at `system/signature/{hex}`, outside every `system/registry/…`
+  prefix, so a registry that follows the SHOULD **enumerates fine and resolves nothing**.
+  One added sentence fixes it. Measured, with a control:
+  `publish/registry_roundtrip_test.go::TestNarrowRegistryPrefixOmitsTheSignatures`.
+  **Blocked on us: nothing** — we publish at `system/` and say why.
+- **browser-rust — the `.list` artifact's format** (same packet, §7). The spec names a
+  `system/tree/listing` entity; their static emitter writes newline text. Costs us nothing now
+  (we read both), and it is worth knowing which of us is wrong. **Blocked on us: nothing.**
+- **core-go — export `normalizeName`** (same packet, §5). Declinable; a doc sentence naming it
+  as a cross-impl contract would also do. **Blocked on us: nothing** — transcribed and pinned.
 - ~~**⚠ arch / operator — the compute hold needs a call**~~ — **ANSWERED 2026-08-20**
   (`ROUTING-2026-08-20-e` §1, §11 here). **The hold stands and was delivered**: compute is deferred
   by operator decision and **resumes after the release**. It is off this list because the content is
   decided, not because it is done — the five levers stay arch's and stay on their board. Lever 1's
   ruling is **folded** (`EXTENSION-COMPUTE` 3.24) and the builtin is implemented nowhere, ours
-  included; nothing here is waiting on it.
+  included; nothing here is waiting on it. **That last clause is now wrong and is corrected in
+  §12a — core-go shipped all four v3.24 primitives at `eb80750`, after the commit we measured.**
 - **arch (post-release, not waiting on us or blocking us):** the subtree-state descriptor/host
   convention (the successor rung, and the same rung as Doom-realtime);
   `PROPOSAL-CONTINUATION-STANDING-MODEL` §4 (the continuation join-failure policy); whether a
   scan/up-sweep orchestration is in scope; **§4's fairness clause, which the 3.24 fold left
   explicitly not ruled** — adopting `concat` does not bless an in-compute sharded step.
-- **⚠ OURS, not theirs — deliver `PROPOSAL-GENERIC-HOST-POINTER-INPUT-DEVICE-2026-07-27.md`.**
-  Recorded here for 24 days as "blocked on arch"; it never left this repo (§11). Post-release host
-  gap, zero build cost, and the packet is written.
+- ~~**⚠ OURS, not theirs — deliver `PROPOSAL-GENERIC-HOST-POINTER-INPUT-DEVICE-2026-07-27.md`**~~
+  — **DELIVERED, and arch has it.** Pushing `dev` was the delivery; arch read it at `98ff6de` and
+  opened `COHORT-OPEN-ITEMS` §1d row **W-1, owner arch** (`ROUTING-2026-08-20-l` §1/§3, §12a here).
+  Not ruled this session by **stated decision** — sequenced with T5's resume — which is the kind of
+  deferral a counterpart can confirm. **Blocked on us: nothing.**
+- ~~**arch — the `rendezvous` fold (R-10)**~~ — **FOLDED 2026-08-20.** `EXTENSION-DISCOVERY`
+  1.0 → 1.1 carries all four of our build findings in full (`-l` §4). `entitysdk/rendezvous.go`
+  now stands on landed spec; nothing owed either way.
+- **arch — R-9, the `hints` round-trip:** answered from our side in §12a (refuted for this seat,
+  their second observation confirmed). Listed only so the reply is greppable; nothing is owed to us.
+- **Lever 1 is NOT waiting on anybody, corrected 2026-08-20.** `concat` and the other three v3.24
+  primitives are implemented in core-go (`ext/compute/builtins_v324.go`, `eb80750`); §11's
+  "implemented nowhere" was measured at an ancestor commit. Two rows this opens, both post-release:
+  `programs/` still routes around `concat` in four places, and **Axis-1 implements none of the four**
+  against a 350-vector corpus.
 - **`entity-core-go` kernel:** published + tagged vanity module path; an idempotent
   identity-ceremony re-apply; a per-delivery deadline + parallel delivery workers;
   incremental revision-trie update.

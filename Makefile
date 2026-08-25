@@ -74,7 +74,7 @@ export GOTOOLCHAIN ?= go1.25.1
 # includes the same file and uses the caps on every podman build/run.
 include caps.mk
 
-.PHONY: workbench-test console-build console-run test test-each test-each-native test-native test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-inspect test-publish test-fetch perfreview build build-native shell shell-test shell-help shell-once shell-build publish-build publish-serve vcs-build fetch-build go clean clean-strays ensure-bindir image help lint fmt check lint-native lint-perfreview fmt-native
+.PHONY: crossimpl-go workbench-test console-build console-run test test-each test-each-native test-native test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-inspect test-publish test-fetch perfreview build build-native shell shell-test shell-help shell-once shell-build publish-build publish-serve vcs-build fetch-build go clean clean-strays ensure-bindir image help lint fmt check lint-native lint-perfreview fmt-native
 
 # ============================================================
 # make + podman — bare-box entry points
@@ -129,6 +129,7 @@ help:
 	@echo "    make gui-test    Avalonia headless UI tests (podman)"
 	@echo "    make lint        go vet across all modules (read-only)"
 	@echo "    make reachability  D23: every bridge export consumed, every model surfaced"
+	@echo "    make crossimpl-go  LIVE cross-impl: consume entity-core-go's signed root (podman)"
 	@echo "    make fmt         gofmt -w over the tree (writes)"
 	@echo "    make check       lint + test (the green gate)"
 	@echo
@@ -567,6 +568,21 @@ test-publish:
 
 test-fetch:
 	cd fetch && go test $(GOTEST_FLAGS) $(ARGS) ./...
+
+# crossimpl-go — the LIVE cross-impl federation consume leg (C-7 / §1b).
+#
+# Deliberately NOT in `test-native`: it stands containers up on a podman
+# bridge and needs the `entity-core-go` sibling checked out and buildable.
+# A sweep target that needs a network and a neighbour's tree is a sweep
+# target that goes red for reasons that are nobody's defect.
+#
+# What it does: their publisher (their script, unmodified) in its own
+# container; OUR verifying consumer in a second container on the same
+# bridge; manifest -> signature -> CHAMP walk -> leaves. See the script
+# header for what a green run claims and — more importantly — what it
+# does not.
+crossimpl-go:
+	bash scripts/crossimpl-go.sh
 
 # perfreview — production-readiness measurement harness. Gated by the
 # `perfreview` build tag (files use `//go:build perfreview`) so default

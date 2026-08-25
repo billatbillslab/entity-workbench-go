@@ -50,6 +50,21 @@ type ShellWorkspace struct {
 	// shellboot; nil when the workbench handlers aren't wired.
 	NotificationIngest *workbench.NotificationIngestHandler
 
+	// Browser is the workspace's consume-side browser: the pinned name
+	// authority, the history, and the trust chain for whatever is on
+	// screen (`registry` / `browse` / `open`). Nil until first use.
+	//
+	// It lives on the WORKSPACE, not the shell, because the registry pin
+	// is a trust decision: two shells in one workspace resolving the same
+	// name through different authorities is a very good way to confuse
+	// someone about which one answered.
+	//
+	// It holds no peer. A Mode A2 consumer reading a static origin is not
+	// a peer and does not become one by being useful — the browser
+	// verifies signatures against keys it derives from peer-ids and never
+	// dispatches anything.
+	Browser *workbench.BrowseModel
+
 	// mountSubs holds the source-prefix subscription per mounted root
 	// (keyed by root name) so `unmount` can cancel it. Without this,
 	// unmount left the subscription live and the subscription engine

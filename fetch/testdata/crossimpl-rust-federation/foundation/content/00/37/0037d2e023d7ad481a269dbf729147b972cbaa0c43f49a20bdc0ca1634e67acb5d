@@ -1,0 +1,8 @@
+¢ddata£dbodyy# Field Notes
+
+You followed a **cross-site link** to get here â€” a `site:demo-notes/index` target that stayed inside the entity system, hopping from one owned site to another on the same peer.
+
+Notice the light palette: this site's manifest declares `"theme": "light"`, so in **Site's theme** mode it renders with its own registered theme while the Demo next door stays dark. (Your Settings â†’ Site appearance override always wins.)
+
+Read the [First Entry](entries/first), or head [back to the Demo](site:demo/index).
+fformathmarkdownkfrontmatter¡etitlekField Notesdtypemapp/site-page
