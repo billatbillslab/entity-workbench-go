@@ -373,7 +373,7 @@ nothing chases it.
   the same session regardless of header. Those three words are the
   trigger.
 *Enforcement:* `AGENTS.md`'s session-start line names the grep and the
-letter-tracking; `docs/status/STATUS.md` §"Latest arch packet read"
+letter-tracking; `docs/STATUS.md` §"Latest arch packet read"
 carries the letter. If a packet naming us is found unread again, the
 next step is a checked-in script, not a third prose rule.
 
@@ -562,10 +562,17 @@ Short enough to run on every change. Six inherited, four substrate-native.
     surface — verb, panel, or menu entry. "The model is done" is half a
     feature; if the other half is deferred, it is a row in `STATUS.md`,
     not an assumption. (D23)
+    **And: does anything call the check you just wrote?** A diagnostic no
+    target invokes reads as coverage and is none — name its caller in the
+    same diff. (AP41)
+    **And: is `CANONICAL-DOCS.toml` part of this diff?** It must be if the
+    diff moved a D / AP / P / boundary count that a blurb restates, or added
+    a document that a published document cites. The manifest is the published
+    prose a reader gets *instead of* the document, not configuration. (AP42)
 
 ---
 
-## 4. The anti-pattern catalog (AP1-AP40)
+## 4. The anti-pattern catalog (AP1-AP42)
 
 Each a real defect that shipped or a claim that was routed, diagnosed, and
 is now pinned by a regression test.
@@ -613,7 +620,7 @@ bitten once, so per §5 it is **not** a discipline yet.
 
 *Enforcement (the reason this is worth writing down at all):* session start reads the
 sibling `entity-system-architecture` repo for packets addressed to us, and any found
-gets a row in `docs/status/STATUS.md` or `docs/architecture/reviews/` **in that session,
+gets a row in `docs/STATUS.md` or `docs/architecture/reviews/` **in that session,
 before feature work starts.** Added to `AGENTS.md`. If it bites a second time in a
 different shape, promote it.
 
@@ -768,6 +775,72 @@ direction**; the subject test fired once out of twelve.
 
 | AP39 | `entitysdk/app.go`'s query wiring, from the SDK's first persistent store until 2026-08-23 | **A derived index written only by a live hook is empty against a persistent store.** core-go's three query indexes are in-memory by construction (`MemoryTypeIndex`/`MemoryReverseHashIndex`/`MemoryPathLinkIndex`) and are populated *solely* by the `"query"` sync hook — so they hold exactly what this process wrote. Paired with `-storage sqlite` and no backfill, the tree survives a restart and the index does not, and **`find`, `grep` and `compute aggregate` all go quiet at once** against a store `ls` is printing one line earlier. The asymmetry is the whole harm: had both halves been empty, the user reads "empty store" and is right; with one full and one empty they read *"the entity is gone"* when the truth is *"nothing asked the tree."* **And restart coverage existed — good coverage, which is the sharp part.** `TestStorage_Sqlite_LargeCorpusSurvivesRestart` ingests 500 entities, closes, reopens, and checks per-path content-hash byte-equality, the revision log, `List(prefix)` cardinality and content survival. It missed this completely because **every read it performs on the reopened peer goes through `Get` and `List` — the persistent location index — and not one goes through `system/query`.** The string "query" occurs in that file only in a comment about SQL query plans. So the generalization is not "we lacked a restart test", it is: **a persistence test that reads back through one path certifies that path, not persistence.** Enumerate the read paths a store serves and restart-cover each; a durable path and a volatile path answering the same question look identical in-process and diverge only on reopen. The tell is a **durable substrate wired to a volatile derivative with no startup path between them**: when a store is persistent, ask what else must be rebuilt to match it. Second instance of the D20 dividend in six days — the kernel already shipped `IndexMaintainer.Rebuild(li)`, whose own doc comment reads *"use for recovery or startup with persisted stores"*, and the entire defect was that nobody called it. **And the reference peer was already calling it**: `cmd/entity-peer/main.go` runs `queryMaintainer.Rebuild(p.LocationIndex())` unconditionally, with our exact rationale in its comment (*"harmless on memory backends where the tree is empty at start anyway"*) and a citation to `DESIGN-SQLITE-PERSISTENCE.md §4.3`. So this was never a shared gap to route upstream — it was **our wiring diverging from the reference wiring at a step nobody diffed.** Checking that before writing a packet is the D19 half of the lesson: the "core-go has this bug too" packet would have been wrong, and only reading their call site established it. When we re-implement a kernel assembly the kernel also performs, the omission is ours by default. | D10, D19, D20 |
 | AP40 | `shellcmd`'s `put` ↔ `compute aggregate` seam, shipped with the verb, found 2026-08-23 | **Two verbs at opposite ends of one gesture disagreed about what a number is, and both suites stayed green.** `put` decodes with `json.Unmarshal` into an `interface{}`, so every JSON number arrives as `float64`, and CBOR core-deterministic encoding does not fold an integral float back to an integer. `extractNumericSize` accepted only the integer kinds. Net effect on the verb's own documented usage — `put files/a app/file '{"size":100}'` then `compute aggregate files` — was **"3 entities scanned, 3 skipped"**: the verb built to *"demonstrate compute usefully aggregates over real workbench entities"* could not read one written by the shell it ships in. Neither side was wrong alone and neither side's tests could see it: the extractor's cases construct Go ints directly, and `put`'s cases assert on the stored hash. **A type contract asserted on both sides of a seam and exercised on neither is untested** — the fixture that would have caught it is the one that starts where the user starts. Cross-check against AP33: the repair **refuses** a non-integral size rather than truncating it, because a silently-wrong byte total is the tolerant-fallback failure one layer up. | D10, D23 |
+| AP41 | `Makefile`'s `doctor` ↔ `build` gap, from the day `doctor` was written (`13c51ad`, "give the repo a front door") until 2026-08-24 | **A check nothing calls.** `make doctor` verified the sibling `entity-core-go` checkout — the one condition no target in this repo can survive without — and **no target ever invoked it.** A person who skipped the README got forty lines of module-resolution spew naming a Go module path, and nothing naming the cause or the fix. This is **D23 in a second domain**: we already hold that *a model with no shipped surface is not shipped*, and the same law binds diagnostics — **an instrument nothing calls is indistinguishable from an instrument you do not have**, and it is worse than absence because its existence reads as coverage. Two properties make the class invisible to every test we own. First, **the failure is a property of the checkout, not of the code**: no suite can observe it, because a suite that runs at all is running in a tree where the sibling resolved. Second, **everyone who could notice is disqualified by having noticed already** — every developer, every CI job and every sweep runs in a tree with siblings, so six weeks of green sign-offs could not have surfaced it and were never going to. It took an outsider cloning the published mirror alone (arch, `ROUTING-2026-08-23-d`), and even *their* first isolation run reported EXIT 0 because the scratch directory still had a copy of the sibling beside it. The tell is a **precondition documented in prose and verified by an opt-in target**: prose is not a gate and an opt-in check is not a gate. The repair is one prerequisite edge and one predicate shared with `doctor`, so the reporting path and the refusing path cannot drift. Generalize before the next one: when a target *requires* a condition some target *checks*, wire them — and when writing a check, name the thing that will call it in the same diff. | D19, D23 |
+| AP42 | `CANONICAL-DOCS.toml`, drifting from ~2026-07 to 2026-08-24 | **A manifest is published prose, and it goes false silently.** Our keep-list carried per-document blurbs advertising *"The 23 disciplines (D1–D23) … (AP1–AP27)"*, a *"six-boundary map"* and recipes *"P0–P6"*, while the documents they describe had reached **D1–D24, AP1–AP40, seven boundaries (A–G) and P0–P7**. The same file declared `github = ".../entity-systems/entity-workbench-go"` — an organisation that does not exist; every remote and the README's own link say `EntityChurch`. Nothing caught any of it, and nothing could: a `.toml` is read as configuration, so it is exempted by reflex from the review a document gets, and **its blurb is rendered to the public reader *instead of* the document**, which means a stale count is not a stale comment — it is a false published claim, and the one reader who could contradict it is the one who cannot see the source. The tell is a **declaration that restates a fact it does not own**: any count, version, URL or summary living somewhere other than its source will go false at a diff that never opens the file it lives in. Two repairs, and prefer the first — *don't restate* (describe the catalog, don't count it), and where a count genuinely helps, treat the manifest as a target of the same close-out that updates the doc. Corollary from the same pass: **a keep-list that drops a document cited by a published one ships a broken link** (`AGENTS.md` is public and instructs the reader to open `DOCTRINE-CRASH-FORENSICS.md`, which was undeclared) — so declaring a doc is part of adding it, not a later act of curation. | D9, D19, D23 |
+
+*AP41, second instance — same day, and it is the sharper one.* The preflight was barely a day
+old when a case it does not cover turned up: building this repo from a **git worktree**.
+`IN_CONTAINER` hard-coded `-w /src/entity-systems/entity-workbench-go`, so the checkout had to
+be **named** that — true for every developer alive, false for any worktree, and worktrees are
+how automated tooling checks out a range of commits. Reproduced with one named `wbg-unit-042`
+beside a real `entity-core-go`:
+**`make preflight` → OK, `make build` → `No rule to make target 'build-native'`.** Two things to
+take from it. First, podman **creates** a missing `-w` directory instead of refusing, so `make`
+lands in an empty tree and reports a *missing target* — the error names the Makefile, and the
+defect is the placement; a wrong-looking error that points at the wrong layer is worse than a
+crash. Second, and this is why it belongs under AP41 rather than beside it: **the instrument
+built for exactly this problem passed.** `preflight` asks "is the sibling present"; the sibling
+was present. The check was correct, current, and called — and still silent, because *a check
+answers the question it was asked, and the question can be the wrong one.* So the AP41 rule
+extends: naming the caller is necessary and not sufficient; also name the **failure you believe
+it prevents**, and then produce that failure and watch it fire. Repaired by removing the
+constraint rather than documenting it — `REPO_DIR := $(notdir $(CURDIR))` — on the principle
+that a constraint you have to remember is one you do not have.
+
+*AP41, third instance, and the one we could not have found ourselves.* A publication check that
+this repo cannot run flagged three internal infrastructure names in `AGENTS.md` — the file that
+had just joined the published keep-list. **Our own scan of the same tree returned zero**: it was
+complete for every rule we held, and the rule that mattered was not one we held. The AP41
+phrasing needs no change to cover it, only the emphasis — *an instrument nothing **can** call*
+is the same defect as one nothing does call, and it is worse, because the party that must fix
+the finding is the one structurally unable to produce it. **The tell is a rule set that lives in
+one place and a remedy that lives in another**; when a check's knowledge and a check's repair
+are separated, the separation itself is the defect to name, and whoever holds the knowledge owes
+either the rule or a schedule. The local half is ours and is actionable today: **declaring a
+document changes what "internal" means about it.** `AGENTS.md` is written for an internal
+audience, so internal paths are what it is *made of* — the manifest edit that publishes it is
+not finished until the file has been re-read as a stranger.
+
+*Enforcement (AP41):* `Makefile`'s `preflight` target, a prerequisite of `build`, `test`,
+`test-each`, `lint`, `gui`, `gui-build` and `shell-build` (so also `run`, `demo`, `shell`). The
+predicate is `SIBLING_PRESENT`, defined once and used by both `preflight` and `doctor`. It is
+two stat calls, host-side, so it refuses before podman is invoked, and it is a no-op inside the
+container where the sibling is bind-mounted by construction. Verified in **both** directions
+before commit — silent exit 0 with the sibling present, and the full clone-and-place message plus
+exit 1 under `make preflight PARENT=/tmp/no-such-parent`. *(The negative case is the whole
+point; a refusal never shown refusing is AP38's lesson in a Makefile.)*
+
+*AP42, second instance, and the polarity is reversed — an omission, not a false claim.* The
+manifest declared 22 documents and did **not** declare `AGENTS.md`, `AGENTS-STANDARD.md`,
+`CHANGELOG.md`, `CLAUDE.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md` or the
+rolling status log — **seven of which were already published.** The manifest is a keep-list, so
+undeclared is not "not yet published", it is **removed from what is published**: the next
+release would have deleted `SECURITY.md`, the vulnerability-reporting address, from a public
+repo. The omission also made the published tree fail its own agent-guidance conformance check,
+for two files that exist here and were merely filtered out of it. **The generalization is the
+one AP42 already names, with a harder edge: a keep-list omission is an act of deletion against
+anything already public**, so the manifest must be reviewed against *what is currently
+published*, not only against what the tree contains — the two move independently, so the answer
+changes without this repo changing. Measured rather than taken on report, and re-measured after
+the fix.
+
+*Enforcement (AP42):* `python3 <arch-tools>/spec-tool/cli.py pins --root .` reads the manifest
+and is already run at every release cut, which makes the manifest's **existence** checked; what
+is not machine-checkable is whether a blurb still describes its document. So the enforcement is
+placed where it can actually fire: the close-out review question in §3 now asks it directly —
+**if this diff changed a D, AP, P or boundary count, or added a doc another published doc cites,
+`CANONICAL-DOCS.toml` is part of the diff.** Naming it there rather than inventing a linter is
+deliberate; a gate that parses English blurbs for arithmetic would be the theatre §5 warns about.
 
 *Enforcement (AP39):* `entitysdk/query_index_restart_test.go` — writes through one peer, closes
 it, reopens the same sqlite path and asserts the query handler still matches, with the

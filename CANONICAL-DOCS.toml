@@ -14,7 +14,7 @@
 name   = "Entity Workbench (Go)"
 slug   = "entity-workbench-go"
 repo   = "entity-workbench-go"
-github = "https://github.com/entity-systems/entity-workbench-go"
+github = "https://github.com/EntityChurch/entity-workbench-go"
 intro  = """
 Entity Workbench (Go) is a reference application built on the Entity Core
 Protocol — it sits at the bindings/apps layer of the ecosystem, above the Go
@@ -31,6 +31,79 @@ itself to — offered as a worked example, not a standard to conform to.
 """
 
 # ---------------------------------------------------------------------------
+# Root documents — the fleet-standard eight, declared 2026-08-24.
+#
+# WHY THESE ARE HERE AT ALL: this manifest is a KEEP-LIST, so a document it
+# does not name is dropped from what this project publishes. Seven of these
+# were already published and this file did not name them — so leaving them out
+# would not have "kept them back", it would have REMOVED them, SECURITY.md and
+# its vulnerability-reporting address included. An omission here is an act of
+# deletion against anything already public, which is why the list is reviewed
+# against what is published and not only against what is in the tree.
+#
+# METHODOLOGY.md is not currently published here; declaring it is joining the
+# convention the rest of the ecosystem follows, not closing a gap.
+#
+# This is the AP42 corollary with the polarity flipped: declaring a doc is part
+# of shipping it, and a keep-list that omits a document the repo already
+# published does not "keep it out", it TAKES IT AWAY.
+# ---------------------------------------------------------------------------
+
+[[doc]]
+path  = "README.md"
+title = "README"
+blurb = "What this is, how to build it, and the sibling-checkout requirement — the front door."
+group = "Project"
+
+[[doc]]
+path  = "CHANGELOG.md"
+title = "Changelog"
+blurb = "What changed in each release, with the known limitations stated rather than omitted."
+group = "Project"
+
+[[doc]]
+path  = "CONTRIBUTING.md"
+title = "Contributing"
+blurb = "How to contribute: DCO sign-off, the PR path, and the quality bar."
+group = "Project"
+
+[[doc]]
+path  = "CODE_OF_CONDUCT.md"
+title = "Code of Conduct"
+blurb = "The community standard this project holds contributors and maintainers to."
+group = "Project"
+
+[[doc]]
+path  = "SECURITY.md"
+title = "Security Policy"
+blurb = "How to report a vulnerability, and what to expect after you do."
+group = "Project"
+
+[[doc]]
+path  = "AGENTS.md"
+title = "Agent guidance — this repo"
+blurb = "The repo-specific working guidance: build/test entry points, boundaries, and the gotchas that were each paid for once."
+group = "Agent guidance"
+
+[[doc]]
+path  = "AGENTS-STANDARD.md"
+title = "Agent guidance — ecosystem standard"
+blurb = "The ecosystem-wide conventions, identical in every entity-core repo and maintained upstream."
+group = "Agent guidance"
+
+[[doc]]
+path  = "METHODOLOGY.md"
+title = "Methodology — disciplines, doctrines & the ratchet"
+blurb = "The framework this repo runs at the Full tier: what a discipline is, what a doctrine is, and the rule that a feature must make the project stronger."
+group = "Agent guidance"
+
+[[doc]]
+path  = "CLAUDE.md"
+title = "CLAUDE.md"
+blurb = "The Claude-specific entry point; it imports the two AGENTS files and adds nothing of its own."
+group = "Agent guidance"
+
+# ---------------------------------------------------------------------------
 # The canonical framework: the rule set this project measures itself against,
 # the runtime model it stands on, the recipes that respect the rules, and the
 # testing + logging conventions.
@@ -39,19 +112,24 @@ itself to — offered as a worked example, not a standard to conform to.
 [[doc]]
 path  = "docs/architecture/DISCIPLINE-CHARTER.md"
 title = "Discipline Charter"
-blurb = "The 23 disciplines (D1–D23), the ten review questions, and the anti-pattern catalog (AP1–AP27) — the rule set everything is measured against."
+# Blurbs describe; they do not count. Every numeric range this file used to
+# carry had gone false (see the charter, AP42) — a manifest is the prose a
+# reader gets *instead of* the document, so a stale count here is a published
+# claim, not a stale comment. Describe the shape, let the document hold the
+# numbers.
+blurb = "The disciplines, the ten review questions, and the anti-pattern catalog — the rule set everything in this repo is measured against, with every entry earned on a defect that shipped."
 group = "Disciplines & runtime model"
 
 [[doc]]
 path  = "docs/architecture/MODEL-AVALONIA-RUNTIME.md"
 title = "Avalonia Runtime Model"
-blurb = "Forensic record of what the Avalonia/.NET/Skia/X11 runtime actually does: stack diagram, type-lifecycle matrix, six-boundary map, invariants."
+blurb = "Forensic record of what the Avalonia/.NET/Skia/X11 runtime actually does: stack diagram, type-lifecycle matrix, the lettered boundary map (through G, the POSIX signal layer), and the invariants that hold across them."
 group = "Disciplines & runtime model"
 
 [[doc]]
 path  = "docs/architecture/GUIDE-AVALONIA-PANEL-PATTERNS.md"
 title = "Avalonia Panel Patterns"
-blurb = "The recipes (P0–P6) for building panels that respect the disciplines. New panels lift these shapes."
+blurb = "The numbered recipes for building panels that respect the disciplines. New panels lift these shapes rather than reinventing them."
 group = "Disciplines & runtime model"
 
 [[doc]]
@@ -64,6 +142,17 @@ group = "Disciplines & runtime model"
 path  = "docs/architecture/LOGGING-CONVENTIONS.md"
 title = "Logging Conventions"
 blurb = "PanelLog breadcrumb discipline and category list — the pre-crash forensic surface."
+group = "Disciplines & runtime model"
+
+# Declared 2026-08-24. AGENTS.md is a root document and therefore public, and it
+# instructs the reader to open this doctrine at the start of any crash
+# investigation — an undeclared target of a published instruction is a link that
+# ships broken. (Same finding arch fixed for its own two doctrine docs in
+# ROUTING-2026-08-24-c: "a keep-list that drops a cited target ships broken links.")
+[[doc]]
+path  = "docs/architecture/DOCTRINE-CRASH-FORENSICS.md"
+title = "Crash Forensics Doctrine"
+blurb = "The procedure for a .NET/Linux crash that leaves no managed dump, in the order that actually converges: reach before forensics, first signal before any dump, si_code before si_addr."
 group = "Disciplines & runtime model"
 
 # ---------------------------------------------------------------------------
@@ -176,18 +265,27 @@ title = "Diagnostic direction"
 blurb = "The 'observe, don't theorize' inspect doctrine for diagnosing the running application."
 group = "Direction"
 
-# docs/status/ declares NOTHING — removed 2026-08-23 per [ADR-0030]'s injection of
-# [ADR-0031], which is explicit: "docs/status/** is removed from every repo's
-# CANONICAL-DOCS.toml. docs/status/ publishes nothing. This includes STATUS.md, which
-# was the single declared exception."
+# ---------------------------------------------------------------------------
+# The rolling status log — declared, and MOVED to say so.
 #
-# This entry was that exception. The reasoning worth keeping: a status log is written
-# for the next session, so it is frank about blockers, half-verified measurements and
-# mistakes — and it is full of internal `dev` SHAs, which under [ADR-0012] Amendment 1
-# resolve for no public reader by construction ([ADR-0027] authors published commits
-# fresh at the release boundary). Publishing it exported both problems. What a public
-# reader gets from this repo instead is README.md, CHANGELOG.md, and the canonical
-# framework docs above — all already declared.
+# Operator ruling 2026-08-24, matching keystone and the rest of the fleet:
+# `docs/status/` is stripped wholesale, so the rolling log moved OUT of it to
+# `docs/STATUS.md` and is declared here. The path carries the meaning —
+# outside that directory is canonical, inside it is working memory — which is
+# a better instrument than a keep-list entry that a reader of the tree cannot
+# see. The 20 dated `STATUS-YYYY-MM-DD.md` snapshots and the `HANDOFF-*` files
+# stay in `docs/status/` and stay unpublished, which is [ADR-0031] working as
+# intended rather than being overridden.
 #
-# Do not re-add it. The candor is load-bearing and survives only because nobody
-# outside reads it.
+# The consequence, stated rather than discovered: this file is now a canonical
+# doc, so it is in scope for the pin checker and for anyone at all. It is still
+# written for the next session first — that is what makes it useful — but the
+# "nobody outside reads it" premise no longer holds, and a future session
+# should know that before writing in it.
+# ---------------------------------------------------------------------------
+
+[[doc]]
+path  = "docs/STATUS.md"
+title = "Status"
+blurb = "The rolling engineering log: what the tree measures at today, what is open, and what is waiting on whom."
+group = "Project"

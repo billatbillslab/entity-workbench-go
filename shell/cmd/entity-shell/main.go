@@ -16,7 +16,7 @@ import (
 // When the binary is built without that flag (e.g. plain `go run`),
 // the placeholder below is what `-version` reports. That's a clear
 // signal "this is a dev build, not a release."
-var version = "0.8.0-dev (unstamped)"
+var version = "0.9.0-dev (unstamped)"
 
 const usage = `Usage:
   entity-shell [flags]                  Start interactive REPL

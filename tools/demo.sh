@@ -9,7 +9,7 @@
 # Why -identity: without it, entity-shell generates a fresh keypair per
 # invocation, so each command in this script would write into a
 # different namespace of the same store and nothing would appear to
-# persist. That is a real rough edge (tracked in docs/status/STATUS.md
+# persist. That is a real rough edge (tracked in docs/STATUS.md
 # under "Hardening / cleanup"); the demo does the supported thing rather
 # than hiding it.
 #

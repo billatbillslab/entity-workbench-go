@@ -1,6 +1,7 @@
 # ============================================================================
 # Podman resource caps — entity-systems standard
-# (see [internal] docs/release-readiness/RESOURCE-CAPS.md).
+# (the numbers below are the standard; its rationale lives in an internal
+#  coordination doc and is summarised here so this file stands alone).
 #
 # Per-container ceilings so a build/run can't take the host down. Added after
 # a host hard-crash: concurrent podman builds exhausted memory + dragged the

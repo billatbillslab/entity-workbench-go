@@ -1,0 +1,24 @@
+# .release-removals — files this release deliberately removes from the published tree.
+#
+# One path or path-prefix per line; `#` comments allowed. A removal is not forbidden, but it
+# must be intended, and this file is the record that it was. Where something moved rather than
+# went away, the entry says where to, so a reader can follow it.
+#
+# A comment-only or blank file declares nothing.
+
+# ── docs/status/ ──────────────────────────────────────────────────────────────
+# 2026-08-24. Everything under `docs/status/` is dated, session-scoped working material —
+# measurements taken on a particular day, notes to the next person picking the repo up, the
+# argument that produced a decision rather than the decision. It is not part of the
+# documentation set and is not written for a reader outside this repo.
+#
+# The one exception used to be `docs/status/STATUS.md`, the rolling status document, which
+# was the single durable file in an otherwise ephemeral directory. That is a shape that
+# eventually goes wrong, so it MOVED UP one level and is now **`docs/STATUS.md`** — same
+# document, still published, one directory up, alongside the other repos in this ecosystem.
+# Nothing was withdrawn from a reader.
+#
+# Where to find what: README.md is what this is · CHANGELOG.md is what changed ·
+# docs/architecture/ is how it is built and what it is measured against ·
+# docs/STATUS.md is where it stands.
+docs/status

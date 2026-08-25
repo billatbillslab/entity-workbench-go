@@ -152,7 +152,7 @@ make gui-run ARGS="--identity peerA --storage sqlite"   # the GUI (see avalonia/
 > identity the shell generates a **fresh keypair per invocation**, so each run
 > writes into a different namespace of the same database and nothing you wrote
 > last time is visible. Everything still "works" — it just silently doesn't
-> persist. (Known rough edge; see `docs/status/STATUS.md`.)
+> persist. (Known rough edge; see `docs/STATUS.md`.)
 
 Name resolution is on by default (`EXTENSION-REGISTRY`), which is what the
 `name` verb needs — `name bind` / `resolve` / `ls` / `config`. Turn it off with
@@ -183,15 +183,24 @@ entity-systems/
 └── entity-core-go/             ← required sibling (core/ + ext/)
 ```
 
-Each `go.mod` requires the kernel by its canonical module path
+Each `go.mod` requires the kernel by its intended module path
 (`go.entitychurch.org/entity-core-go/{core,ext}`) and resolves it through a
-local `replace` to `../../entity-core-go/{core,ext}`. This is the **in-between
-zone**: the published vanity module path is wired up, but resolution is still
-local — no network fetch, no tag required. The final cutover (when the vanity
-path is actually published) is a one-line change per module: drop the
-`replace`, and the existing `require … @v0.8.0` fetches from the network.
+local `replace` to `../../entity-core-go/{core,ext}`.
 
-If `../entity-core-go/` is missing, the build fails at module resolution.
+**That module path does not resolve, and the `replace` is not a shortcut — it is
+the only thing available.** `go.entitychurch.org` has no DNS record (the apex
+`entitychurch.org` does; the `go.` subdomain has never been created), so there is
+no module identity to fetch and **`go get` of this SDK is not available in this
+release**. The sibling checkout is the supported path, deliberately, for now.
+When the domain is published the cutover is one line per module — drop the
+`replace` and let the existing `require` fetch — but nothing about that is
+available to you today, and this section used to imply otherwise.
+
+**If `../entity-core-go/` is missing, the build fails at module resolution.** As
+of 2026-08-24 it fails *early and legibly*: `make build`, `test`, `lint`, `run`
+and `gui` run a preflight that names this directory and the `git clone` that
+fixes it, instead of forty lines of Go module errors. `make doctor` reports the
+same check without building anything.
 
 The repo-root `go.work` composes the in-repo modules for editor / language
 server convenience; cross-repo resolution to the kernel happens via the
@@ -201,8 +210,16 @@ per-`go.mod` `replace` directives above.
 
 ## Versioning
 
-Module / app version is **0.8.0** (preview). The repo is not git-tagged yet —
-tagging is a freeze action reserved for the release cut.
+Module / app version is **0.9.0** (preview); the previous release, `v0.8.0`, is
+tagged. A tag is a release act, reserved for the release cut — it is not applied
+to a docs or tooling change. What each release contains is in
+[`CHANGELOG.md`](CHANGELOG.md).
+
+The number tracks the Go reference implementation this repo builds on
+(`entity-core-go`, and `-py` / `-rust` alongside it), which moved to semantic
+versioning at 0.9.0. It is **not** the core protocol's number — the
+specification repos version on their own schedule, and a shared 0.8 in the past
+was a coincidence of adoption rather than a coupling.
 
 ---
 

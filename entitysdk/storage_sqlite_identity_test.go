@@ -217,10 +217,26 @@ func TestStorage_SqliteIdentityBundle_RoundtripPreservesIdentity(t *testing.T) {
 // flat. If they're not, file as a bug — see
 // `DEPLOYMENT-DIRECTION.md §7 "Operational concerns still open."`
 func TestStorage_SqliteIdentityBundle_RebootstrapGrowsBoundedly(t *testing.T) {
-	// WAIVED for the 0.8.0 preview. This probe still
-	// surfaces a REAL linear leak: every reload grows the store by a
-	// constant ΔpathCount=1 / ΔentityCount=4, indefinitely (measured:
-	// bootstrap 347/338 → reload-4 351/354). The root
+	// WAIVED for the 0.9.0 preview (re-measured at the 0.9.0 cut, see
+	// below — the waiver was carried forward on evidence, not on
+	// inertia). This probe still surfaces a REAL linear leak: every
+	// reload grows the store by a constant, indefinitely.
+	//
+	// RE-MEASURED 2026-08-24 against core-go 13a42ea, by removing this
+	// Skip and running it — and the shape has CHANGED since the waiver
+	// was written:
+	//
+	//	                  when waived        2026-08-24
+	//	  ΔpathCount         1                  0
+	//	  ΔentityCount       4                  2
+	//	  bootstrap→reload-4 347/338→351/354    374/365→374/373
+	//
+	// So the path leak is GONE and the entity leak is HALVED — core-go
+	// has fixed part of this, and the old numbers in this comment had
+	// silently become false. It is still linear and still unbounded, so
+	// the waiver stands on substance; what does not stand is quoting a
+	// stale measurement to justify it. Routed to core-go in
+	// reviews/RELEASE-READINESS-REPLY-2026-08-24.md §7. The root
 	// cause is in the identity *ceremony's* determinism, which lives
 	// in the core-go sibling (ext/identity) — re-running
 	// ApplyIdentityBundle against an already-populated store re-issues
@@ -236,8 +252,9 @@ func TestStorage_SqliteIdentityBundle_RebootstrapGrowsBoundedly(t *testing.T) {
 	// ceremony is made idempotent on re-apply. The leak is bounded
 	// per-restart (small constant), so for a wipe-and-rebuild preview
 	// it is a conscious waiver, not a blocker.
-	t.Skip("WAIVED (0.8.0 preview): real linear leak rooted in core-go ext/identity " +
-		"ceremony re-apply; see reviews/FEEDBACK-CORE-GO-IDENTITY-REBOOTSTRAP-LEAK.md")
+	t.Skip("WAIVED (0.9.0 preview): real linear leak rooted in core-go ext/identity " +
+		"ceremony re-apply — re-measured 2026-08-24 at ΔentityCount=2/reload (was 4, and " +
+		"the ΔpathCount=1 is now 0); see reviews/FEEDBACK-CORE-GO-IDENTITY-REBOOTSTRAP-LEAK.md")
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)

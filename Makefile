@@ -91,6 +91,18 @@ include caps.mk
 # `-box` (e.g. `make test-sdk-box`) — see the `%-box` rule below.
 TOOLCHAIN_IMAGE := golang:1.25-bookworm
 
+# REPO_DIR is this checkout's own directory NAME, not a constant. The
+# container's working directory used to be the literal
+# `/src/entity-systems/entity-workbench-go`, which silently required the
+# checkout to be named exactly that — true for every developer and false
+# for a throwaway git worktree, where the release pipeline replays each
+# curated unit in a scratch directory of its own choosing. The failure is
+# the bad kind: podman reports a missing workdir, every unit goes red at
+# once, and it reads as a broken tree rather than a misplaced one.
+# (Raised by meta's oracle-2 prep, 2026-08-24; fixed rather than
+# documented, because a constraint you have to remember is one you don't.)
+REPO_DIR := $(notdir $(CURDIR))
+
 define IN_CONTAINER
 	mkdir -p $(GOMOD_CACHE) $(GOBUILD_CACHE)
 	podman run --rm \
@@ -98,7 +110,7 @@ define IN_CONTAINER
 		-v $(PARENT):/src/entity-systems:Z \
 		-v $(GOMOD_CACHE):/go/pkg/mod:Z \
 		-v $(GOBUILD_CACHE):/root/.cache/go-build:Z \
-		-w /src/entity-systems/entity-workbench-go \
+		-w /src/entity-systems/$(REPO_DIR) \
 		$(TOOLCHAIN_IMAGE) \
 		$(1)
 endef
@@ -162,6 +174,37 @@ image:
 # kernel through `replace ../../entity-core-go/{core,ext}`, so without
 # that directory nothing in this repo builds, and the error you get is a
 # module-resolution wall that does not mention the sibling.
+#
+# One condition, one predicate — `doctor` reports it, `preflight` refuses
+# on it. Written once so the two can never disagree about what "present"
+# means.
+SIBLING_PRESENT = [ -d "$(PARENT)/entity-core-go/core" ] && [ -d "$(PARENT)/entity-core-go/ext" ]
+
+# preflight — the sibling check, in front of the targets that cannot work
+# without it. `doctor` has had this check since the day it was written and
+# NOTHING CALLED IT: arch cloned our published mirror alone and got forty
+# lines of module-resolution spew, none of which name the cause
+# (ROUTING-2026-08-23-d, arch's B-2). The property being bought is not the
+# check — we had the check — it is that *the first failure a user sees names
+# the cause and the fix*.
+#
+# It is cheap (two stat calls) and host-side, so it fires before podman is
+# invoked, and it is a no-op inside the container, where PARENT is
+# /src/entity-systems and the sibling is bind-mounted by construction.
+.PHONY: preflight
+preflight:
+	@if $(SIBLING_PRESENT); then :; else \
+		echo "entity-core-go not found at $(PARENT)/entity-core-go"; \
+		echo; \
+		echo "    git clone https://github.com/EntityChurch/entity-core-go"; \
+		echo "    # ...so that entity-core-go/ and entity-workbench-go/ share a parent"; \
+		echo; \
+		echo "Every go.mod here resolves the kernel through a local 'replace'; without"; \
+		echo "the sibling checkout nothing in this repo builds. See README.md section"; \
+		echo "\"Repository layout (sibling dependency)\", or run 'make doctor'."; \
+		exit 1; \
+	fi
+
 .PHONY: doctor
 doctor:
 	@echo "entity-workbench-go — environment check"
@@ -174,7 +217,7 @@ doctor:
 	if command -v go >/dev/null 2>&1; then echo "ok  $$(go version 2>/dev/null | cut -d' ' -f3) — '-native' targets available"; \
 	else echo "warn  not found — fine; containerized targets supply go $(GOTOOLCHAIN)"; fi; \
 	printf '  %-22s ' "sibling kernel"; \
-	if [ -d "$(PARENT)/entity-core-go/core" ] && [ -d "$(PARENT)/entity-core-go/ext" ]; then \
+	if $(SIBLING_PRESENT); then \
 		rev=$$(git -C "$(PARENT)/entity-core-go" rev-parse --short HEAD 2>/dev/null || echo "no-git"); \
 		echo "ok  $(PARENT)/entity-core-go @ $$rev"; \
 	else \
@@ -215,13 +258,13 @@ run: shell-build
 # NOTHING (extracting first if dist-native is missing). Before it
 # existed, "start the thing I built five minutes ago" had no verb at
 # the root and cost a full podman build.
-gui:
+gui: preflight
 	$(MAKE) -C avalonia up
 
 gui-run:
 	$(MAKE) -C avalonia host-run
 
-gui-build:
+gui-build: preflight
 	$(MAKE) -C avalonia build
 
 gui-test:
@@ -240,15 +283,15 @@ gui-test:
 demo: shell-build
 	@bash tools/demo.sh "$(BIN_DIR)/entity-shell"
 
-build:
+build: preflight
 	$(call IN_CONTAINER,make build-native BIN_DIR=bin)
 
-test:
+test: preflight
 	$(call IN_CONTAINER,make test-native)
 
 # Tier-1 lint/fmt/check — same container-default / -native-opt-in split as
 # build/test. lint is read-only (go vet); fmt writes (gofmt -w).
-lint:
+lint: preflight
 	$(call IN_CONTAINER,make lint-native)
 
 fmt:
@@ -341,7 +384,7 @@ shell-once: shell
 shell-help:
 	go run $(SHELL_LDFLAGS) ./shell/cmd/entity-shell help
 
-shell-build: ensure-bindir
+shell-build: preflight ensure-bindir
 	go build $(SHELL_LDFLAGS) -o $(BIN_DIR)/entity-shell ./shell/cmd/entity-shell
 
 shell-test:
@@ -472,7 +515,7 @@ test-native: test-sdk test-shell test-shellboot test-shellcmd test-shellpanel te
 TEST_SUITES := sdk inspect shell shellboot shellcmd shellpanel workbench programs publish fetch
 TEST_LOG_DIR := .test-logs
 
-test-each:
+test-each: preflight
 	$(call IN_CONTAINER,make test-each-native)
 
 test-each-native:
