@@ -1,6 +1,6 @@
 # entity-workbench-go — status
 
-_Updated: 2026-08-24 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
+_Updated: 2026-08-25 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
 
 > **Start here:** **§0A — the 0.9.0 release preparation, 2026-08-24**, immediately below.
 > Everything after it is the running history.
@@ -337,6 +337,33 @@ a pure-only subset or the scope fence moves.
 - **Ask arch:** how does an engine with a declared scope fence satisfy AE-6? (§0c, routed in
   `reviews/AXIS1-ADMISSION-LAPSED-2026-08-25.md`.)
 
+### Operator ruling, 2026-08-25 — the engine's home is the compute extension
+
+Recorded here so it is not relitigated. **`entitysdk/axis1` does not belong in an SDK**: an SDK is
+an interface layer, and the only thing that implements compute is the compute extension. An
+alternate engine is not a research toy — it is **what makes compute practical**, because without
+the collapse to a condensed handler you re-hash every intermediate on every tick. So it belongs
+with the extension it makes usable, **under the same vectors and the same standards, exercised on
+both engines whenever compute changes**. Someone re-implementing for their own deployment reasons
+is fine and expected — under those same vectors.
+
+**The objection this repo had been carrying is withdrawn.** `doc.go`'s *"sharing code with the
+reference would make the equivalence oracle circular"* defends **code** independence — which is
+precisely what produced this drift — while the independence that actually catches errors is
+**vector** independence, i.e. arch's corpus, which does not care where the engine lives. Nothing
+in the proposal asks the two engines to share code; it asks one corpus to run over both, in the
+repo where the semantics change.
+
+Structural evidence, measured: `axis1` is **3,028 lines with zero dependencies on this repo**
+(`go list -deps ./axis1` is core-go only), implements core-go's `handler.Handler`, and is consumed
+by `programs/` through a **handler-path string** rather than an import. It is not integrated here;
+it is parked here, because that is where the prototype was typed. Routed as
+`reviews/PROPOSAL-AXIS1-HOME-IS-THE-COMPUTE-EXTENSION-2026-08-25.md`.
+
+*And the honest frame: this was a prototype built fast to prove entity-compute could carry a real
+interactive workload. It did. The placement was a deliberate corner cut, and both halves of that
+trade are now visible — the capability and the maintenance arrangement nobody would design.*
+
 ## §0aa NEW (2026-08-23) — the re-sync against core-go's compute work found two live defects, neither of them in compute
 
 **Why the session ran.** `entity-core-go` moved 25 commits after the close-out — most of it
@@ -586,6 +613,12 @@ results contain and recover). Our last green `sdk` sweep was **2026-08-20**, bef
 2026-07-23), and it is **workbench-owned**, so this is ours to fix and nobody else's. The
 admission is stale until it adopts the new semantics.
 
+> *2026-08-25: the "conformance-admitted" clause above is no longer true and the sentence after it
+> understated the problem — the admission did not go stale pending v3.26, it had already **lapsed**
+> when the v3.24/v3.25 primitives landed. **WITHDRAWN**, see §0c and §1a. The "not a research toy"
+> half stands and got stronger: it is what makes compute practical, which is why the operator ruled
+> its home is the compute extension rather than an SDK.*
+
 **Not started, deliberately.** It is a real piece of work (error containment touches every
 collection primitive and the fold accumulator) and it was not this session's ask. Two things
 that will save the next session time:
@@ -728,7 +761,10 @@ it is deliberately unmerged (see the guardrail below).
 
 ## Where we left off
 
-**Latest handoff:** `docs/status/HANDOFF-2026-08-20-bearings-and-audit.md` — **start there.** It is
+**Latest handoff:** `docs/status/HANDOFF-2026-08-25-contained-errors-and-a-gate-we-were-not-running.md`
+— **start there** for the current tip: the Axis-1 fix, the lapsed AE-5 admission, the recommended
+order (PR-D first), and the traps that will bite a fresh session. Then
+`docs/status/HANDOFF-2026-08-20-bearings-and-audit.md` for the wider bearings. It is
 the audit, not a session log: tree state, where every arc stands, what is owed each way, the one
 remaining renderer gap, and a recommended order. `HANDOFF-2026-08-20-piece-four-and-two-real-bugs.md`
 is that session's log; `HANDOFF-2026-08-19-reachability-front-door-and-the-rendezvous-hold.md` the
