@@ -81,13 +81,13 @@ L0-L3's actual behavior gets documented forensically.
 
 ---
 
-## 2. The 21 disciplines
+## 2. The 22 disciplines
 
 D1-D11 are inherited verbatim from the entity-OS discipline charter
 (originating in godot-entity-core-rust, ratified by egui-entity-core-rust).
 They are stack-agnostic; they govern how we use the substrate.
 
-D12-D21 are native to our stack (Avalonia + .NET + cgo + Go + the
+D12-D22 are native to our stack (Avalonia + .NET + cgo + Go + the
 two-renderer architecture). They are **earned** by shipped bugs and
 explicit feedback episodes. Each cites the commit or pin that proved
 we needed it.
@@ -108,7 +108,7 @@ we needed it.
 | D10 | Real-session coverage | Cross-boot + headed + real-store paths for load-bearing changes. Headless green is necessary, not sufficient. Eight crash-hunt commits proved this on the Avalonia side. |
 | D11 | Inventory-boundary declaration (meta) | At audit open: name what's in scope **and what's not.** Findings that surface outside the boundary extend the boundary for the next audit. |
 
-### Native to our stack — earned by shipped bugs (D12-D17, D19, D20, D21) and feedback episodes (D18)
+### Native to our stack — earned by shipped bugs (D12-D17, D19, D20, D21, D22) and feedback episodes (D18)
 
 **D12 — Cross-language lifetime accounting.**
 *Source:* the cgo + GCHandle FFI discipline.
@@ -377,6 +377,48 @@ letter-tracking; `docs/status/STATUS.md` §"Latest arch packet read"
 carries the letter. If a packet naming us is found unread again, the
 next step is a checked-in script, not a third prose rule.
 
+**D22 — A contract between two components is only tested by a test that
+crosses it. Per-side tests are evidence about each side.**
+*Source:* AP17 plus AP21 — two shapes, two weeks apart, one lesson.
+(1) `DispatchLocalExecute` claimed to be *"the in-process equivalent of
+wire EXECUTE"*; both sides had tests, the equivalence test asserted
+**return values**, and the resource stopped reaching the handler with
+every assertion still green (323 failures in our tree, zero in the
+kernel's). (2) Our own CDN corridor: `publish` had a test asserting the
+layout it emits, `fetch` had a test asserting the URLs it builds, and
+they were **four different layouts** — no `tree/` segment vs one,
+`sharded-2-4` vs `sharded-2-flat`, wire hex vs digest-only hex,
+Amendment 6 pointer vs raw hash. Both suites green the whole time, and
+it took another implementation asking us to consume *them* to discover
+it about *ourselves*.
+*Why:* a per-side test asserts the side's own idea of the contract, so
+two sides can each be self-consistent and jointly wrong — and nothing in
+either suite can say so, because the contract exists in neither file. The
+failure is silent by construction: green on both ends is exactly what a
+broken join looks like. It is D19's *"route the measurement, not the
+argument"* turned inward — reading (or testing) one half establishes that
+half, not the operation.
+*How:*
+- Every emitter/consumer pair, every in-process/wire equivalence claim,
+  and every cross-repo artifact gets **one test that runs the whole
+  path** over the real artifact — real HTTP, real emitted directory, no
+  fakes on either side.
+- The gate asserts what the **far side sees**, not what the near side
+  produced: the callee's context, the consumer's decoded entity, the
+  bytes off the wire.
+- Cross-impl: point it at the **other implementation's** bytes, frozen
+  in `testdata/` with provenance. A corridor verified only by its own
+  language's other half is cohort-consistent, not convergent
+  (ADR-0012).
+*Enforcement:* `publish/consume_test.go::TestPublishThenFetch_TheTwoHalvesOfOurOwnCorridor`
+(our publisher → our consumer, over `httptest`) and
+`fetch/crossimpl_test.go::TestConsumeBrowserRustSite` (their emission,
+frozen at `fetch/testdata/crossimpl-rust-site/`). Both are in
+`make test-native` — which is half the discipline: `fetch` had **no test
+target at all** and `publish` was outside the sweep, so the corridor
+could not have been caught by running everything. A boundary gate that
+is not in the default sweep is not a gate.
+
 ---
 
 ## 3. The ten review questions (run on every diff)
@@ -409,7 +451,7 @@ Short enough to run on every change. Six inherited, four substrate-native.
 
 ---
 
-## 4. The anti-pattern catalog (AP1-AP20)
+## 4. The anti-pattern catalog (AP1-AP22)
 
 Each a real defect that shipped or a claim that was routed, diagnosed, and
 is now pinned by a regression test.
@@ -529,6 +571,20 @@ across both columns. AP20 — `TestCatchAllClassification_CoversTheDeclaredVocab
 classification to be total and disjoint over `core/types`' eight `BackendKind*` constants and to
 contain nothing the enum does not carry; a string we would have to invent cannot pass it.
 
+**AP21 / AP22 — the cross-impl consume run (2026-08-19).** Earned answering
+`entity-browser-rust`'s ask to consume their published tree. **AP21 is what promoted D22.**
+
+| AP  | Source | Pattern (the name we use for it) | Discipline |
+|-----|--------|----------------------------------|------------|
+| AP21 | `fetch/fetch.go` before `c13dfe2`, against `publish/publish.go` | **A corridor whose two halves are each tested against their own idea of the layout.** `publish` asserted the directory it emits; `fetch` asserted the URLs it builds; nothing asserted they were the same layout, and they were not — four ways at once (`/{peer}/tree/{path}.bin` vs no `tree/` segment, `sharded-2-flat` vs `sharded-2-4`, digest-only hex vs the wire hex §6.5.3.1 MUSTs, a raw 33-byte leaf vs the Amendment 6 `system/hash` pointer). Both suites green. Our consumer could not fetch one byte from our own publisher, and we found out because **another implementation asked us to consume them**. Compounding it structurally: `fetch` had no `make` test target and `publish` was not in `test-native`, so "run everything" never ran either end. **Two green halves of one corridor is not a working corridor.** | D22, D10, D19 |
+| AP22 | `fetch/fetch.go::decodeVerified`, and browser-rust's own audit F6 | **A guard that refuses everything unfamiliar.** `entity.Validate()` enforces the 3-key wire invariant, so it rejected **every conformant `CONTENT_GET` body** — those are the bare 2-key hashable form, and the absent `content_hash` read as a zero hash it then failed against. The same shape in their tree refused every publisher that was not their own emitter (their F6, reversed the same day), and the same shape in ours twice before (the withdrawn `catchall_not_last`, the remoteness keying). **A guard written to stop one bad input, expressed as a refusal of everything it does not recognize, is a bug waiting for the first legitimate stranger.** The repair is never to loosen it: replace the familiarity check with the *property* check — here, recompute the hash over (type, data) and require equality with what the tree bound, which is strictly stronger than what `Validate` was standing in for. | D22, D8 |
+
+*Enforcement:* AP21 — the two corridor gates named under D22, both in `make test-native`, both
+mutation-checked (drop the peer-rooted bridge and the cross-impl gate 404s at hop 0; revert the
+layout join and our own gate fails at the first page). AP22 — the same gates are what a
+too-strict guard now fails against, because they run over *another implementation's* bytes: a
+refusal of the unfamiliar cannot survive a fixture that is, by construction, unfamiliar.
+
 ---
 
 ## 5. Promotion criteria — when does something become a discipline?
@@ -553,7 +609,11 @@ scoping** — two estimates priced against our own tree instead of the
 substrate. **D21 is AP12 promoted**: a packet addressed to us went
 unopened, then a packet *cc'd* to us went unopened and took a landed
 refusal down with it — same lesson, and the second shape is the one the
-first fix's own wording excluded.
+first fix's own wording excluded. **D22 was earned by AP17 plus AP21** —
+a kernel equivalence claim tested on return values, and our own CDN
+corridor tested one half at a time; different repos, different layers,
+one shape: a contract asserted from each side separately is asserted by
+nobody.
 
 ---
 

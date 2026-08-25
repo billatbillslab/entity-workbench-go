@@ -1,0 +1,57 @@
+¢ddata£dbodyyF# Markdown Showcase
+
+One page that exercises the full markdown feature set, so rendering fidelity is easy to evaluate at a glance â€” in the live overlay and in the static export.
+
+## Text styles
+
+**Bold**, *italic*, ***bold italic***, ~~strikethrough~~, and `inline code`. A [link back Home](./index) and a [link to the web](https://example.com).
+
+## Blockquote
+
+> Format âŠ¥ transport â€” the same page renders from the local tree, a peer, or a CDN.
+> A second line of the same quote, to show it wraps as one block.
+
+## Lists
+
+- First item
+- Second item
+  - Nested item a
+  - Nested item b
+- Third item
+
+1. Step one
+2. Step two
+3. Step three
+
+- [x] Styled tables
+- [x] Fenced code blocks
+- [ ] Footnotes (not yet)
+
+## Table
+
+| Feature     | Status |               Notes |
+| :---------- | :----: | ------------------: |
+| Tables      |  Done  | header + zebra rows |
+| Code blocks |  Done  | monospace, bordered |
+| Blockquotes |  Done  |     left accent bar |
+| Images      |  Done  |      scale to width |
+
+## Code block
+
+```rust
+fn markdown_to_html(md: &str) -> String {
+    let opts = Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS;
+    render(md, opts)
+}
+```
+
+## Image
+
+::embed[Entity Demo Figure â€” a content-addressed SVG asset]{ref=assets/figures/demo.svg}
+
+---
+
+Back to [Home](./index).
+fformathmarkdownkfrontmatter¡etitleqMarkdown Showcasedtypemapp/site-page

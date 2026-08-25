@@ -21,12 +21,20 @@ import (
 // is a disclosure the moment it is not.
 //
 // The load-bearing rule here is one line of §4.1 step 2, and it is a
-// MUST: **the catch-all MUST NOT name a backend whose consultation
-// transmits the queried name.** Step 2 calls itself the primary privacy
-// mechanism; a name-transmitting backend there discloses every unscoped
-// name a user types — the whole private namespace, one name per
-// keystroke, to a third party. InstallResolverConfig refuses such a
-// config rather than writing it.
+// MUST: **a shipped config MUST NOT make a backend whose consultation
+// transmits the queried name eligible for an unscoped name.** Step 2
+// calls itself the primary privacy mechanism; a name-transmitting
+// backend reachable from a bare name discloses every unscoped name a
+// user types — the whole private namespace, one name per keystroke, to
+// a third party. InstallResolverConfig refuses such a config rather
+// than writing it.
+//
+// **The rule binds the configuration, not the catch-all row** (spec
+// 1.14, arch ROUTING-2026-08-19-b §2). It was written at the width of
+// the instance and widened to the width of the invariant, because a
+// rule that binds one row is evaded by not writing that row — either by
+// using a different broad pattern, or by shipping no dispatch list at
+// all, which disables the filter entirely.
 //
 // **The banned property is name transmission, not remoteness** (spec
 // 1.8, arch ROUTING-2026-08-18-l §1). We shipped the remoteness reading
@@ -178,20 +186,97 @@ func DefaultResolverConfig() types.ResolverConfigData {
 	}
 }
 
-// ValidateResolverConfig enforces the one MUST inside §4.1a before a
-// config can reach the tree.
+// matchesUnscopedNames reports whether a dispatch pattern can match a
+// name that carries no explicit authority marker — the property §4.1
+// step 2's MUST is keyed on at 1.14 ("any rule whose pattern matches
+// unscoped names").
 //
-// Two failures, both refusals rather than normalizations. Normalizing
-// would be conformant per §11.1 ("refused or normalized at load"), but
-// silently rewriting an operator's privacy configuration into a
-// different one is the wrong half of that choice: the operator asked
-// for something and would not learn they did not get it.
+// **The spec states the property and gives no decision procedure**, and
+// one is not derivable from the text alone: read literally, a name is a
+// flat string, so `alice.eth` is "unscoped" and §4.1a row 3
+// (`*.eth` → `consensus-anchored`) would violate the MUST the same
+// table declares. So "unscoped" cannot mean "syntactically bare" — it
+// means "carrying no explicit authority marker", and the markers are
+// the ones §4.1a's own rows use: an `@` authority part, a `scheme:`
+// prefix, and a dotted authority suffix.
 //
-//   - A catch-all naming a name-transmitting backend. The disclosure
-//     case, and now the only one: under the filter reading (§4, spec
-//     1.7) a broad pattern is bounded by what it may NAME, not by where
-//     it sits, so catch-all position is not a defect and is not refused
-//     here.
+// A pattern is NARROW (cannot match an unscoped name) when it forces
+// every name it matches to carry one of those. Under §4's closed
+// grammar that is decidable, because every non-`*` byte is a literal:
+//
+//   - it contains `@` — every matching name carries an authority part
+//     (`*@*`, `*@*.*`);
+//   - it contains `:` — every matching name carries a scheme
+//     (`did:web:*`);
+//   - it is a single leading `*` followed by a wildcard-free tail that
+//     begins with `.` — every matching name ends in that dotted
+//     authority suffix (`*.eth`, `*.example.org`).
+//
+// Everything else is BROAD, including the ones that are only
+// *probably* broad. That direction is the point: calling a broad
+// pattern narrow is what leaks, and the leak is silent and on the happy
+// path.
+//
+// **Cross-impl note, routed rather than resolved here.**
+// `entity-browser-rust`'s `is_broad` (`src/content_site/name_dispatch.rs`)
+// is the same shape with a looser third clause: any wildcard-free tail
+// counts, not only a dotted one. The two agree on every row of §4.1a
+// and diverge on patterns like `*e`, which requires a literal `e` and
+// no authority — narrow for them, broad for us. We took the strict
+// side because it is the one their own doc sentence argues for ("a
+// pattern we cannot confidently classify is treated as broad"), and
+// because a validator is not a matcher: refusing an exotic config costs
+// an operator an error message, and admitting one costs them every name
+// they type. Which of the two is conformant needs a §11.1 row; the ask
+// is routed.
+func matchesUnscopedNames(pattern string) bool {
+	if strings.ContainsAny(pattern, "@:") {
+		return false
+	}
+	if tail := strings.TrimPrefix(pattern, "*"); tail != pattern &&
+		tail != "" && !strings.Contains(tail, "*") && strings.HasPrefix(tail, ".") {
+		return false
+	}
+	return true
+}
+
+// ValidateResolverConfig enforces the MUST inside §4.1 step 2 before a
+// config can reach the tree: **a distribution's shipped resolver-config
+// MUST NOT make a name-transmitting backend eligible for an unscoped
+// name** (spec 1.14).
+//
+// Refusals rather than normalizations. Normalizing would be conformant
+// per §11.1 ("refused or normalized at load"), but silently rewriting
+// an operator's privacy configuration into a different one is the wrong
+// half of that choice: the operator asked for something and would not
+// learn they did not get it.
+//
+// **The rule binds the configuration, not one row** — widened by arch
+// at 1.14 (D4, ROUTING-2026-08-19-b §2), because a rule binding one row
+// is evadable by not writing that row. It has exactly two doors, and
+// this function is one check per door:
+//
+//  1. **A rule that matches unscoped names naming a name-transmitting
+//     kind.** The catch-all `*` is the usual one and is not the only
+//     one: `al*` matches unscoped names and is not `*`. See
+//     matchesUnscopedNames for how the class is decided. Position is
+//     still not a defect — under the filter reading (§4, spec 1.7) a
+//     broad pattern is bounded by what it may NAME, not by where it
+//     sits.
+//  2. **An absent or empty `name_format_dispatch` while a
+//     name-transmitting kind sits in the `resolver_chain`.** §4.1 step
+//     2's `eligible_kinds` returns ALL when there are no rules — the
+//     filter is disabled, every kind is eligible for every name, and
+//     there is **no catch-all row to inspect**. This is the door that
+//     stays open after the other one closes, and it is the one our
+//     validator could not see: the loop body simply never executed.
+//     EnableLocalNameResolver's comment has named this hazard since
+//     2026-08-18 without anything enforcing it.
+//
+// The third door — leaving a name-transmitting kind out of every rule
+// so it "defaults to match all" — is closed by construction by the
+// union rule (a kind named nowhere is eligible nowhere) and needs no
+// check here.
 //
 // The check is a DENY-list over nameTransmittingBackendKinds, not an
 // allow-list over the safe set, and the direction is deliberate. An
@@ -199,10 +284,11 @@ func DefaultResolverConfig() types.ResolverConfigData {
 // entry with a warning, and nothing is registered under it to
 // disclose anything — so refusing the whole config on account of one
 // would reject a deployment authored against a newer vocabulary than
-// ours. We have now been bitten twice by a guard that was too strict
-// (the withdrawn `catchall_not_last`, and the remoteness keying this
-// commit replaces) and never once by one that was too loose. Refuse
-// what the spec names as disclosing; let the unknown stay inert.
+// ours. We have been bitten twice by a guard that was too strict (the
+// withdrawn `catchall_not_last`, and the remoteness keying) and never
+// once by one that was too loose. Refuse what the spec names as
+// disclosing; let the unknown stay inert. (Arch upheld this reading
+// against browser-rust's opposite one — ROUTING-2026-08-19-b §2, D10.)
 //
 // Patterns themselves are never rejected. §4's grammar is closed and
 // every non-`*` byte is a literal, so no pattern is malformed — a
@@ -210,18 +296,40 @@ func DefaultResolverConfig() types.ResolverConfigData {
 // (REG-DISPATCH-GRAMMAR-1, spec 1.13). We author patterns and do not
 // match them; the matcher lives in the registry handler.
 func ValidateResolverConfig(cfg types.ResolverConfigData) error {
+	// Door 2 first: it is the one an absent list opens, and a config
+	// that trips it has no rule to report against.
+	if len(cfg.NameFormatDispatch) == 0 {
+		for _, e := range cfg.ResolverChain {
+			if nameTransmittingBackendKinds[e.BackendKind] {
+				return NewError(400, "filter_disabled_transmits_name",
+					fmt.Sprintf("resolver-config carries no name_format_dispatch while the resolver_chain "+
+						"holds backend kind %q, whose consultation transmits the queried name "+
+						"(EXTENSION-REGISTRY §4.1 step 2, MUST, spec 1.14): with no rules the filter is "+
+						"DISABLED and every kind is eligible for every name, so every unscoped name a user "+
+						"types would be disclosed to it. Ship §4.1a's default list (DefaultNameFormatDispatch) "+
+						"and scope this kind to the name shape it answers for.", e.BackendKind))
+			}
+		}
+		return nil
+	}
+
 	for _, d := range cfg.NameFormatDispatch {
-		if d.Pattern != CatchAllPattern {
+		if !matchesUnscopedNames(d.Pattern) {
 			continue
 		}
 		for _, kind := range d.BackendKinds {
-			if nameTransmittingBackendKinds[kind] {
-				return NewError(400, "catchall_transmits_name",
-					fmt.Sprintf("resolver-config catch-all %q names backend kind %q, whose consultation "+
-						"transmits the queried name (EXTENSION-REGISTRY §4.1 step 2, MUST): every unscoped "+
-						"name a user types would be disclosed to it. Kinds the catch-all may name: %s",
-						CatchAllPattern, kind, strings.Join(sortedKinds(catchAllSafeBackendKinds), ", ")))
+			if !nameTransmittingBackendKinds[kind] {
+				continue
 			}
+			code, where := "broad_pattern_transmits_name", fmt.Sprintf("pattern %q, which matches names carrying no explicit authority,", d.Pattern)
+			if d.Pattern == CatchAllPattern {
+				code, where = "catchall_transmits_name", fmt.Sprintf("catch-all %q", CatchAllPattern)
+			}
+			return NewError(400, code,
+				fmt.Sprintf("resolver-config %s names backend kind %q, whose consultation "+
+					"transmits the queried name (EXTENSION-REGISTRY §4.1 step 2, MUST): every unscoped "+
+					"name a user types would be disclosed to it. Kinds a rule matching unscoped names "+
+					"may name: %s", where, kind, strings.Join(sortedKinds(catchAllSafeBackendKinds), ", ")))
 		}
 	}
 	return nil
@@ -258,7 +366,27 @@ func (a *AppPeer) InstallResolverConfig(cfg types.ResolverConfigData) error {
 	return nil
 }
 
-// ResolverConfig reads the installed resolver-config, if any.
+// ResolverConfig reads the installed resolver-config, if any, and
+// validates it **at load** — §11.1's placement, not ours: "MUST be
+// refused or normalized at load".
+//
+// A write-time-only check is the variant that fails here, and the
+// failure is not hypothetical for us. What a config means depends on a
+// vocabulary that lives outside it: a `backend_kind` unknown when the
+// config was authored is inert by §4.2 and discloses nothing, and it
+// stops being inert the moment core-go declares it and our
+// classification maps name it. The peer that upgrades re-reads the
+// stored config, and the entry that was dead config becomes a refusal
+// on that read. Nothing re-examines it if the only check ran on the day
+// it was authored.
+//
+// **The config is returned even when it fails**, non-zero, alongside
+// the error. A load-time refusal that also withheld the bytes would
+// leave an operator unable to see what to repair — the entity is theirs
+// and it is already in their tree; what the refusal denies is *use*,
+// not *sight*. Callers that only want the stored bytes (repair tools, a
+// `config show` verb) use the value and log the error; callers that act
+// on the config MUST treat a non-nil error as fatal.
 func (a *AppPeer) ResolverConfig() (types.ResolverConfigData, bool, error) {
 	ent, ok := a.store.Get(types.ResolverConfigStoragePath)
 	if !ok {
@@ -273,7 +401,7 @@ func (a *AppPeer) ResolverConfig() (types.ResolverConfigData, bool, error) {
 	if err != nil {
 		return types.ResolverConfigData{}, false, WrapError(500, "decode_failed", "decode resolver-config", err)
 	}
-	return cfg, true, nil
+	return cfg, true, ValidateResolverConfig(cfg)
 }
 
 // EnsureResolverConfig installs DefaultResolverConfig if no config is
@@ -283,6 +411,14 @@ func (a *AppPeer) ResolverConfig() (types.ResolverConfigData, bool, error) {
 // Idempotent on purpose: an operator's config is theirs, and a
 // bootstrap helper that overwrote it on every start would be a
 // configuration surface that silently reverts.
+//
+// A stored config that fails the §4.1 step 2 MUST surfaces here as an
+// error and is NOT replaced. That is the load-time refusal (see
+// ResolverConfig), and overwriting instead would be the normalization
+// half of §11.1 — conformant, and the wrong half: it would repair an
+// operator's privacy configuration into a different one on the next
+// boot, silently, which is the failure this whole surface exists to
+// prevent.
 func (a *AppPeer) EnsureResolverConfig() (bool, error) {
 	if _, found, err := a.ResolverConfig(); err != nil {
 		return false, err

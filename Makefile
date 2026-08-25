@@ -74,7 +74,7 @@ export GOTOOLCHAIN ?= go1.25.1
 # includes the same file and uses the caps on every podman build/run.
 include caps.mk
 
-.PHONY: workbench-test console-build console-run test test-native test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-inspect test-publish perfreview build build-native shell shell-test shell-help shell-once shell-build publish-build publish-serve vcs-build fetch-build go clean clean-strays ensure-bindir image help lint fmt check lint-native lint-perfreview fmt-native
+.PHONY: workbench-test console-build console-run test test-native test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-inspect test-publish test-fetch perfreview build build-native shell shell-test shell-help shell-once shell-build publish-build publish-serve vcs-build fetch-build go clean clean-strays ensure-bindir image help lint fmt check lint-native lint-perfreview fmt-native
 
 # ============================================================
 # make + podman — bare-box entry points
@@ -302,7 +302,7 @@ ensure-bindir:
 # matches the perfreview target's -timeout=20m precedent.
 GOTEST_FLAGS := -race -count=1 -timeout=30m
 
-test-native: test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-inspect
+test-native: test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-inspect test-publish test-fetch
 	@echo "--- full sweep passed ---"
 
 # Native lint/fmt workers (used directly on a Go host AND re-invoked inside the
@@ -311,7 +311,7 @@ test-native: test-sdk test-shell test-shellboot test-shellcmd test-shellpanel te
 # tree (gofmt operates on files, so one pass covers every module). Note: the
 # shipped-binary modules console/entity-{publish,vcs,fetch} are not vetted here
 # — widen LINT_MODULES if lint should track the full `make build` ship set.
-LINT_MODULES := entitysdk inspect shell shellboot shellcmd shellpanel workbench programs publish
+LINT_MODULES := entitysdk inspect shell shellboot shellcmd shellpanel workbench programs publish fetch
 
 lint-native: lint-perfreview
 	@for m in $(LINT_MODULES); do \
@@ -361,8 +361,16 @@ test-workbench:
 test-programs:
 	cd programs && go test $(GOTEST_FLAGS) $(ARGS) ./...
 
+# The CDN corridor, both halves. `publish` was outside the sweep and
+# `fetch` had no target at all until 2026-08-19 — which is how the two
+# halves of one corridor drifted four ways apart while every suite in the
+# sweep stayed green. A corridor with an untested end is an untested
+# corridor.
 test-publish:
 	cd publish && go test $(GOTEST_FLAGS) $(ARGS) ./...
+
+test-fetch:
+	cd fetch && go test $(GOTEST_FLAGS) $(ARGS) ./...
 
 # perfreview — production-readiness measurement harness. Gated by the
 # `perfreview` build tag (files use `//go:build perfreview`) so default

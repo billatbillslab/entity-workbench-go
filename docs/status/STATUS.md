@@ -1,10 +1,22 @@
 # entity-workbench-go — status
 
-_Updated: 2026-08-18 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
+_Updated: 2026-08-19 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
 
-**Latest arch packet read: `ROUTING-2026-08-18-q`** (arch `cf6871e`). D21 — this line is the
-subtraction that tells the next session what it has not opened. Read *every* document naming this
-repo, `cc` included: `grep -ril 'workbench-go' ../entity-system-architecture/docs/status/`.
+**Green as of `c13dfe2`:** ten suites, run **individually to completion** (AP15 — a count from
+`make test` stops at the first failing package). `entitysdk` 195.5s · `inspect` 1.8s · `shell` 3.1s ·
+`shellboot` 10.2s · `shellcmd` 285.1s · `shellpanel` 1.1s · `workbench` 2.1s · `programs` 134.9s ·
+`publish` 1.5s · `fetch` 1.0s. Zero failures. `make lint` clean. The command was
+`for t in sdk inspect shell shellboot shellcmd shellpanel workbench programs publish fetch; do make test-$t; done`.
+**`fetch` is new to the list** — it had no `make` target at all until 2026-08-19 (§6d).
+
+**Latest arch packet read: `ROUTING-2026-08-19-c`** (arch `c984f93`); browser-rust's
+`ROUTING-2026-08-19-d` read at their `fbc2c5c`. D21 — this line is the subtraction that tells the
+next session what it has not opened. Read *every* document naming this repo, `cc` included:
+`grep -ril 'workbench-go' ../entity-system-architecture/docs/status/`.
+
+**Inbound this session, all three answered:** `-19-b` §2 (validator widening → §6c), `-19-c` (the
+registry board is closed; our only row was the widening), and browser-rust's `-19-d` (consume-us
+ask → §6d, plus their F6 correction folded in as AP22).
 
 ## Where it is
 
@@ -255,7 +267,30 @@ keeps its row and loses only its `session_id` — verified against a real handle
 assertion failed. Routed to arch; `NetworkClient.MaintainedPeers()` is the `session_id != ""`
 filter in the meantime.
 
-Remaining on the four: connector registry + `meet`.
+**Remaining on the four: connector registry + `meet`** — and both of its gates have now returned,
+so the next session starts here rather than re-scoping it. **D20 pre-check done (2026-08-18), so
+nobody prices this against our own tree again:**
+
+- **The shape is ruled.** Our `CONNECTIVITY-CONVERGENCE` §2 said we would take piece 4 earlier *"if
+  your `meet`-as-DISCOVERY-backend question (arch Q8) returns in a shape that makes 4 cheap."* It
+  returned on **2026-08-17** — `ROUTING-2026-08-17-c` §1: **confirmed, token minted `rendezvous`**,
+  `pair` mode is **not** discovery, and the candidate is the §2.2 successor pair with
+  `identity_hint` **absent** (TOFU). `meet` is a DISCOVERY backend implemented on the SIGNALING
+  carrier — *the key introduces; it never authorizes* (SIGNALING §1.2) meeting DISCOVERY §2's
+  *discovery is the initiator of the grant, never the authority*. Read
+  `PROPOSAL-DISCOVERY-RENDEZVOUS-BACKEND`, not the summary, before building.
+- **The carrier already exists in the substrate.** `../entity-core-go/ext/signaling/` ships
+  `HandlerPattern = "system/signaling"`, ops `offer` / `collect` / `advertise` (`const.go`), a
+  `Client` (`client.go`), plus `punch.go`, `webrtc.go`, `reflection.go`, `pool.go`, `coordination.go`
+  and the rendezvous `key.go`. **There is no `meet` op and there should not be** — `meet` is the
+  DISCOVERY-side logic over this carrier, which is the piece that is genuinely ours.
+- So piece 4 is the same shape pieces 2 and 3 turned out to be (AP13/D20): **registration and a
+  consumer, not authoring.** What is absent in our tree is an `ext/signaling` consumer — grep:
+  `grep -rn 'ext/signaling' entitysdk/ workbench/ shellcmd/ shellboot/` returns nothing.
+- Constraints unchanged and confirmed: SIGNALING §3.4 same-provider is a **MUST** (both arms on the
+  same pool or silent never-meet); `data_relay` is `policy: open` only; **no TURN credential
+  mechanism exists anywhere in the corpus** (arch Q18) — build against static config and route the
+  wall rather than invent a credential shape.
 
 ### 4. Publisher conformance — CLOSED 2026-08-18, the corridor emits a real signed root
 
@@ -552,6 +587,93 @@ because "closed grammar" has meant "reject at write" everywhere else in this cor
 Packet: `docs/architecture/reviews/REGISTRY-V113-ADOPTION-2026-08-18.md`.
 **D21 earned** (AP12 promoted): a *cc'd* packet is a packet. Session start now greps the arch repo
 for every document naming this repo, and STATUS carries the last letter read.
+
+### 6c. REGISTRY v1.14 — the MUST binds the configuration, and our validator saw one row (2026-08-19)
+
+`b9e99e7`, answering `ROUTING-2026-08-19-b` §2 (arch read our tree at `0ba80c6`, source, this
+session). Arch widened §4.1 step 2 from the **catch-all row** to the **configuration** — D4, because
+a rule that binds one row is evaded by not writing it. Ours enforced the row: `if d.Pattern !=
+CatchAllPattern { continue }`.
+
+| door | case | code |
+|---|---|---|
+| 1 | a **broad** pattern that is not the catch-all — `al*` naming `dns-txt` | `broad_pattern_transmits_name` |
+| 1 | the catch-all itself (unchanged, so existing diagnostics still resolve) | `catchall_transmits_name` |
+| 2 | **absent/empty** `name_format_dispatch` while a name-transmitting kind sits in the chain | `filter_disabled_transmits_name` |
+
+Door 2 is the one the loop body could not reach — with no rules there is **no row to inspect**, and
+`eligible_kinds` returns ALL, so every kind is eligible for every name. `EnableLocalNameResolver`
+has carried a doc comment naming this exact hazard since 2026-08-18 with nothing enforcing it: **a
+named hazard with no gate is a comment.** Both doors mutation-checked against the pre-widening code.
+
+**§11.1's placement, which we had never implemented:** *"refused or normalized at load"*. Ours ran
+on author only. `AppPeer.ResolverConfig` now validates on read, returns the config **anyway**
+(non-zero, beside the error — a load-time refusal denies use, not sight), and `EnsureResolverConfig`
+refuses rather than reinstalling the default over an operator's config. The case is not
+hypothetical: what a config *means* depends on a vocabulary outside it, so an entry that is inert
+under §4.2 today becomes disclosing the moment core-go declares that kind.
+
+**Open, routed to arch:** the widened MUST says *"any rule whose pattern matches unscoped names"*
+and **supplies no decision procedure**. It cannot be read literally — a name is a flat string, so
+`alice.eth` is bare and §4.1a row 3 (`*.eth` → `consensus-anchored`) would violate the MUST the same
+table recommends. We read "unscoped" as *carrying no explicit authority marker*, and our
+`matchesUnscopedNames` parts from browser-rust's `is_broad` on patterns like `*e` (theirs: narrow;
+ours: broad). We took the strict side — it is what their own doc sentence argues for, and refusing
+an exotic config costs an error message while admitting one costs every name a user types. A `§11.1`
+row is needed; everything in §4.1a is grammar-identical under both readings, which is the same shape
+that let `*.lab` survive review in the `name_constraints` case.
+
+Packet: `docs/architecture/reviews/REGISTRY-V114-VALIDATOR-2026-08-19.md`.
+
+### 6d. The CDN corridor runs in both directions — and ours was broken at our own end (2026-08-19)
+
+`c13dfe2`, answering browser-rust's `ROUTING-2026-08-19-d` §5, the one thing they asked for:
+**consume us.** Doing it found our half broken first, and worse than theirs — **`fetch` could not
+read `publish`.** Four divergences at once:
+
+| `fetch` derived | `publish` emits |
+|---|---|
+| `{base}/{peer}/tree/{path}.bin` | `{base}/{peer}/{path}.bin` (§6.5.3.1 has **no `tree/` reserved word**) |
+| a raw 33-byte hash at the leaf | `ECF({type:"system/hash", data:H})` — Amendment 6, two-hop |
+| `sharded-2-flat` | `sharded-2-4` — *and the profile declares it* |
+| hex of the 32-byte digest | hex of the **33-byte wire form** (§6.5.3.1 MUST) |
+
+**Both suites were green the whole time**, because each half asserted its own idea of the layout and
+nothing asserted they were the same one. Structurally: **`fetch` had no `make` test target and
+`publish` was not in `test-native`** — "run everything" ran neither end. Both are in the sweep now,
+plus `fetch` in `LINT_MODULES`.
+
+What replaced the derivation is `fetch.Layout` — the Go counterpart of browser-rust's
+`PublishLayout`. Peer-id, all three URL prefixes, content layout and both suffixes come from the
+publisher's http-poll profile, decoded with **core-go's own type**. One convention is left on
+purpose: the well-known `{origin}/transport-profile` a cold-start consumer enters at.
+
+Gates, both mutation-checked and both in the sweep:
+- `publish/consume_test.go::TestPublishThenFetch_TheTwoHalvesOfOurOwnCorridor` — our publisher →
+  our consumer over `httptest`, cold start, signed root through `manifest_url_prefix`, every page
+  hash-verified, absence reported as `404` rather than as unreachability.
+- `fetch/crossimpl_test.go::TestConsumeBrowserRustSite` — **their** emission, frozen at
+  `fetch/testdata/crossimpl-rust-site/` (their `dev` @ `fbc2c5c`, provenance in its README), four
+  entities across two of their sites. Drop the peer-rooted bridge and it 404s at hop 0 — their
+  reported failure, reproduced from our side.
+
+**Findings routed, not worked around.** (1) core-go's `types.BuildContentURL` hexes
+`EffectiveDigest()` — the digest-only form §6.5.3.1 excludes **by MUST** — so it builds a URL that
+resolves against neither publisher in the cohort. (2) `entity.Validate()` cannot be used on a
+`CONTENT_GET` body: those are the bare 2-key hashable form, so it reads the absent `content_hash` as
+a zero hash and fails against it. That was our own **AP22** instance — a guard that refuses
+everything unfamiliar — the same shape as browser-rust's audit F6, which they reversed the same day.
+
+`tree_url_prefix` stays arch's. We consume **both** joins (last segment exactly the peer-id ⇒
+peer-rooted; otherwise append), which is a bridge, not a third convention.
+
+**Ratchet: AP21 → D22.** *A contract between two components is only tested by a test that crosses
+it; per-side tests are evidence about each side.* Second shape of AP17 (core-go's
+`DispatchLocalExecute` equivalence claim, asserted on return values) — different repo, different
+layer, one lesson. Charter is now D1–D22 / AP1–AP22.
+
+Packet: `docs/architecture/reviews/CROSSIMPL-CONSUME-RESULT-2026-08-19.md` (to browser-rust, cc arch
++ core-go).
 
 ## Open bugs
 

@@ -199,11 +199,132 @@ func TestValidateResolverConfig_CatchAllMustNotTransmitTheName(t *testing.T) {
 		t.Errorf("error does not carry the code: %v", err)
 	}
 
-	// No dispatch list at all is not this validator's business: it is
-	// §4.1a's SHOULD, not its MUST, and EnsureResolverConfig is what
-	// supplies the default.
+	// An empty config still validates — but for a narrower reason than
+	// this test claimed until 2026-08-19. Shipping no dispatch list is
+	// §4.1a's SHOULD and EnsureResolverConfig's job, so an empty list
+	// over an empty chain discloses nothing. It stops being harmless
+	// the moment the chain holds a name-transmitting kind, which is
+	// door 2 (TestValidateResolverConfig_TheRuleBindsTheConfiguration).
 	if err := ValidateResolverConfig(types.ResolverConfigData{}); err != nil {
-		t.Errorf("an empty config must validate (the SHOULD is Ensure's job, not the validator's): %v", err)
+		t.Errorf("an empty config over an empty chain must validate: %v", err)
+	}
+}
+
+// TestValidateResolverConfig_TheRuleBindsTheConfiguration pins the
+// 1.14 widening: §4.1 step 2's MUST binds the **configuration**, not
+// the catch-all row (arch ROUTING-2026-08-19-b §2, proposal D4). A rule
+// that binds one row is evaded by not writing that row, and our
+// validator's loop — `if d.Pattern != CatchAllPattern { continue }` —
+// could see only that row.
+//
+// Two doors, one case each, and the second is the one that matters
+// more: it has no rule to inspect at all.
+//
+// Tier: contract pin.
+func TestValidateResolverConfig_TheRuleBindsTheConfiguration(t *testing.T) {
+	// Door 1 — a BROAD pattern that is not the catch-all. `al*`
+	// matches every unscoped name beginning `al`, which is arch's own
+	// example, and `*` never appears in the config.
+	broad := types.ResolverConfigData{
+		ResolverChain: []types.ResolverChainEntry{{BackendKind: types.BackendKindDNSTXT, Priority: 0}},
+		NameFormatDispatch: []types.DispatchEntry{
+			{Pattern: "al*", BackendKinds: []string{types.BackendKindDNSTXT}},
+			{Pattern: CatchAllPattern, BackendKinds: []string{types.BackendKindLocalName}},
+		},
+	}
+	if err := ValidateResolverConfig(broad); err == nil {
+		t.Error("`al*` naming dns-txt was accepted; it matches unscoped names, and the MUST binds " +
+			"the configuration rather than the catch-all row")
+	} else if !strings.Contains(err.Error(), "broad_pattern_transmits_name") {
+		t.Errorf("error does not carry the code: %v", err)
+	}
+
+	// Door 2 — no dispatch list, and a name-transmitting kind in the
+	// chain. §4.1 step 2's eligible_kinds returns ALL when there are no
+	// rules: the filter is DISABLED, so every name reaches dns-txt and
+	// there is no row anywhere to point at.
+	filterDisabled := types.ResolverConfigData{
+		ResolverChain: []types.ResolverChainEntry{
+			{BackendKind: types.BackendKindLocalName, Priority: 0},
+			{BackendKind: types.BackendKindWellKnownURL, Priority: 10},
+		},
+	}
+	if err := ValidateResolverConfig(filterDisabled); err == nil {
+		t.Error("an absent name_format_dispatch over a chain holding well-known-url was accepted; " +
+			"with no rules the filter is disabled and every unscoped name is eligible for it")
+	} else if !strings.Contains(err.Error(), "filter_disabled_transmits_name") {
+		t.Errorf("error does not carry the code: %v", err)
+	}
+
+	// The same chain WITH the default list is fine, and that is the
+	// remedy the error names: the kinds are scoped to the name shapes
+	// they answer for, so no bare name reaches them.
+	scoped := filterDisabled
+	scoped.NameFormatDispatch = DefaultNameFormatDispatch()
+	if err := ValidateResolverConfig(scoped); err != nil {
+		t.Errorf("the same chain under §4.1a's default list was refused (%v); the list is exactly "+
+			"what scopes a name-transmitting kind to a name shape that carries an authority", err)
+	}
+
+	// A chain holding only name-blind kinds is not reached by door 2 at
+	// all — the filter being disabled discloses nothing when nothing in
+	// the chain transmits. This is the discontinuity §4.1 step 2 calls
+	// deliberate, and it is why door 2 keys on the chain and not on the
+	// absence.
+	blind := types.ResolverConfigData{
+		ResolverChain: []types.ResolverChainEntry{
+			{BackendKind: types.BackendKindLocalName, Priority: 0},
+			{BackendKind: types.BackendKindPeerIssued, Priority: 10},
+		},
+	}
+	if err := ValidateResolverConfig(blind); err != nil {
+		t.Errorf("an absent dispatch list over a name-blind chain was refused (%v); "+
+			"a peer whose chain holds only name-blind backends transmits nothing either way", err)
+	}
+}
+
+// TestMatchesUnscopedNames_TheClassificationTheMUSTKeysOn pins how we
+// decide "matches unscoped names", because §4.1 step 2 states the
+// property and supplies no decision procedure.
+//
+// The load-bearing row is `*.eth`: read literally a name is a flat
+// string, so `alice.eth` is syntactically bare and row 3 of §4.1a would
+// violate the MUST the same table declares. "Unscoped" therefore means
+// "carrying no explicit authority marker", and the shipped default is
+// the fixture that proves it — every row of it names a transmitting
+// kind or does not, and the whole list must validate.
+//
+// Tier: contract pin.
+func TestMatchesUnscopedNames_TheClassificationTheMUSTKeysOn(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		broad   bool
+		why     string
+	}{
+		{"*", true, "the catch-all — every bare name"},
+		{"al*", true, "a literal prefix and no authority; arch's own example"},
+		{"*ice", true, "a wildcard-free tail that is not a dotted suffix is not a marker"},
+		{"*a*", true, "two wildcards, so nothing is required of the tail"},
+		{"alice", true, "an exact bare name is still a bare name"},
+		{"", true, "matches the empty name, which carries no authority"},
+		{"*@*", false, "@ is in every matching name — an authority part"},
+		{"*@*.*", false, "§4.1a row 4"},
+		{"did:web:*", false, "a scheme prefix — §4.1a row 1"},
+		{"did:key:*", false, "§4.1a row 2"},
+		{"*.eth", false, "a dotted authority suffix — §4.1a row 3"},
+		{"*.example.org", false, "the same shape, one authority deep"},
+	} {
+		if got := matchesUnscopedNames(tc.pattern); got != tc.broad {
+			t.Errorf("matchesUnscopedNames(%q) = %v, want %v — %s", tc.pattern, got, tc.broad, tc.why)
+		}
+	}
+
+	// The classification is only correct if §4.1a's shipped list
+	// survives it. Rows 1, 3 and 4 name name-transmitting kinds; if any
+	// of them classified as broad, the spec's own recommended default
+	// would be self-violating.
+	if err := ValidateResolverConfig(DefaultResolverConfig()); err != nil {
+		t.Fatalf("the §4.1a default list does not survive its own MUST: %v", err)
 	}
 }
 
@@ -211,6 +332,62 @@ func TestValidateResolverConfig_CatchAllMustNotTransmitTheName(t *testing.T) {
 // round trip and the idempotence. An operator's config is theirs; a
 // bootstrap helper that rewrote it every start would be a configuration
 // surface that silently reverts.
+// TestResolverConfig_RefusesAViolatingConfigAtLoad pins §11.1's
+// PLACEMENT: "refused or normalized **at load**". Enforcing only on
+// author is the variant that fails, because what a config means depends
+// on a vocabulary outside it — a kind that was inert under §4.2 when it
+// was written becomes disclosing the moment it is declared, and nothing
+// re-examines a config that was validated once.
+//
+// The fixture writes the entity straight to the tree, bypassing
+// InstallResolverConfig, which is exactly how a config authored by an
+// older build (or another tool) arrives.
+//
+// Tier: contract pin.
+func TestResolverConfig_RefusesAViolatingConfigAtLoad(t *testing.T) {
+	ap, err := CreatePeer(PeerConfig{Extensions: ExtensionsConfig{Registry: &RegistryConfig{}}})
+	if err != nil {
+		t.Fatalf("CreatePeer: %v", err)
+	}
+	defer ap.Close()
+
+	violating := types.ResolverConfigData{
+		ResolverChain: []types.ResolverChainEntry{{BackendKind: types.BackendKindDNSTXT, Priority: 0}},
+		NameFormatDispatch: []types.DispatchEntry{
+			{Pattern: CatchAllPattern, BackendKinds: []string{types.BackendKindDNSTXT}},
+		},
+	}
+	ent, err := violating.ToEntity()
+	if err != nil {
+		t.Fatalf("ToEntity: %v", err)
+	}
+	if _, err := ap.PutEntity(types.ResolverConfigStoragePath, ent); err != nil {
+		t.Fatalf("PutEntity: %v", err)
+	}
+
+	cfg, found, err := ap.ResolverConfig()
+	if err == nil {
+		t.Fatal("a stored config whose catch-all names dns-txt loaded clean; §11.1 refuses at load, " +
+			"and a write-time-only check never re-examines what is already in the tree")
+	}
+	if !found {
+		t.Error("the refusal also reported not-found; the entity is there and an operator has to see it")
+	}
+	if len(cfg.NameFormatDispatch) != 1 {
+		t.Errorf("the refusal withheld the config (%+v); a load-time refusal denies USE, not SIGHT — "+
+			"an operator cannot repair bytes they cannot read", cfg)
+	}
+
+	// And Ensure does not paper over it by reinstalling the default.
+	// That would be §11.1's normalization half, applied to somebody
+	// else's privacy configuration, on a boot they did not ask about.
+	if wrote, err := ap.EnsureResolverConfig(); err == nil {
+		t.Error("EnsureResolverConfig accepted a violating stored config")
+	} else if wrote {
+		t.Error("EnsureResolverConfig overwrote a violating config instead of refusing it")
+	}
+}
+
 func TestEnsureResolverConfig_InstallsOnceAndDoesNotOverwrite(t *testing.T) {
 	ap, err := CreatePeer(PeerConfig{Extensions: ExtensionsConfig{Registry: &RegistryConfig{}}})
 	if err != nil {
