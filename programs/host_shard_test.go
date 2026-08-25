@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // TIER: integration (TESTING-STRATEGY) — a real AppPeer, real store, real
 // compute evaluator. Naming the tier is the discipline.

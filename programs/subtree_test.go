@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // TIER: integration (TESTING-STRATEGY) — real peer, store, evaluator.
 //

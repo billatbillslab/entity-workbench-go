@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // SHARDED LIFE AUTHORING — the host-managed static-k floor as a real mounted
 // program, not a test rig.

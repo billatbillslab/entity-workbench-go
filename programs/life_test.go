@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // LifeGameModel tests — model-tier (TESTING-STRATEGY): the runtime
 // harness semantics (seed, tick, the two fixed-point stops, restart,

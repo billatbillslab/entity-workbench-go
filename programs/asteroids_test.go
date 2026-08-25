@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // AsteroidsGameModel tests — model-tier (TESTING-STRATEGY): the runtime harness
 // semantics (seed, tick, held-key input port, display-list derivation, restart,

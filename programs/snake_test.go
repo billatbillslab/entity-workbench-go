@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // SnakeGameModel tests — model-tier (TESTING-STRATEGY): the runtime
 // harness semantics (seed, tick, input port, death-stop, restart,

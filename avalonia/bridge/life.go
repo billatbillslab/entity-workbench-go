@@ -1,7 +1,7 @@
 package main
 
 // Life game panel bridge surface — the display driver seam for the
-// Conway's Life hostable compute program (wb.LifeGameModel). Adds
+// Conway's Life hostable compute program (pg.LifeGameModel). Adds
 // LifeOpen / LifeRegisterWake / LifeStart / LifeStop / LifeRestart /
 // LifeRender / LifeClose to the cgo envelope (D14).
 //
@@ -37,14 +37,14 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	wb "entity-workbench-go/workbench"
+	pg "entity-workbench-go/programs"
 )
 
 // lifeHandle bundles a LifeGameModel with the wake-coalescing goroutine
 // channels. Tagged with peerHandleID for cascade.
 type lifeHandle struct {
 	peerHandleID int64
-	model        *wb.LifeGameModel
+	model        *pg.LifeGameModel
 	cancelChange func()
 
 	wakeCh     chan struct{}
@@ -77,7 +77,7 @@ func LifeOpen(peerHandle C.int64_t) (result *C.char) {
 
 	h := atomic.AddInt64(&lifeCounter, 1)
 	root := fmt.Sprintf("app/life/ui-%d", h)
-	model, err := wb.NewLifeGameModel(hp.AppPeer, root, 0)
+	model, err := pg.NewLifeGameModel(hp.AppPeer, root, 0)
 	if err != nil {
 		return C.CString(fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()))
 	}

@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // AUTHORING — writing a program into the tree as durable, content-addressed
 // artifacts, so a host can mount it without ever calling a Go builder.

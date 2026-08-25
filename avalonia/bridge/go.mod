@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	entity-workbench-go/entitysdk v0.0.0
+	entity-workbench-go/programs v0.0.0
 	entity-workbench-go/shellboot v0.0.0
 	entity-workbench-go/shellcmd v0.0.0
 )
@@ -22,6 +23,7 @@ replace (
 	go.entitychurch.org/entity-core-go/core => ../../../entity-core-go/core
 	go.entitychurch.org/entity-core-go/ext => ../../../entity-core-go/ext
 	entity-workbench-go/entitysdk => ../../entitysdk
+	entity-workbench-go/programs => ../../programs
 	entity-workbench-go/shellboot => ../../shellboot
 	entity-workbench-go/shellcmd => ../../shellcmd
 	entity-workbench-go/shellpanel => ../../shellpanel

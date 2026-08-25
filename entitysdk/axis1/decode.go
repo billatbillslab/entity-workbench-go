@@ -391,8 +391,22 @@ func (d *decoder) decodeApply(ent entity.Entity, lex *compileLevel) (node, error
 	if err := ecf.Decode(ent.Data, &v); err != nil {
 		return nil, err
 	}
-	// Operation MUST be "eval" for builtins (§9.2); anything else is Stage-1's
-	// to reject, with its exact message.
+
+	// Mirror Stage-1's dispatch shape (ext/compute/eval_apply.go::evalApply): a
+	// Path is builtin/handler dispatch; an empty Path with an Fn is a CLOSURE
+	// application; neither is the error. Take the closure branch first, because a
+	// closure application carries no Operation (builder.go::applyClosure) and
+	// would otherwise be swallowed by the Operation!="eval" fallback below.
+	if v.Path == "" {
+		if !v.Fn.IsZero() {
+			return d.decodeApplyClosure(ent, v, lex)
+		}
+		// "compute/apply requires path or fn" — let Stage-1 raise it verbatim.
+		return fallbackNode{ent: ent}, nil
+	}
+
+	// Path != "": builtin or handler dispatch. Operation MUST be "eval" for
+	// builtins (§9.2); anything else is Stage-1's to reject, with its exact message.
 	if v.Operation != "eval" {
 		return fallbackNode{ent: ent}, nil
 	}
@@ -429,6 +443,32 @@ func (d *decoder) decodeApply(ent entity.Entity, lex *compileLevel) (node, error
 	default:
 		return fallbackNode{ent: ent}, nil
 	}
+}
+
+// decodeApplyClosure decodes a closure application — compute/apply with an Fn
+// hash and named Args, no Path (builder.go::applyClosure). The fn expression is
+// decoded in the caller's lexical scope (it resolves to a live closure at eval);
+// the args are decoded here too but stay keyed by param NAME, since the slot
+// order is the closure's, bound at eval when fn is known.
+//
+// The fn is usually a lookup/tree (the fixpoint self-reference) or an inline
+// lambda; both are native. A fn hash pointing at anything else is decoded like
+// any child — if it fails to resolve to a live closure at eval, evalApply routes
+// the whole application to Stage-1 from ent.
+func (d *decoder) decodeApplyClosure(ent entity.Entity, v types.ComputeApplyData, lex *compileLevel) (node, error) {
+	fn, err := d.decodeChild(v.Fn, lex, "apply fn")
+	if err != nil {
+		return nil, err
+	}
+	args := make(map[string]node, len(v.Args))
+	for name, h := range v.Args {
+		an, err := d.decodeChild(h, lex, "apply arg "+name)
+		if err != nil {
+			return nil, err
+		}
+		args[name] = an
+	}
+	return applyNode{fn: fn, args: args, ent: ent}, nil
 }
 
 // decodeCollArgs decodes the shared collection/fn args of map/filter/fold.

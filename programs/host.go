@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // THE GENERIC HOST — mount(descriptor) → a running program, with zero
 // per-program code.

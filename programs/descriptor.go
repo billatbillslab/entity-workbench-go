@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // THE PROGRAM DESCRIPTOR — `app/program/interface`, the manifest that makes a
 // compute program addressable as a program rather than merely present in the

@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // THE SHAPE DRIVER REGISTRY — the I/O ABI.
 //

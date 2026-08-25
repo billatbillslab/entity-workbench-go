@@ -184,6 +184,9 @@ func (e *evaluator) evalInner(n node, fr *frame, root map[string]interface{}) (i
 	case foldNode:
 		return e.evalFold(t, fr, root)
 
+	case applyNode:
+		return e.evalApply(t, fr, root)
+
 	case fallbackNode:
 		e.local.Fallbacks++
 		return e.evalFallback(t, fr, root)
@@ -465,14 +468,20 @@ func (e *evaluator) evalIndex(t indexNode, fr *frame, root map[string]interface{
 	if err != nil {
 		return nil, err
 	}
-	idx, ok := asInt64Index(idxVal)
-	if !ok {
+	idx, isInt, inInt64 := asIndex(idxVal)
+	if !isInt {
 		return nil, newError(compute.ErrTypeMismatch,
 			fmt.Sprintf("compute/index requires an integer index, got %T", idxVal))
 	}
-	if idx < 0 || idx >= int64(len(arr)) {
+	// F-2 (§9.1): an integer index whose magnitude overflows int64 is still a
+	// well-formed index argument — it is necessarily ≥ len(arr), so it is out of
+	// range, not a type error. Fold that into the bounds check exactly as Stage-1
+	// does, so a uint64 above MaxInt64 answers index_out_of_range, not
+	// type_mismatch (the divergence AE-5 caught: worked/record/index-out-of-range-uint).
+	if !inInt64 || idx < 0 || idx >= int64(len(arr)) {
 		return nil, newError(compute.ErrIndexOutOfRange,
-			fmt.Sprintf("index %d out of range for array of length %d", idx, len(arr)))
+			fmt.Sprintf("index %s out of range for array of length %d",
+				indexMagnitude(idxVal, idx, inInt64), len(arr)))
 	}
 	return arr[idx], nil
 }
@@ -543,6 +552,55 @@ func (e *evaluator) invokeClosure(cl *closure, args []interface{}, root map[stri
 	inner := newFrame(nil, cl.node.nslots, cl.env)
 	copy(inner.slots, args)
 	return e.eval(cl.node.body, inner, root)
+}
+
+// evalApply evaluates a closure application (compute/apply with an fn, no Path)
+// — mirrors ext/compute/eval_apply.go::evalApplyClosure.
+//
+// It returns a tailNode, NOT a nested e.eval, so the invocation joins the
+// enclosing trampoline. That is the whole reason native apply is worth building:
+// a tail-position self-call then iterates without growing depth, exactly as
+// Stage-1's tailCall does. The recurse corpus vector runs 5 levels deep against a
+// depth budget of 16 — it only reaches a value (rather than depth_exceeded) if
+// each self-apply continues the same eval() loop instead of nesting a new one.
+func (e *evaluator) evalApply(t applyNode, fr *frame, root map[string]interface{}) (interface{}, error) {
+	fnVal, err := e.eval(t.fn, fr, root)
+	if err != nil {
+		return nil, err
+	}
+	cl, ok := fnVal.(*closure)
+	if !ok {
+		// fn resolved to something other than a LIVE closure — a Stage-1 closure
+		// ENTITY (env is a content-addressed scope, not invocable against live
+		// frames), or a non-closure value (a type error). Both are Stage-1's to
+		// settle from the original entity: it invokes a closure entity via
+		// LoadScope, and raises "Apply target is not a closure" with the canonical
+		// message otherwise. Same documented seam resolveClosure keeps for map/fold
+		// fn args; count it as the fallback it is. (fn is re-evaluated inside
+		// Stage-1 here — accepted because this branch is off the native path and
+		// no corpus vector reaches it; the previous code fell the whole apply back
+		// too.)
+		e.local.Fallbacks++
+		return e.evalFallback(fallbackNode{ent: t.ent}, fr, root)
+	}
+	// Bind args into a fresh invocation frame over the closure's captured env, in
+	// the CLOSURE's param order. Each arg is evaluated against the CALLER's frame
+	// (Stage-1 evaluates every arg in the caller's scope before Setting it into
+	// the closure's newScope), so args cannot see each other or the params.
+	e.local.Frames++
+	inner := newFrame(nil, cl.node.nslots, cl.env)
+	for i, p := range cl.node.params {
+		an, ok := t.args[p]
+		if !ok {
+			return nil, newError(compute.ErrMissingArgument, "Missing argument: "+p)
+		}
+		av, err := e.eval(an, fr, root)
+		if err != nil {
+			return nil, err
+		}
+		inner.slots[i] = av
+	}
+	return tailNode{n: cl.node.body, fr: inner, root: root}, nil
 }
 
 // evalMap mirrors ext/compute/builtins.go::builtinMap.

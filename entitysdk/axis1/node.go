@@ -199,6 +199,30 @@ type foldNode struct {
 	coll, fn, initial node
 }
 
+// applyNode is a compute/apply CLOSURE application: an fn expression that
+// resolves to a closure, plus named args (builder.go::applyClosure — Fn set, no
+// Path). Stage-1 ref: evalApplyClosure, ext/compute/eval_apply.go.
+//
+// args stays keyed by param NAME, not pre-ordered into slots, because the
+// positional order is the CLOSURE's (its params) and is not known until fn
+// evaluates — the same fn hash can, in principle, resolve to different closures.
+//
+// ent is retained for the seam: if fn resolves to a Stage-1 closure ENTITY
+// rather than a live *closure (its env is a content-addressed scope, not
+// invocable against live frames), or to a non-closure value, the application
+// routes to Stage-1 from the original entity — the same boundary resolveClosure
+// keeps for map/fold fn args (eval.go).
+//
+// Evaluating this returns a tailNode, so a tail-position self-call joins the
+// enclosing trampoline instead of nesting a new eval — which is what lets a
+// tail-recursive program iterate without growing depth (§4c / the recurse corpus
+// vector: 5 levels deep against a depth budget of 16).
+type applyNode struct {
+	fn   node
+	args map[string]node
+	ent  entity.Entity
+}
+
 // --- The Stage-1 fallback seam ---
 
 // fallbackNode carries an expression this engine does not implement (compute/apply
@@ -242,4 +266,5 @@ func (castNode) isNode()      {}
 func (mapNode) isNode()       {}
 func (filterNode) isNode()    {}
 func (foldNode) isNode()      {}
+func (applyNode) isNode()     {}
 func (fallbackNode) isNode()  {}

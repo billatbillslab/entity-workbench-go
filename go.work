@@ -7,6 +7,7 @@ use (
 	./shellpanel
 	./shell
 	./workbench
+	./programs
 	./console
 	./perfreview
 	./inspect

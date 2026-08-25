@@ -1,6 +1,6 @@
 package main
 
-// GENERIC HOST BRIDGE — the cgo seam for wb.Host (mount any compute program
+// GENERIC HOST BRIDGE — the cgo seam for pg.Host (mount any compute program
 // from its descriptor).
 //
 // This file replaces what life.go + snake.go + asteroids.go do, with ONE seam
@@ -13,7 +13,7 @@ package main
 //
 // Exactly one thing: `authors`, the name → Author dispatch. Authoring IS
 // per-program (it is how a program gets written); the falsifiable claim is that
-// the HOST has no per-program code, and wb.Host is what carries it. Once
+// the HOST has no per-program code, and pg.Host is what carries it. Once
 // ProgramAuthor has run, nothing below this line knows what a Life is.
 //
 // The split is visible in the API on purpose:
@@ -54,7 +54,7 @@ import (
 	"unsafe"
 
 	"entity-workbench-go/entitysdk"
-	wb "entity-workbench-go/workbench"
+	pg "entity-workbench-go/programs"
 )
 
 // programAuthorDispatch is the ONLY per-program branch in this file, and it is
@@ -68,11 +68,11 @@ import (
 func programAuthorDispatch(name string, ap *entitysdk.AppPeer, root string) (string, error) {
 	switch name {
 	case "life":
-		return wb.AuthorLife(ap, root, 0x5eed1)
+		return pg.AuthorLife(ap, root, 0x5eed1)
 	case "snake":
-		return wb.AuthorSnake(ap, root, 0x5eed2)
+		return pg.AuthorSnake(ap, root, 0x5eed2)
 	case "asteroids":
-		return wb.AuthorAsteroids(ap, root, 0x5eed3)
+		return pg.AuthorAsteroids(ap, root, 0x5eed3)
 	case "life-big":
 		// The sharded floor, end to end to a screen: 64×64 arith Life — ~16× past
 		// the ~24×24 single-eval budget cliff, so it CANNOT mount unsharded. It
@@ -80,7 +80,7 @@ func programAuthorDispatch(name string, ap *entitysdk.AppPeer, root string) (str
 		// family (k=8, program-owned gather stitch). Same ProgramPanel, same shape
 		// driver (text) — the panel never learns it is sharded; the descriptor's
 		// shard block is the host's concern alone.
-		return wb.AuthorLifeSharded(ap, root, 0x5eed4, 64, 64, 8)
+		return pg.AuthorLifeSharded(ap, root, 0x5eed4, 64, 64, 8)
 	default:
 		return "", fmt.Errorf("unknown program %q (have: life, snake, asteroids, life-big)", name)
 	}
@@ -90,7 +90,7 @@ func programAuthorDispatch(name string, ap *entitysdk.AppPeer, root string) (str
 // channels. Tagged with peerHandleID for cascade.
 type programHandle struct {
 	peerHandleID int64
-	host         *wb.Host
+	host         *pg.Host
 	cancelChange func()
 
 	wakeCh     chan struct{}
@@ -147,7 +147,7 @@ func ProgramMount(peerHandle C.int64_t, descriptorPath *C.char) (result *C.char)
 		return C.CString(errBadPeer)
 	}
 
-	host, err := wb.Mount(hp.AppPeer, C.GoString(descriptorPath))
+	host, err := pg.Mount(hp.AppPeer, C.GoString(descriptorPath))
 	if err != nil {
 		return C.CString(fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()))
 	}
@@ -268,7 +268,7 @@ func ProgramInputKeys(h C.int64_t, portName *C.char, keys C.int64_t) (result *C.
 	if ph == nil {
 		return C.CString(`{"ok":false,"error":"unknown program handle"}`)
 	}
-	typ, data, err := wb.EncodeKeySet(uint64(keys))
+	typ, data, err := pg.EncodeKeySet(uint64(keys))
 	if err != nil {
 		return C.CString(fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()))
 	}
@@ -287,7 +287,7 @@ func ProgramInputDirection(h C.int64_t, portName *C.char, dir C.int64_t) (result
 	if ph == nil {
 		return C.CString(`{"ok":false,"error":"unknown program handle"}`)
 	}
-	typ, data, err := wb.EncodeDirection(uint64(dir))
+	typ, data, err := pg.EncodeDirection(uint64(dir))
 	if err != nil {
 		return C.CString(fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()))
 	}
@@ -308,8 +308,8 @@ type portDTO struct {
 	Shape string                 `json:"shape"`
 	Scene map[string]interface{} `json:"scene,omitempty"`
 
-	Text        *wb.TextFrame   `json:"text,omitempty"`
-	DisplayList *wb.DisplayList `json:"displayList,omitempty"`
+	Text        *pg.TextFrame   `json:"text,omitempty"`
+	DisplayList *pg.DisplayList `json:"displayList,omitempty"`
 }
 
 // inputDTO is a declared input port. The frame carries these so a driver can
@@ -358,14 +358,14 @@ func ProgramRender(h C.int64_t) (result *C.char) {
 	for name, pv := range frame.Ports {
 		p := portDTO{Name: pv.Name, Shape: pv.Shape, Scene: pv.Scene}
 		switch pv.Shape {
-		case wb.ShapeText:
-			tf, err := wb.DecodeTextFrame(pv)
+		case pg.ShapeText:
+			tf, err := pg.DecodeTextFrame(pv)
 			if err != nil {
 				return C.CString(fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()))
 			}
 			p.Text = &tf
-		case wb.ShapeDisplayList:
-			dl, err := wb.DecodeDisplayList(pv)
+		case pg.ShapeDisplayList:
+			dl, err := pg.DecodeDisplayList(pv)
 			if err != nil {
 				return C.CString(fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()))
 			}

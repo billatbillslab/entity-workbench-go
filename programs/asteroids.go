@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // AsteroidsGameModel — the renderer-neutral model for the Asteroids hostable
 // compute program: the first HETEROGENEOUS, VARIABLE-ACTOR-SET program in the

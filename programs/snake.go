@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // SnakeGameModel — the renderer-neutral model for the Snake hostable
 // compute program, and the first product consumer of the compute-program

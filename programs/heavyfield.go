@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // HEAVY FIELD — a compute-INTENSIVE wide map, the experimental control for
 // "true parallel cost vs. store-read cost" (arch §5.3 first bullet).

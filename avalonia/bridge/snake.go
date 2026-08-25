@@ -1,7 +1,7 @@
 package main
 
 // Snake game panel bridge surface — the display/input driver seam for
-// the Snake hostable compute program (wb.SnakeGameModel). Adds
+// the Snake hostable compute program (pg.SnakeGameModel). Adds
 // SnakeOpen / SnakeRegisterWake / SnakeInput / SnakeStart / SnakeStop /
 // SnakeRestart / SnakeRender / SnakeClose to the cgo envelope (D14).
 //
@@ -33,14 +33,14 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	wb "entity-workbench-go/workbench"
+	pg "entity-workbench-go/programs"
 )
 
 // snakeHandle bundles a SnakeGameModel with the wake-coalescing
 // goroutine channels. Tagged with peerHandleID for cascade.
 type snakeHandle struct {
 	peerHandleID int64
-	model        *wb.SnakeGameModel
+	model        *pg.SnakeGameModel
 	cancelChange func()
 
 	wakeCh     chan struct{}
@@ -73,7 +73,7 @@ func SnakeOpen(peerHandle C.int64_t) (result *C.char) {
 
 	h := atomic.AddInt64(&snakeCounter, 1)
 	root := fmt.Sprintf("app/snake/ui-%d", h)
-	model, err := wb.NewSnakeGameModel(hp.AppPeer, root, 0)
+	model, err := pg.NewSnakeGameModel(hp.AppPeer, root, 0)
 	if err != nil {
 		return C.CString(fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()))
 	}

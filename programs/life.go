@@ -1,4 +1,4 @@
-package workbench
+package programs
 
 // LifeGameModel — the renderer-neutral model for Conway's Game of Life
 // as a hostable compute program, and the second product consumer of the

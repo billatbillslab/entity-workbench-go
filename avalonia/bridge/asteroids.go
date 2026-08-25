@@ -1,7 +1,7 @@
 package main
 
 // Asteroids game panel bridge surface — the display/input driver seam for the
-// Asteroids hostable compute program (wb.AsteroidsGameModel). Adds
+// Asteroids hostable compute program (pg.AsteroidsGameModel). Adds
 // AsteroidsOpen / AsteroidsRegisterWake / AsteroidsInput / AsteroidsStart /
 // AsteroidsStop / AsteroidsRestart / AsteroidsRender / AsteroidsClose to the
 // cgo envelope (D14).
@@ -45,14 +45,14 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	wb "entity-workbench-go/workbench"
+	pg "entity-workbench-go/programs"
 )
 
 // asteroidsHandle bundles an AsteroidsGameModel with the wake-coalescing
 // goroutine channels. Tagged with peerHandleID for cascade.
 type asteroidsHandle struct {
 	peerHandleID int64
-	model        *wb.AsteroidsGameModel
+	model        *pg.AsteroidsGameModel
 	cancelChange func()
 
 	wakeCh     chan struct{}
@@ -85,7 +85,7 @@ func AsteroidsOpen(peerHandle C.int64_t) (result *C.char) {
 
 	h := atomic.AddInt64(&asteroidsCounter, 1)
 	root := fmt.Sprintf("app/asteroids/ui-%d", h)
-	model, err := wb.NewAsteroidsGameModel(hp.AppPeer, root, 0)
+	model, err := pg.NewAsteroidsGameModel(hp.AppPeer, root, 0)
 	if err != nil {
 		return C.CString(fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()))
 	}

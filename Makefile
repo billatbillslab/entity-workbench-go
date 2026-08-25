@@ -12,7 +12,7 @@
 #   make test                                  Full test sweep (race, count=1)
 #   make test ARGS="-run TestE2E_Mount -v"     Narrow + verbose
 #   make test-sdk / test-shell                 Per-module sweeps
-#   make test-shellcmd / test-workbench
+#   make test-shellcmd / test-workbench / test-programs
 #   make build                                 Build all shipped binaries
 #                                              (entity-shell + entity-console)
 #   make shell-build                           Just the entity-shell binary
@@ -74,7 +74,7 @@ export GOTOOLCHAIN ?= go1.25.1
 # includes the same file and uses the caps on every podman build/run.
 include caps.mk
 
-.PHONY: workbench-test console-build console-run test test-native test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-publish perfreview build build-native shell shell-test shell-help shell-once shell-build publish-build publish-serve vcs-build fetch-build go clean clean-strays ensure-bindir image help lint fmt check lint-native fmt-native
+.PHONY: workbench-test console-build console-run test test-native test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-publish perfreview build build-native shell shell-test shell-help shell-once shell-build publish-build publish-serve vcs-build fetch-build go clean clean-strays ensure-bindir image help lint fmt check lint-native lint-perfreview fmt-native
 
 # ============================================================
 # make + podman — bare-box entry points
@@ -302,7 +302,7 @@ ensure-bindir:
 # matches the perfreview target's -timeout=20m precedent.
 GOTEST_FLAGS := -race -count=1 -timeout=30m
 
-test-native: test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-inspect
+test-native: test-sdk test-shell test-shellboot test-shellcmd test-shellpanel test-workbench test-programs test-inspect
 	@echo "--- full sweep passed ---"
 
 # Native lint/fmt workers (used directly on a Go host AND re-invoked inside the
@@ -311,13 +311,24 @@ test-native: test-sdk test-shell test-shellboot test-shellcmd test-shellpanel te
 # tree (gofmt operates on files, so one pass covers every module). Note: the
 # shipped-binary modules console/entity-{publish,vcs,fetch} are not vetted here
 # — widen LINT_MODULES if lint should track the full `make build` ship set.
-LINT_MODULES := entitysdk inspect shell shellboot shellcmd shellpanel workbench publish
+LINT_MODULES := entitysdk inspect shell shellboot shellcmd shellpanel workbench programs publish
 
-lint-native:
+lint-native: lint-perfreview
 	@for m in $(LINT_MODULES); do \
 		echo "== vet $$m =="; (cd $$m && go vet $(ARGS) ./...) || exit 1; \
 	done
 	@echo "--- vet clean ---"
+
+# perfreview rot guard. Every file in perfreview/ is `//go:build perfreview`, so
+# it is invisible to `make test` and to the plain `go vet ./...` above — it once
+# rotted silently against a kernel surface change and nothing caught it. This is
+# compile-only ON PURPOSE: the benches take ~20m and must not run under -race
+# (modernc.org/sqlite is ~17x slower there, so the numbers would be garbage —
+# AGENTS.md). Vetting with the tag proves the module still compiles against the
+# current kernel without paying for a run.
+lint-perfreview:
+	@echo "== vet perfreview (tagged) =="
+	@cd perfreview && go vet -tags=perfreview ./... || exit 1
 
 fmt-native:
 	gofmt -w .
@@ -343,6 +354,12 @@ test-shellpanel:
 
 test-workbench:
 	cd workbench && go test $(GOTEST_FLAGS) $(ARGS) ./...
+
+# The entity-native programs track (generic host + descriptors + the
+# Life/Snake/Asteroids/heavyfield programs). Extracted out of `workbench`
+# so the app's renderer-neutral model layer stays the model layer.
+test-programs:
+	cd programs && go test $(GOTEST_FLAGS) $(ARGS) ./...
 
 test-publish:
 	cd publish && go test $(GOTEST_FLAGS) $(ARGS) ./...

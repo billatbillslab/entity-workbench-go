@@ -380,19 +380,43 @@ func truthy(value interface{}) bool {
 	return true
 }
 
-// asInt64Index mirrors ext/compute/eval_construct.go::asInt64Index. Accepts
-// int64 and uint64 (rejecting uint64 above MaxInt64 — not a valid index in any
-// case). Floats are rejected.
-func asInt64Index(v interface{}) (int64, bool) {
+// asIndex mirrors ext/compute/eval_construct.go::asIndex. It returns three
+// facts, not two, because "is this an integer?" and "does it fit int64?" are
+// distinct questions with distinct error codes (F-2 / R3 §9.1):
+//
+//   - isInt   — an int64 or a uint64 is a well-formed integer index argument;
+//     anything else (a float, a string, …) is a type_mismatch.
+//   - inInt64 — whether the magnitude fits int64. A uint64 above MaxInt64 does
+//     NOT fit, but is STILL a valid integer index — it is just
+//     necessarily out of range (no array approaches 2⁶³ elements), so
+//     it is index_out_of_range, not a type error.
+//
+// The earlier two-value asInt64Index collapsed these, answering type_mismatch
+// for a uint64 above MaxInt64 where the ruling (Rust ruled correct over Go's
+// old type_mismatch) says index_out_of_range. This is that fix, transcribed.
+func asIndex(v interface{}) (idx int64, isInt, inInt64 bool) {
 	switch n := v.(type) {
 	case int64:
-		return n, true
+		return n, true, true
 	case uint64:
 		if n <= math.MaxInt64 {
-			return int64(n), true
+			return int64(n), true, true
+		}
+		return 0, true, false
+	}
+	return 0, false, false
+}
+
+// indexMagnitude mirrors ext/compute/eval_construct.go::indexMagnitude: render a
+// uint64 index that overflowed int64 by its true unsigned value, so the
+// out-of-range message reports the magnitude the caller actually passed.
+func indexMagnitude(v interface{}, idx int64, inInt64 bool) string {
+	if !inInt64 {
+		if u, ok := v.(uint64); ok {
+			return fmt.Sprintf("%d", u)
 		}
 	}
-	return 0, false
+	return fmt.Sprintf("%d", idx)
 }
 
 // toStringMap mirrors ext/compute/handler.go::toStringMap.
