@@ -58,8 +58,10 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
 
     private Bridge.TreeWakeCallback? _wakeCallback;
     private GCHandle _wakeCallbackHandle; // explicit GC root (P6)
-    private bool _renderQueued;
-    private bool _disposed;
+    // Touched from BOTH the Go wake thread (OnWakeFromGo) and the UI thread (the
+    // Post lambda / Dispose): volatile so neither reads a stale cached value.
+    private volatile bool _renderQueued;
+    private volatile bool _disposed;
     private bool _running;
 
     // Held-key state for `key-set` ports. The driver ORs bits; the program
@@ -422,7 +424,29 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
             private static readonly IBrush FgBrush = new SolidColorBrush(Color.FromRgb(120, 200, 235));
             private static readonly Typeface Mono = new(new FontFamily("monospace"));
 
+            // Per-glyph FormattedText cache, keyed by code point, valid for one
+            // cell size. A grid has only a handful of DISTINCT glyphs (Life: 2,
+            // the field: 4), but thousands of CELLS — so the old code allocated one
+            // FormattedText per cell per frame (4096/frame at 64×64), an
+            // allocation/GC storm on the render thread that scales with grid area.
+            // FormattedText is immutable and reusable: build one per glyph and draw
+            // it at every cell. Same pixels, ~grid-area fewer allocations. Rebuilt
+            // when the cell size changes (a resize), never per frame.
+            private readonly Dictionary<int, FormattedText> _glyphCache = new();
+            private double _cachedCell = -1;
+
             public void SetFrame(TextFrameDto? f) { _frame = f; InvalidateVisual(); }
+
+            private FormattedText Glyph(int ch32, double cell)
+            {
+                if (_glyphCache.TryGetValue(ch32, out var ft)) return ft;
+                ft = new FormattedText(
+                    char.ConvertFromUtf32(ch32),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight, Mono, cell * 0.95, FgBrush);
+                _glyphCache[ch32] = ft;
+                return ft;
+            }
 
             public override void Render(DrawingContext ctx)
             {
@@ -444,6 +468,9 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
                 double ox = (Bounds.Width - cell * cols) / 2;
                 double oy = (Bounds.Height - cell * rows) / 2;
 
+                // The glyph cache is sized for one cell size; a resize invalidates it.
+                if (cell != _cachedCell) { _glyphCache.Clear(); _cachedCell = cell; }
+
                 for (int y = 0; y < rows; y++)
                 {
                     for (int x = 0; x < cols; x++)
@@ -452,10 +479,11 @@ public sealed class ProgramPanel : UserControl, IDisposable, IPanelPreferredHeig
                         if (i >= f.Cells.Length) continue;
                         var ch32 = (int)f.Cells[i];
                         if (ch32 == ' ' || ch32 == 0) continue;
-                        var text = new FormattedText(
-                            char.ConvertFromUtf32(ch32),
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            FlowDirection.LeftToRight, Mono, cell * 0.95, FgBrush);
+                        // Only ever draw valid, printable code points — a bad value
+                        // (out of Unicode range or a surrogate) would throw inside
+                        // ConvertFromUtf32 and take down the render thread.
+                        if (ch32 < 0x20 || ch32 > 0x10FFFF || (ch32 >= 0xD800 && ch32 <= 0xDFFF)) continue;
+                        var text = Glyph(ch32, cell);
                         // Centre each glyph in its cell: a monospace advance is
                         // narrower than the em box, so left-aligning leaves the
                         // column visually adrift from the grid.

@@ -4,6 +4,7 @@ using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Themes.Fluent;
+using Avalonia.X11;
 using EntityAvalonia.Panels;
 
 namespace EntityAvalonia;
@@ -55,11 +56,29 @@ Flags:
         return BuildAvaloniaApp().StartWithClassicDesktopLifetime(avaloniaArgs);
     }
 
-    public static AppBuilder BuildAvaloniaApp() =>
-        AppBuilder.Configure<App>()
+    public static AppBuilder BuildAvaloniaApp()
+    {
+        var builder = AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .WithInterFont()
             .LogToTrace();
+
+        // GPU rendering (mesa hardware GL) intermittently SIGSEGVs on some drivers
+        // — the render itself is proven crash-free in software Skia (the headless
+        // ProgramPanelStressTests rasterize a 64×64 grid 400× with no GPU, and the
+        // Xvfb smoke runs use llvmpipe software GL). The fault is the driver path,
+        // not our paint code. Setting WB_SOFTWARE_RENDER forces CPU rendering to
+        // dodge it, without touching any render code. (Equivalent to the mesa
+        // LIBGL_ALWAYS_SOFTWARE=1 env, but a supported in-app switch.)
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WB_SOFTWARE_RENDER")))
+        {
+            builder = builder.With(new X11PlatformOptions
+            {
+                RenderingMode = new[] { X11RenderingMode.Software },
+            });
+        }
+        return builder;
+    }
 
     // ParseArgs strips our flags out of args and passes the rest through
     // to Avalonia (so things like --help-avalonia or future avalonia
