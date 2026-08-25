@@ -1,34 +1,21 @@
-
 # entity-workbench-go
 
 Read **AGENTS-STANDARD.md** first. This file adds entity-workbench-go specifics.
 
-> **⚠ There is no `docs/adr/ecosystem/` in this repo, and `AGENTS-STANDARD.md` is wrong where it
-> says there is.** A meta session injected the full text of 33 ecosystem ADRs into eleven church
-> repos' working trees on 2026-08-23, unauthorized; **[ADR-0030], which would have licensed it,
-> is retracted** (its own text still reads `Status: Accepted`, which is exactly why it is not to
-> be trusted as a status line). **Operator ruling, 2026-08-24: the copies come out and stay out.**
-> Two reasons, both worth keeping: **copied ADRs go stale**, and there is **no decision yet on
-> which ADRs are even publishable** — several are internal operations, nobody has audited them,
-> and the blanket injection pre-empted an audit that has not happened. Removed from this tree
-> **2026-08-24**. *(Per the standard's own conflict rule, this repo's `AGENTS.md` wins on
-> a repo-specific fact, and "does that directory exist here" is one. Meta owns re-cutting the
-> injected file; flagged to them in `reviews/RELEASE-READINESS-REPLY-2026-08-24.md`.)*
->
-> **Referencing an ADR is fine and expected — copying one is not.** `[ADR-NNNN]` unqualified
-> means the *ecosystem* ADR; cite your own repo's as `[<repo>-ADR-NNNN]`. Read the ADR at its
-> source in the meta repository before citing it. Two that change daily work here: **[ADR-0031]**
+> **Reference an ADR; do not copy one.** `[ADR-NNNN]` unqualified means the *ecosystem* ADR —
+> read it at its source rather than keeping a copy here, because a copy goes stale silently.
+> Cite this repo's own as `[<repo>-ADR-NNNN]`. Two that change daily work: **[ADR-0031]**
 > (`docs/status/` publishes nothing — so it is written for the next session, with no scrub
 > obligation) and **[ADR-0012] Am. 1** (in a *canonical* doc, cite by content or a release tag,
-> never a `dev` SHA — `spec-tool/cli.py pins --root .` measures it; we are at **117** (72 of them in the now-published `docs/STATUS.md`), backlog
-> **PR-5**). Both are decisions we follow independently of how their text arrived.
+> never a branch SHA, because published history is authored fresh at the release boundary and an
+> internal SHA resolves to nothing for a reader).
 >
-> **`git add -A` is not safe in this tree.** An overlay writes `AGENTS-STANDARD.md`,
-> `METHODOLOGY.md` and `docs/adr/ecosystem/` underneath you mid-session; on 2026-08-23 that
-> swept 4,083 lines of injected ADRs into a commit about something else — **and the report of it
-> undercounted what landed** (meta recorded 33 ADR files; arch measured 33 **plus** the modified
-> `AGENTS-STANDARD.md`). Stage explicit paths, or read `git status` before staging; and when
-> someone tells you what went into your tree, measure it in your tree.
+> **`git add -A` is not safe in this tree.** `AGENTS-STANDARD.md` and `METHODOLOGY.md` are shared
+> files maintained outside this repo and updated in place, so they can change underneath you
+> mid-session — and a blanket `add -A` then sweeps thousands of lines you did not write into a
+> commit about something else. It has happened here. **Stage explicit paths, or read
+> `git status` before staging.** The same habit generalizes: when a tool or a teammate tells you
+> what landed in your tree, measure it in your tree before repeating the number.
 
 ## Overview
 
@@ -42,8 +29,8 @@ in-tree `entitysdk/` is the **de facto reference SDK** (stewarded here until it 
 ## How we work here — Disciplines & Doctrines · tier **FULL**
 
 This repo runs the entity-OS methodology at the **Full** tier for the Avalonia/.NET UI runtime
-— held where conformance alone can't reach a GUI. The framework is `METHODOLOGY.md` (injected,
-identical everywhere); the charter below carries the local grounding, and **this repo is one of
+— held where conformance alone can't reach a GUI. The framework is `METHODOLOGY.md` (maintained
+upstream, identical in every repo); the charter below carries the local grounding, and **this repo is one of
 the worked instances the framework was reconciled from** — D1–D11 there are inherited verbatim,
 D12–D24 here are ours, earned on the eight crash-hunt commits, two feedback episodes, the
 2026-08-18 publisher/connectivity pair, the v1.13 adoption trio, the 2026-08-19 cross-impl
@@ -60,49 +47,29 @@ month-old fatal bug the moment an instrument could reach it.
   `docs/architecture/GUIDE-AVALONIA-PANEL-PATTERNS.md` (P0–P7, new panels lift these) +
   `TESTING-STRATEGY.md` + `LOGGING-CONVENTIONS.md`.
 
-Session start: read the charter → the model → **the sibling `../entity-system-architecture`
-repo for every document that names this repo — `cc` included, not just the `To:` line** (D21):
+Session start: read the charter → the substrate model → anything newer than the point
+`docs/STATUS.md` records as last read, and update that marker. A specification change that moves a
+*table*, a *default*, or a **MUST** is read the same session it is found, **before feature work** —
+it has twice been the case here that a landed spec change sat unread while we shipped past it, once
+leaving a validator rejecting a configuration that had become legal.
 
-```
-grep -ril 'workbench-go' ../entity-system-architecture/docs/status/
-```
+Three rules about work that crosses a repo boundary, each earned the hard way:
 
-*(That path is relative to the repo root. The `../../` form elsewhere in this file is
-relative to a Go module dir — every sibling repo named here sits beside this one under a
-shared parent, whatever that parent is called on your machine.)*
+- **An artifact that exists only in your working tree does not exist.** Commit and push before the
+  session that produced it ends, and cite the hash. We once had a specification revision folded
+  upstream — and implemented elsewhere — on the strength of a document that was in no commit in any
+  repo, so the provenance chain for a normative change terminated in one machine's working
+  directory. We had written that exact rule *outward* hours earlier and could not see it pointed at
+  ourselves.
+- **Delivery is a fact; addressing something is an intention.** Before carrying a *"waiting on
+  them"* row forward, establish the other side actually has it. Search for the **subject**, not the
+  filename — people cite your commits and your claims, never your file paths, so a filename miss
+  means nothing. One row here sat blocked for 24 days on a document that had never arrived.
+- **When you read another repo, its git is read-only.** `git status` first, stage specific paths,
+  never `git add -A` outside your own working directory.
 
-Read everything newer than the letter `docs/STATUS.md` records as last read, and update that
-letter. Anything found gets a row in `STATUS.md` or `docs/architecture/reviews/` **in that session,
-before feature work** — AP12, where a routed conformance finding sat unopened for a day while we
-shipped past it, and then D21, where a **cc'd** packet re-keyed a MUST we enforce as a refusal and
-our validator went on rejecting a legal config. A packet that says it changes a *table*, a
-*default*, or a *MUST* is read the same session regardless of who it is addressed to.
-
-**The sweep has an outbound arm too — AP28.** Before carrying any *"waiting on X"* row forward,
-establish that its packet was actually delivered. **Grep the counterpart's board and specs for the
-packet's *subject*, not its filename** — measured 2026-08-20, filenames are the wrong instrument:
-twelve of our `reviews/` packets appear by name nowhere in any sibling tree, and eleven of them had
-plainly landed (AE-5 is folded into `EXTENSION-COMPUTE` §11; `EXTENSION-DISCOVERY` names us by
-repo; four `WORKSTREAMS` rows carry our transport findings). Siblings cite our *commits and claims*,
-never our file paths, so a filename miss means nothing and a subject miss means everything.
-
-**And the arm before that one: a packet that is not committed has not been routed.** The `To:`
-line is an intention; a **hash** is the fact. Measured on us, 2026-08-21: arch folded
-`EXTENSION-REGISTRY` 1.20 → 1.21 — a normative revision now implemented at two other seats — on
-the strength of `reviews/REGISTRY-BINDING-TRANSPORTS-DIVERGENCE-2026-08-21.md`, **which existed
-in no commit in any repo**, so the provenance chain for a spec change terminated in one machine's
-working tree (`ROUTING-2026-08-21-k`). The bite is that we had written this exact rule *outward*
-hours earlier — our own fixture README objecting that a sibling's `dist-federation/` is gitignored
-and *"there is therefore no commit anywhere that contains these bytes."* **A rule is easy to see
-pointed at someone else and invisible pointed at yourself**, which is why it is here and not left
-as an intention. Commit and push before the session that produced a packet ends; then say which
-hash in the reply.
-
-The row that failed the test was `PROPOSAL-GENERIC-HOST-POINTER-INPUT-DEVICE-2026-07-27.md`: no
-filename hit, **no subject hit either** — five distinctive phrases, both sibling trees, zero — and no
-row on arch's board, after 24 days recorded here as *"blocked on arch."* **A `To:` line is an
-intention; delivery is a fact,** and the tell is a *"waiting on them"* row whose only citation is a
-path inside this repo.
+*(Sibling repositories named in this file sit beside this one under a shared parent. A `../` path
+is relative to the repo root; the `../../` form is relative to a Go module directory.)*
 
 Task start: open the matching doctrine. Every
 feature/audit ends by feeding its lessons back into the disciplines — the ratchet (*a feature
@@ -115,8 +82,7 @@ dump; `si_code` before `si_addr`). Open it at the *start* of any crash investiga
 whole point is that the intuitive order wastes days.
 The rest are still owed: for Feature / Audit / Foundation work, run the procedures as
 `METHODOLOGY.md` §7 states them and codify the substrate-native steps here when a run surfaces
-one (the browser repo's `DOCTRINES-BROWSER-SUBSTRATE.md` §0.5 is the model for how to earn
-them — name the recurring cycle first, then let each step own one lever of it).
+one — name the recurring cycle first, then let each step own one lever of it.
 
 ## Setup / environment
 
@@ -219,9 +185,9 @@ them — name the recurring cycle first, then let each step own one lever of it)
 - `make build` — all shipped Go binaries (entity-shell + entity-console).
 - **Every build/test target now refuses early if the sibling kernel is missing** (`preflight`,
   added 2026-08-24, AP41). `doctor` had that check from the day it was written and **nothing
-  called it**, so a solo clone of our published mirror produced forty lines of module-resolution
-  spew and no cause — arch measured exactly that (`ROUTING-2026-08-23-d`). The predicate lives
-  once as `SIBLING_PRESENT` and is shared with `doctor`. **No suite in this repo can regress
+  called it**, so cloning this repo on its own produced forty lines of module-resolution spew and
+  no cause — measured by someone doing exactly that. The predicate lives once as
+  `SIBLING_PRESENT` and is shared with `doctor`. **No suite in this repo can regress
   this**: a suite that runs at all is running in a tree where the sibling resolved, so if you
   touch it, test it the only way that works — `make preflight PARENT=/tmp/no-such-parent`.
 - **Entry points, for when you need to actually run the thing:** `make doctor` (prerequisites
@@ -368,7 +334,7 @@ entities):
   `CROSS-IMPL-HELPER-REFERENCE.md`, `PERFORMANCE-CHARACTERISTICS.md`). These are **undated /
   living** — edit in place.
   - **`docs/STATUS.md` — the rolling status log, and it lives OUTSIDE `docs/status/` on
-    purpose** (moved there 2026-08-24, operator ruling, matching keystone and the fleet).
+    purpose** (moved there 2026-08-24, to match the rest of the ecosystem).
     `docs/status/` is stripped wholesale from the published tree under [ADR-0031], so a
     rolling log left inside it is a canonical document sitting in a directory whose whole
     meaning is "none of this publishes". The path *is* the declaration: out of that
@@ -379,7 +345,7 @@ entities):
   - `docs/architecture/reviews/` — dated cross-team exchanges (`reviews/{TOPIC}-{DATE}.md`);
     closed ones move to `reviews/archive/`.
 - **`CANONICAL-DOCS.toml` is a published artifact, not configuration** (AP42). It is the whole
-  interface to DevOps — we declare, they publish ([ADR-0031]) — and its `blurb` is the prose a
+  interface to the release pipeline — we declare, it publishes ([ADR-0031]) — and its `blurb` is the prose a
   public reader gets **instead of** the document. Two rules, both earned on 2026-08-24: **(1) a
   blurb describes, it does not count** — every numeric range in it had gone false (D1–D23 for
   D1–D24, AP1–AP27 for AP1–AP40, "six-boundary" for seven, P0–P6 for P0–P7) plus a `github =`
@@ -392,17 +358,24 @@ entities):
   *withdrawn* at the next release. That was live on 2026-08-24 for seven files including
   `SECURITY.md`. Review the manifest against **what is currently published**, not just against
   the tree — the two move independently, so the answer changes without this repo changing.
-  Compare a filtered export of `dev` against `github/master` (**never local `master`** — ours is
-  141 commits ahead of public and answers this question wrong). The procedure and the local tool
-  paths belong in your git-ignored `AGENTS.local.md` / `.agents/`, not here.
+  Compare a filtered export of `dev` against the published remote (**never a local `master`** —
+  it drifts from what is actually published and answers this question wrong). The procedure and
+  the local tool paths belong in your git-ignored `AGENTS.local.md` / `.agents/`, not here.
 
   **(4) Declaring a doc changes what "internal" means about it.** `AGENTS.md` is written for us
-  and is now *published*, and internal infrastructure names are exactly what an
-  internal-audience document is made of — several had to be rewritten out of this file on the
-  day it was declared. **A machine-local or internal path belongs in the git-ignored
-  `AGENTS.local.md` / `.agents/`** ([ADR-0020]), never here. Assume you **cannot** self-check
-  that category — re-read a doc as a stranger when it joins the keep-list, because the manifest
-  edit is not the end of the job.
+  and is *published*, and internal infrastructure names are exactly what an internal-audience
+  document is made of — several had to be rewritten out of this file on the day it was declared,
+  **and more had to come out on 2026-08-25**, which is the part worth learning from. What
+  survived the first pass was everything that read as *engineering*: another team's incident
+  history, their process, packet identifiers, who miscounted what. It was all true and all
+  useless to the reader it was being shipped to. **A machine-local or internal path belongs in
+  the git-ignored `AGENTS.local.md` / `.agents/`** ([ADR-0020]), never here. Assume you
+  **cannot** self-check this category in one pass — the second reading is the one that finds it,
+  and the test is not "is this true" but "is this the reader's business."
+
+  Note rule (5) below already said this and was written to be applied to `docs/STATUS.md`. It
+  binds every declared file, this one included. **A rule stated in a document does not exempt
+  that document.**
 
   **(5) The rolling log is about this project.** `docs/STATUS.md` publishes; it carries our tree
   state, our defects, our decisions. Coordination with other teams — their processes, their
@@ -420,18 +393,15 @@ entities):
 ## Boundaries — do NOT modify
 
 - **You work on `dev`. You do not touch `master`, ever.** `master` is the **public canonical
-  mirror**, and it is **reset to public after each release** — it is not a branch this repo's
-  working sessions advance, propose advancing, or reason about. Promotion `dev → master` is the
-  **release act**, performed by maintainers / the release team through the central runbook
-  (`docs/RUNBOOK-RELEASE-SYNC.md`, owned by the coordination authority — leaves consume it by
-  reference and never fork it). ADR-0015 and its 2026-06-30 amendment are the authority; ADR-0022
-  covers the pipeline. **`dev` being ahead of `master` is the normal, expected steady state**, not
-  a pending decision and not a status-file row — it is simply unreleased work.
-  *Corrected 2026-08-23, by operator ruling:* `STATUS.md` had been carrying
-  *"the one decision left: `dev` is nine commits ahead of `master`"* as an open item across
-  sessions. That framing was out of role — it presented a release-team act as our decision, and
-  invited a future session to act on it. **A session that finds itself weighing a merge to
-  `master` has already gone wrong; there is nothing to weigh.**
+  mirror** and is republished at each release — it is not a branch this repo's working sessions
+  advance, propose advancing, or reason about. Promotion `dev → master` is the **release act**,
+  performed by maintainers; [ADR-0015] and its amendment are the authority, [ADR-0022] covers the
+  pipeline. **`dev` being ahead of `master` is the normal, expected steady state** — not a pending
+  decision, not a status-file row, simply unreleased work. This file used to carry *"the one
+  decision left: `dev` is N commits ahead of `master`"* as an open item across sessions, which
+  presented someone else's act as our decision and invited a future session to act on it.
+  **A session that finds itself weighing a merge to `master` has already gone wrong; there is
+  nothing to weigh.**
 - **`../entity-core-go/` is a sibling dependency, not part of this repo.** Read it for
   protocol/store behavior; never edit it from here (route cross-impl changes via `reviews/`
   per AGENTS-STANDARD).
@@ -527,7 +497,7 @@ entities):
   coordination first. To check whether an op is spec'd, read the `EXTENSION-*.md` section
   outline + manifest YAML (`pull: {input_type: ...}`) — grep with impl-style patterns misses
   unquoted YAML declarations.
-- **A `RULED` proposal is buildable. Build it** (operator ruling, 2026-08-19).
+- **A `RULED` proposal is buildable. Build it.**
   `AGENTS-STANDARD`'s *"implement against the landed spec, not in-flight proposals"* targets
   **unruled** proposals — a shape nobody has decided yet. A proposal stamped `RULED` in its
   header **is** a decision, and implementing ahead of the editorial fold is normal practice
@@ -573,8 +543,8 @@ entities):
     making our SDK succeed where the reference implementation fails** — that hides it in our tree.
   - **The walk is the authority; a served listing is a menu** (§6a.3a). `Registry.Enumerate` walks
     the signed root over the `by-name/` prefix and reports both sets *and their disagreement*.
-    Arch's standing ask (`ROUTING-2026-08-21-b` §3): say which one produced a row **in the
-    artifact**, not only in the code.
+    The spec authors' standing ask: say which one produced a row **in the artifact**, not only
+    in the code.
   - **An origin-relative transport prefix resolves against a scheme://host:port, never against the
     path the profile was fetched under** (`fetch.OriginRoot`). A registry served at `host/registry`
     names domains at `host/docs`.

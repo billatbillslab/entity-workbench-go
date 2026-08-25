@@ -31,7 +31,7 @@ itself to — offered as a worked example, not a standard to conform to.
 """
 
 # ---------------------------------------------------------------------------
-# Root documents — the fleet-standard eight, declared 2026-08-24.
+# Root documents — the standard eight, declared 2026-08-24.
 #
 # WHY THESE ARE HERE AT ALL: this manifest is a KEEP-LIST, so a document it
 # does not name is dropped from what this project publishes. Seven of these
@@ -147,8 +147,7 @@ group = "Disciplines & runtime model"
 # Declared 2026-08-24. AGENTS.md is a root document and therefore public, and it
 # instructs the reader to open this doctrine at the start of any crash
 # investigation — an undeclared target of a published instruction is a link that
-# ships broken. (Same finding arch fixed for its own two doctrine docs in
-# ROUTING-2026-08-24-c: "a keep-list that drops a cited target ships broken links.")
+# ships broken.
 [[doc]]
 path  = "docs/architecture/DOCTRINE-CRASH-FORENSICS.md"
 title = "Crash Forensics Doctrine"
@@ -268,7 +267,7 @@ group = "Direction"
 # ---------------------------------------------------------------------------
 # The rolling status log — declared, and MOVED to say so.
 #
-# Operator ruling 2026-08-24, matching keystone and the rest of the fleet:
+# Decided 2026-08-24, matching the rest of the ecosystem:
 # `docs/status/` is stripped wholesale, so the rolling log moved OUT of it to
 # `docs/STATUS.md` and is declared here. The path carries the meaning —
 # outside that directory is canonical, inside it is working memory — which is
