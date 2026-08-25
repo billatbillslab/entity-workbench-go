@@ -236,6 +236,11 @@ type builtOptions struct {
 	// hand the pointer to the finished AppPeer in assembleAppPeer.
 	generation *atomic.Uint64
 
+	// queryMaintainer owns the three query indexes. It is carried through
+	// for the same reason subEngine is: its Rebuild needs the location
+	// index peer.New produces, so the backfill can only run downstream.
+	queryMaintainer *query.IndexMaintainer
+
 	// subEngine and subEvents are non-nil when the subscription
 	// extension is enabled. The engine's Deliver func and Start loop
 	// must be wired after peer.New() (they need the peer's dispatcher
@@ -431,7 +436,7 @@ func buildPeerOptions(cfg PeerConfig) (*builtOptions, error) {
 		opts = append(opts, peer.WithCloseFunc(func() { _ = s.Close() }))
 	}
 
-	built := &builtOptions{watchSink: watchSink, generation: gen}
+	built := &builtOptions{watchSink: watchSink, generation: gen, queryMaintainer: queryMaintainer}
 
 	// Subscription extension: wire engine + dedicated event sink +
 	// handler + cancel-on-close. Per SDK-ALIGNMENT §7.2, ordering
@@ -752,6 +757,29 @@ func assembleAppPeer(bo *builtOptions) (*AppPeer, error) {
 	p, err := peer.New(bo.core...)
 	if err != nil {
 		return nil, WrapError(500, "peer_build_failed", "peer.New", err)
+	}
+
+	// Backfill the query indexes from the tree we just opened.
+	//
+	// The three indexes are in-memory (core-go ships only
+	// MemoryTypeIndex/MemoryReverseHashIndex/MemoryPathLinkIndex) and are
+	// populated solely by the "query" sync hook — i.e. only by writes made
+	// during THIS process. Against a persistent store that is a blind
+	// index: the tree survives the restart and the index does not, so
+	// `system/query` reports zero matches for every entity written before
+	// startup while `tree:list` shows them. Measured 2026-08-23 with
+	// `entity-shell -storage sqlite`: `put` then `find` in one session
+	// matches; `find` in the next process against the same DB does not,
+	// which silently takes `find`, `grep` and `compute aggregate` with it.
+	//
+	// Rebuild is the kernel's own answer — its doc comment says "use for
+	// recovery or startup with persisted stores" — and we simply never
+	// called it. Unconditional rather than gated on the storage kind: on a
+	// fresh memory peer the tree is empty, so the scan costs nothing, and a
+	// caller supplying its own persistent LocationIndex through RawOptions
+	// gets the same guarantee without having to know to ask.
+	if bo.queryMaintainer != nil {
+		bo.queryMaintainer.Rebuild(p.LocationIndex())
 	}
 
 	eventLog := NewEventLog(500)

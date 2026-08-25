@@ -209,6 +209,22 @@ func initBudget(hctx *handler.HandlerContext) *compute.Budget {
 // extractComputeConstraints mirrors ext/compute/handler.go::extractComputeConstraints.
 // The constraints field is an open type preserved as raw CBOR on the entity, so
 // it decodes from entity data directly.
+//
+// DRIFT, KNOWN AND UNFIXED — do not read this as a current mirror. core-go
+// replaced this reader on 2026-08-22 (`0e34e3e`, "§5.2 depth budget is a
+// grant-level cap constraint"): EXTENSION-COMPUTE §5.2 sources the limits from
+// the matching GRANT's constraints["system/compute"], and a capability token
+// carries no top-level `constraints` field at all, so reading cap.Data
+// ["constraints"] means no compute constraint has ever reached this evaluator.
+// Their replacements are computeConstraintsOfGrant / computeConstraintsOfToken.
+//
+// Left as-is deliberately this session: Axis-1 is registered by tests only (no
+// binary, bridge or panel reaches it — `make reachability`), so this changes
+// nothing a user runs, and adopting it is engine-semantics work that belongs
+// with the v3.26 contained-error adoption rather than ahead of a release. It is
+// row 2's neighbour in the post-release backlog, tracked in STATUS §0b. What
+// the comment must NOT do meanwhile is keep claiming a fidelity that lapsed —
+// the transcription is the contract, and this one is now stale.
 func extractComputeConstraints(cap entity.Entity) (ops, depth int) {
 	var rawData map[string]interface{}
 	if err := ecf.Decode(cap.Data, &rawData); err != nil {

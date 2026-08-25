@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -540,6 +541,22 @@ func ensureFilesStatsHandler(ctx context.Context, peer *entitysdk.AppPeer, patte
 // data. Returns (value, true) if present and numeric; (0, false)
 // otherwise. Accepts uint64, int64, and the smaller numeric kinds
 // CBOR may decode to depending on value range.
+//
+// FLOATS ARE THE COMMON CASE, not an exotic one. `put` decodes its
+// payload with json.Unmarshal into an interface{}, and encoding/json
+// turns every JSON number into a float64; CBOR core-deterministic
+// encoding does not fold an integral float back to an integer, so the
+// round trip returns float64. The effect before this case existed:
+// `put files/a app/file '{"size":100}'` followed by `compute aggregate
+// files` reported "3 entities scanned, 3 skipped" — the verb whose
+// stated job is to aggregate over real workbench entities could not
+// read one written by the shell's own put. Measured 2026-08-23.
+//
+// A non-integral size is refused rather than truncated (AP33: a
+// tolerant fallback that turns malformed input into a well-formed
+// answer is a bug). It is also what the fold requires — the
+// accumulator is a uint64 literal, so a fractional byte count has
+// nowhere to go but a silently wrong total.
 func extractNumericSize(data []byte) (uint64, bool) {
 	var decoded map[string]interface{}
 	if err := ecf.Decode(data, &decoded); err != nil {
@@ -564,9 +581,24 @@ func extractNumericSize(data []byte) (uint64, bool) {
 			return 0, false
 		}
 		return uint64(n), true
+	case float64:
+		return integralSize(n)
+	case float32:
+		return integralSize(float64(n))
 	default:
 		return 0, false
 	}
+}
+
+// integralSize accepts a float only where it names an exact,
+// representable, non-negative whole number. NaN and ±Inf fail the
+// f == math.Trunc(f) test; the upper bound keeps a float too large for
+// uint64 from wrapping to a nonsense total.
+func integralSize(f float64) (uint64, bool) {
+	if f < 0 || f != math.Trunc(f) || f > math.MaxInt64 {
+		return 0, false
+	}
+	return uint64(f), true
 }
 
 // cmdCompute is the sub-op dispatcher for `compute`. Future verbs

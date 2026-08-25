@@ -176,8 +176,18 @@ title = "Diagnostic direction"
 blurb = "The 'observe, don't theorize' inspect doctrine for diagnosing the running application."
 group = "Direction"
 
-[[doc]]
-path  = "docs/status/STATUS.md"
-title = "Status"
-blurb = "Current project status — where the project is, recent work, backlog, and what's next."
-group = "Direction"
+# docs/status/ declares NOTHING — removed 2026-08-23 per [ADR-0030]'s injection of
+# [ADR-0031], which is explicit: "docs/status/** is removed from every repo's
+# CANONICAL-DOCS.toml. docs/status/ publishes nothing. This includes STATUS.md, which
+# was the single declared exception."
+#
+# This entry was that exception. The reasoning worth keeping: a status log is written
+# for the next session, so it is frank about blockers, half-verified measurements and
+# mistakes — and it is full of internal `dev` SHAs, which under [ADR-0012] Amendment 1
+# resolve for no public reader by construction ([ADR-0027] authors published commits
+# fresh at the release boundary). Publishing it exported both problems. What a public
+# reader gets from this repo instead is README.md, CHANGELOG.md, and the canonical
+# framework docs above — all already declared.
+#
+# Do not re-add it. The candor is load-bearing and survives only because nobody
+# outside reads it.
