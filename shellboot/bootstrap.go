@@ -60,6 +60,18 @@ type Config struct {
 	// "127.0.0.1:9100"). Empty means outbound-only.
 	ListenAddr string `json:"listen"`
 
+	// AdvertiseURL is the dial address published as this peer's
+	// transport profile (EXTENSION-NETWORK §6.5.1a D1 self-publication)
+	// once the listener binds. Empty means "derive it from ListenAddr",
+	// which works whenever the bind host is concrete and is skipped
+	// with HostedPeer.AdvertiseErr when it is a wildcard — a listener
+	// binds 0.0.0.0, but a profile carries what a peer DIALS.
+	//
+	// Set it explicitly whenever the routable address differs from the
+	// bound one: a LAN IP behind a 0.0.0.0 bind, a hostname, a
+	// reverse-proxied wss:// URL.
+	AdvertiseURL string `json:"advertise"`
+
 	// OpenAccess, when true, grants every connecting peer wildcard
 	// capabilities. Development use only — production peers should
 	// configure scoped grants via the role extension. Required for

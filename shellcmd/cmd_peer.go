@@ -16,7 +16,7 @@ import (
 //	peer rename <old> <new>   — change the alias bound to a peer
 func cmdPeer(sh *Shell, args []string) (Result, error) {
 	if len(args) < 1 {
-		return Result{}, fmt.Errorf("usage: peer <ls|info|rename> [args]")
+		return Result{}, fmt.Errorf("usage: peer <ls|status|info|rename> [args]")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -24,6 +24,8 @@ func cmdPeer(sh *Shell, args []string) (Result, error) {
 		return cmdPeerLs(sh, rest)
 	case "info", "show":
 		return cmdInfo(sh, rest)
+	case "status":
+		return cmdPeerStatus(sh, rest)
 	case "rename", "mv":
 		return cmdPeerRename(sh, rest)
 	default:

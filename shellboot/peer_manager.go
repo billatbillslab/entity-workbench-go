@@ -38,18 +38,19 @@ import (
 // fields; for live state, call back through the manager.
 //
 // Fields:
-//   Handle    — opaque int64 assigned by the manager at Create time.
-//               Stable for the peer's lifetime.
-//   AppPeer   — the entitysdk peer (Store, PeerContext, Put/Get/...).
-//   Workspace — the shellcmd workspace owning the local-peer alias
-//               + remote-peer connection pool.
-//   Shell     — a pre-constructed shellcmd.Shell, WD set to the
-//               peer's canonical root path.
-//   Config    — the shellboot.Config the peer was Create'd with.
-//   AddedAt   — unix-millis timestamp of Create.
-//   IsSystem  — true iff this peer is the manager's system peer at
-//               the snapshot moment (system handle can shift on
-//               Destroy + handover).
+//
+//	Handle    — opaque int64 assigned by the manager at Create time.
+//	            Stable for the peer's lifetime.
+//	AppPeer   — the entitysdk peer (Store, PeerContext, Put/Get/...).
+//	Workspace — the shellcmd workspace owning the local-peer alias
+//	            + remote-peer connection pool.
+//	Shell     — a pre-constructed shellcmd.Shell, WD set to the
+//	            peer's canonical root path.
+//	Config    — the shellboot.Config the peer was Create'd with.
+//	AddedAt   — unix-millis timestamp of Create.
+//	IsSystem  — true iff this peer is the manager's system peer at
+//	            the snapshot moment (system handle can shift on
+//	            Destroy + handover).
 type HostedPeer struct {
 	Handle    int64
 	AppPeer   *entitysdk.AppPeer
@@ -64,6 +65,16 @@ type HostedPeer struct {
 	// outbound-only or the listen attempt failed. Set at Create time;
 	// stable for the peer's lifetime.
 	ListenScheme string
+
+	// AdvertisedURL is the dial address self-published as this peer's
+	// transport profile once the listener bound, or empty when nothing
+	// was advertised. AdvertiseErr carries why, when the reason is not
+	// simply "no listener": it is NOT fatal to Create, because a peer
+	// that listens but does not advertise is exactly the pre-2026-08-18
+	// behaviour — reachable by anyone told out-of-band, invisible to
+	// anyone who was not.
+	AdvertisedURL string
+	AdvertiseErr  error
 
 	// listenCancel cancels the auto-Listen goroutine. nil for
 	// outbound-only peers. Called during Destroy, before AppPeer.Close.
@@ -171,6 +182,12 @@ func (m *PeerManager) Create(cfg Config) (int64, error) {
 		case <-ready:
 			hp.ListenScheme = scheme
 			hp.listenCancel = cancel
+			// Self-publish now that the address is real. §6.5.1a D1 is a
+			// SHOULD, and until this existed nothing in this tree ever
+			// told another peer how to reach us — we published profiles
+			// only for peers WE dialed. A browser peer cannot learn that
+			// a Go peer accepts a WebSocket any other way.
+			hp.AdvertisedURL, hp.AdvertiseErr = advertiseListener(ap, cfg.AdvertiseURL, scheme, bindAddr, wsPath)
 		case err := <-listenErrCh:
 			cancel()
 			_ = ap.Close()
@@ -234,11 +251,11 @@ func (m *PeerManager) Create(cfg Config) (int64, error) {
 }
 
 // Destroy tears down peer h. Cascade order:
-//   1. Remove from in-memory registry; demote system-peer if it was h.
-//   2. Promote a replacement system peer if any survivors remain.
-//   3. Fire OnPeerDestroyed hooks (renderer cascades own resources).
-//   4. Remove the roster entry from the (possibly-new) system peer's tree.
-//   5. Close the AppPeer.
+//  1. Remove from in-memory registry; demote system-peer if it was h.
+//  2. Promote a replacement system peer if any survivors remain.
+//  3. Fire OnPeerDestroyed hooks (renderer cascades own resources).
+//  4. Remove the roster entry from the (possibly-new) system peer's tree.
+//  5. Close the AppPeer.
 //
 // Idempotent — unknown handles return nil.
 func (m *PeerManager) Destroy(h int64) error {
@@ -479,4 +496,30 @@ func (m *PeerManager) liveHostedPeerIDs() map[string]struct{} {
 		out[hp.AppPeer.PeerID()] = struct{}{}
 	}
 	return out
+}
+
+// advertiseListener self-publishes the peer's transport profile for the
+// listener that just bound, returning the URL actually advertised.
+//
+// Explicit AdvertiseURL wins. Otherwise the dial URL is derived from
+// the bind address, which is correct exactly when the bind host is
+// concrete — `-listen 127.0.0.1:9100` is a real address a peer on the
+// same machine dials, and that is the first browser↔Go loop we expect
+// to run. A wildcard bind has no derivation and returns an error
+// instead of publishing a profile nobody can use; the caller surfaces
+// it rather than failing Create.
+func advertiseListener(ap *entitysdk.AppPeer, advertiseURL, scheme, bindAddr, wsPath string) (string, error) {
+	dialURL := advertiseURL
+	if dialURL == "" {
+		switch scheme {
+		case "ws":
+			dialURL = "ws://" + bindAddr + wsPath
+		default:
+			dialURL = "tcp://" + bindAddr
+		}
+	}
+	if err := ap.AdvertiseTransport(dialURL); err != nil {
+		return "", fmt.Errorf("shellboot: advertise %q: %w", dialURL, err)
+	}
+	return dialURL, nil
 }

@@ -260,24 +260,23 @@ func (a *AppPeer) BindLocalName(name, targetPeerID string, transports []hash.Has
 
 // EnableLocalNameResolver writes the resolver-config that activates the
 // local-name backend in the meta-resolver chain (REGISTRY §4). After
-// this, ResolveName consults local-name bindings. A real distribution
-// ships a richer config — pinned bindings, peer-issued chain entries,
-// name_format_dispatch globs (PROPOSAL-NAME-GRAMMAR); this is the
-// minimal chain that turns the built backend on, and is idempotent.
+// this, ResolveName consults local-name bindings. Idempotent.
+//
+// Since 2026-08-18 it writes the **§4.1a default `name_format_dispatch`
+// list** as well as the chain entry, via DefaultResolverConfig. It used
+// to write the chain alone. That was harmless only by accident: with no
+// dispatch list every name consults every backend in the chain, and the
+// chain happened to be local-only — so the config was one remote
+// backend away from disclosing every unscoped name a user types, and
+// nothing in it said so. The default list makes the catch-all's
+// local-only MUST explicit in the artifact rather than implicit in what
+// the chain currently happens to contain.
+//
+// A distribution shipping pinned bindings or a peer-issued chain entry
+// builds on DefaultResolverConfig and installs it with
+// InstallResolverConfig, which enforces the same MUST.
 func (a *AppPeer) EnableLocalNameResolver() error {
-	cfg := types.ResolverConfigData{
-		ResolverChain: []types.ResolverChainEntry{
-			{BackendKind: types.BackendKindLocalName, Priority: 0},
-		},
-	}
-	ent, err := cfg.ToEntity()
-	if err != nil {
-		return WrapError(500, "encode_config", "encode resolver-config", err)
-	}
-	if _, err := a.PutEntity(types.ResolverConfigStoragePath, ent); err != nil {
-		return err
-	}
-	return nil
+	return a.InstallResolverConfig(DefaultResolverConfig())
 }
 
 // BrowseFetch composes the lower rungs of the resolution chain

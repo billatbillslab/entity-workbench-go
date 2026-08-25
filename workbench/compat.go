@@ -42,6 +42,14 @@ type GrantScope = entitysdk.GrantScope
 type ScopeDimension = entitysdk.ScopeDimension
 type Scope = entitysdk.Scope
 type Connection = entitysdk.Connection
+type PeerLiveness = entitysdk.PeerLiveness
+
+// The §3.13 peer lifecycle enum, re-exported for renderers.
+const (
+	PeerStatusConnected    = entitysdk.PeerStatusConnected
+	PeerStatusSuspect      = entitysdk.PeerStatusSuspect
+	PeerStatusDisconnected = entitysdk.PeerStatusDisconnected
+)
 
 // --- Constants (SDK) ---
 
@@ -98,15 +106,15 @@ var (
 	IsAuthError       = entitysdk.IsAuthError
 	IsSystemError     = entitysdk.IsSystemError
 
-	ResolveEntity    = entitysdk.ResolveEntity
-	DecodeEntityData = entitysdk.DecodeEntityData
-	ListByPrefix     = entitysdk.ListByPrefix
+	ResolveEntity     = entitysdk.ResolveEntity
+	DecodeEntityData  = entitysdk.DecodeEntityData
+	ListByPrefix      = entitysdk.ListByPrefix
 	ListEntriesSorted = entitysdk.ListEntriesSorted
 
-	FormatCBOR    = entitysdk.FormatCBOR
-	FormatValue   = entitysdk.FormatValue
-	IsSimpleValue = entitysdk.IsSimpleValue
-	SortedMapKeys = entitysdk.SortedMapKeys
+	FormatCBOR      = entitysdk.FormatCBOR
+	FormatValue     = entitysdk.FormatValue
+	IsSimpleValue   = entitysdk.IsSimpleValue
+	SortedMapKeys   = entitysdk.SortedMapKeys
 	RenderPlainText = entitysdk.RenderPlainText
 
 	DiscoverHandlers            = entitysdk.DiscoverHandlers

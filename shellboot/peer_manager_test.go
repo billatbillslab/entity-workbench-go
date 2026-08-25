@@ -266,8 +266,8 @@ func TestPeerManager_RestoreFiltersSelfAndEphemeral(t *testing.T) {
 	m := NewPeerManager(testAppID)
 	defer m.ShutdownAll()
 
-	hA, _ := m.Create(memCfg("alpha"))    // system, ephemeral
-	_, _ = m.Create(memCfg("beta"))       // ephemeral
+	hA, _ := m.Create(memCfg("alpha")) // system, ephemeral
+	_, _ = m.Create(memCfg("beta"))    // ephemeral
 	pA := m.Get(hA)
 
 	// Synthetic roster entry with bogus identity — restore will TRY
@@ -432,20 +432,20 @@ func TestPeerManager_AutoListen_AutoAnnounce_LANDiscoverable(t *testing.T) {
 // TestPeerManager_NearbyConnect_TCP_EndToEnd is the regression test
 // that should have caught the B-5 phase B bugs before the user did:
 //
-//   (1) The UI freeze (Render-on-UI-thread → Scan → wake loop) —
-//       caught structurally because this test does *not* run a Scan
-//       inline with each prefix-watch wake.
+//	(1) The UI freeze (Render-on-UI-thread → Scan → wake loop) —
+//	    caught structurally because this test does *not* run a Scan
+//	    inline with each prefix-watch wake.
 //
-//   (2) The "too many colons" connect failure — caught by dialing
-//       through the exact URL shape the bridge's chooseDialAddr emits
-//       (`tcp://host:port`), exercising the workbench's connect path
-//       end-to-end including the entitysdk scheme-strip.
+//	(2) The "too many colons" connect failure — caught by dialing
+//	    through the exact URL shape the bridge's chooseDialAddr emits
+//	    (`tcp://host:port`), exercising the workbench's connect path
+//	    end-to-end including the entitysdk scheme-strip.
 //
-//   (3) The `.local.` hostname dial portability gap — caught by
-//       asserting that the endpoint_hint exposes an IPv4 list (so the
-//       bridge can prefer IP over the announced HostName) and dialing
-//       through that IPv4. Without the IP-prefer path, cross-LAN
-//       dials need nss-mdns / avahi-daemon on every dialing host.
+//	(3) The `.local.` hostname dial portability gap — caught by
+//	    asserting that the endpoint_hint exposes an IPv4 list (so the
+//	    bridge can prefer IP over the announced HostName) and dialing
+//	    through that IPv4. Without the IP-prefer path, cross-LAN
+//	    dials need nss-mdns / avahi-daemon on every dialing host.
 //
 // Two PeerManager-managed peers (matches the production code path:
 // shellboot.PeerManager.Create is what the bridge calls) announce

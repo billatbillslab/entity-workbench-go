@@ -256,6 +256,17 @@ type ExtensionsConfig struct {
 	// via the shell verb `local-files mount` (Phase E).
 	LocalFiles *LocalFilesConfig
 
+	// Network toggles the system/network handler — maintain-peer /
+	// release-peer / status / close and the EXTENSION-NETWORK §4.1
+	// reconnect continuation graph. Default: enabled.
+	//
+	// Enabling it is not the same as running it: core/peer writes the
+	// liveness transitions either way, and the handler's continuation
+	// graph is installed per-peer by a maintain-peer call. Read the
+	// resulting lifecycle state with AppPeer.PeerLivenessOf /
+	// PeerLivenessAll / OnPeerLivenessChange.
+	Network *NetworkConfig
+
 	// Registry toggles the EXTENSION-REGISTRY name-resolution substrate
 	// — the meta-resolver (system/registry:resolve) plus the local-name
 	// backend (system/registry/local-name) that backs the `name →
@@ -268,6 +279,11 @@ type ExtensionsConfig struct {
 	// are not yet deduplicated across reloads).
 	Registry *RegistryConfig
 }
+
+// NetworkConfig toggles the system/network extension. Zero value =
+// enabled. Bind runs post-construction so the handler can dial and
+// evict through the live peer.
+type NetworkConfig struct{ Disabled bool }
 
 // RegistryConfig wires the system/registry resolution substrate. A
 // non-nil value with Disabled=false turns it on; nil leaves it off.

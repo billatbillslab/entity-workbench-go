@@ -204,8 +204,8 @@ func init() {
 	})
 	r.Register(Command{
 		Name:    "peer",
-		Usage:   "peer <ls|info|rename> [args]",
-		Help:    "Peer-management surface. 'peer ls' lists known peers; 'peer info' delegates to info; 'peer rename <old> <new>' retags an alias.",
+		Usage:   "peer <ls|status|info|rename> [args]",
+		Help:    "Peer-management surface. 'peer ls' lists this session's known peers; 'peer status' shows the tree's lifecycle record (connected/suspect/disconnected, and why); 'peer info' delegates to info; 'peer rename <old> <new>' retags an alias.",
 		Handler: cmdPeer,
 	})
 	r.Register(Command{

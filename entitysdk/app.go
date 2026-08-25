@@ -26,6 +26,7 @@ import (
 	"go.entitychurch.org/entity-core-go/ext/identity"
 	"go.entitychurch.org/entity-core-go/ext/inbox"
 	"go.entitychurch.org/entity-core-go/ext/localfiles"
+	extnetwork "go.entitychurch.org/entity-core-go/ext/network"
 	"go.entitychurch.org/entity-core-go/ext/query"
 	"go.entitychurch.org/entity-core-go/ext/quorum"
 	"go.entitychurch.org/entity-core-go/ext/registry"
@@ -258,6 +259,12 @@ type builtOptions struct {
 	// assembleAppPeer after the live peer's PeerID is known.
 	discoveryHandler *discovery.Handler
 
+	// networkHandler is non-nil when the system/network extension is
+	// enabled. Bind must run after peer.New() — the handler needs the
+	// live peer to dial, evict, and self-execute the §4.1 lifecycle
+	// continuations.
+	networkHandler *extnetwork.Handler
+
 	// registryHandler + localNameHandler back the `name → peer_id`
 	// resolution rung (GUIDE-RESOLUTION §4). The meta-resolver
 	// (system/registry:resolve) and the local-name backend
@@ -470,6 +477,32 @@ func buildPeerOptions(cfg PeerConfig) (*builtOptions, error) {
 		built.registryHandler = regH
 		built.localNameHandler = lnH
 	}
+	// Network extension: the system/network handler — maintain-peer /
+	// release-peer / status / close plus the §4.1 reconnect
+	// continuation graph (EXTENSION-NETWORK §3-§4).
+	//
+	// Default-on, and cheap to leave on: registering it starts nothing.
+	// core/peer already owns the imperative half of liveness (it writes
+	// `connected` at handshake, `suspect` at the dispatch seam,
+	// `disconnected` on keepalive miss) whether this handler exists or
+	// not. What the handler adds is the REACTIVE half — the
+	// continuation graph that watches those writes and dials back — and
+	// that graph is installed per-peer by a maintain-peer call, not at
+	// construction. A peer nobody calls maintain-peer on carries the
+	// handler and does nothing with it.
+	//
+	// It is also what makes AppPeer honest about being a peer: without
+	// it, system/network ops 404 through longest-prefix-miss on a
+	// surface every other cohort implementation answers.
+	if cfg.Extensions.Network == nil || !cfg.Extensions.Network.Disabled {
+		netH := extnetwork.NewHandler()
+		if cfg.DebugLog != nil {
+			netH.SetDebugLog(cfg.DebugLog)
+		}
+		opts = append(opts, peer.WithHandler(extnetwork.HandlerPattern, netH))
+		built.networkHandler = netH
+	}
+
 	// LocalFiles extension: handler registered at "local/files".
 	// Watch is opt-in per mount via the shell's `local-files mount`
 	// verb (Phase E), which calls StartWatching on the handler ref.
@@ -681,6 +714,13 @@ func assembleAppPeer(bo *builtOptions) (*AppPeer, error) {
 		bo.clockHandler.SetupAdvancement(
 			p.Store(), p.LocationIndex(),
 			string(p.PeerID()), p.Identity().ContentHash, nil)
+	}
+
+	// The network handler's Bind is the imperative seam: it holds the
+	// peer it dials, evicts and self-executes through. Ops return 500
+	// until it lands. Mirrors entity-peer/main.go:589.
+	if bo.networkHandler != nil {
+		bo.networkHandler.Bind(p)
 	}
 
 	// Handlers extension's authority is the peer's keypair — used

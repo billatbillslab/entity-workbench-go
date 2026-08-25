@@ -90,10 +90,10 @@ const (
 // Apply this as the first `defer` in every //export function that
 // can reach Store / PeerContext / shell dispatch:
 //
-//   func XYZ(args) (result *C.char) {
-//       defer recoverToErrorEnvelope("XYZ", &result)
-//       ...
-//   }
+//	func XYZ(args) (result *C.char) {
+//	    defer recoverToErrorEnvelope("XYZ", &result)
+//	    ...
+//	}
 func recoverToErrorEnvelope(fn string, result **C.char) {
 	r := recover()
 	if r == nil {
@@ -219,6 +219,7 @@ type mdFilesHandle struct {
 // mdViewHandle wraps a MarkdownViewModel. Two wake sources:
 //   - C# calls MarkdownViewLoadPath to bind a new path → wake.
 //   - The bound path's entity is mutated → wake (per-path Store.Watch).
+//
 // pathWatchCancel cancels the per-path watch; rebound when path changes.
 type mdViewHandle struct {
 	peerHandleID int64
@@ -470,6 +471,67 @@ func PeerConfig(h C.int64_t) *C.char {
 	return C.CString(string(b))
 }
 
+// The tree's lifecycle record for every peer a transition has ever been
+// written for — EXTENSION-NETWORK §3.13, read through the workbench
+// model rather than reassembled here (the renderer is thin I/O).
+//
+// Deliberately NOT the same set as PeerConnections, which reports the
+// connection pool. A peer that dialed US, or one released an hour ago,
+// appears here and not there; and only this surface can say `suspect`.
+// A UI showing one and labelling it the other is the mistake this
+// export exists to make avoidable.
+//
+// `last_seen` is not exposed. The status entity is transition-written
+// (§5.4.1 MUST) — a successful keepalive writes nothing — so the field
+// is a snapshot taken at the transition and any UI rendering it as
+// "last heard from" would invent a freshness contract the protocol
+// declines to offer. `connected_at` and `failing_since` are the two
+// stamps that mean what they look like.
+//
+//export PeerLiveness
+func PeerLiveness(h C.int64_t) *C.char {
+	if manager == nil {
+		return C.CString(errNotInit)
+	}
+	hp := manager.Get(int64(h))
+	if hp == nil {
+		return C.CString(errBadPeer)
+	}
+	model := wb.NewPeerLivenessModel(hp.AppPeer.Store())
+	defer model.Close()
+	out := model.Render()
+
+	rows := make([]map[string]any, 0, len(out.Peers))
+	for _, l := range out.Peers {
+		rows = append(rows, map[string]any{
+			"peer_id":       l.PeerID,
+			"status":        l.Status,
+			"reason":        l.Reason,
+			"last_error":    l.LastError,
+			"connected_at":  l.ConnectedAt,
+			"failing_since": l.FailingSince,
+			"failing":       l.Failing(),
+		})
+	}
+	result := map[string]any{
+		"peers":        rows,
+		"connected":    out.Connected,
+		"suspect":      out.Suspect,
+		"disconnected": out.Disconnected,
+	}
+	// A seed failure is surfaced, not swallowed: an empty list from a
+	// failed read and an empty list from a peer that has talked to
+	// nobody look identical in a UI, and only one of them is fine.
+	if out.SeedError != nil {
+		result["seed_error"] = out.SeedError.Error()
+	}
+	b, err := json.Marshal(map[string]any{"ok": true, "result": result})
+	if err != nil {
+		return C.CString(fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()))
+	}
+	return C.CString(string(b))
+}
+
 //export PeerListenAddr
 func PeerListenAddr(h C.int64_t) *C.char {
 	if manager == nil {
@@ -482,19 +544,30 @@ func PeerListenAddr(h C.int64_t) *C.char {
 	payload := map[string]any{
 		"ok": true,
 	}
-	addr := hp.AppPeer.Addr()
+	// `scheme` is the authority on whether we are listening, not
+	// `Addr()`. core-go sets p.listener only on ListenReady, so
+	// Peer.Addr() is nil for a WebSocket listener that is up and
+	// serving — this reported `listening: false` to the UI for every
+	// ws peer until 2026-08-18. Fall back to the self-advertised dial
+	// URL, which is what a peer would use anyway.
 	scheme := hp.ListenScheme
-	if addr == nil || scheme == "" {
+	if scheme == "" {
 		payload["result"] = map[string]any{
-			"listening": false,
-			"scheme":    "",
-			"addr":      "",
+			"listening":  false,
+			"scheme":     "",
+			"addr":       "",
+			"advertised": "",
 		}
 	} else {
+		shown := hp.AdvertisedURL
+		if addr := hp.AppPeer.Addr(); addr != nil {
+			shown = addr.String()
+		}
 		payload["result"] = map[string]any{
-			"listening": true,
-			"scheme":    scheme,
-			"addr":      addr.String(),
+			"listening":  true,
+			"scheme":     scheme,
+			"addr":       shown,
+			"advertised": hp.AdvertisedURL,
 		}
 	}
 	b, err := json.Marshal(payload)

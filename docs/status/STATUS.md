@@ -216,6 +216,43 @@ That inverts the order — profile publish is the precondition, not a peer, of t
 **No WebRTC on the Go arm** (§6.5.2d is latent without a native terminator; browser↔Go is `wss`,
 browser↔browser is WebRTC).
 
+**Piece 1 of 4 landed 2026-08-18 — self-publication.** `AppPeer.AdvertiseTransport(dialURL)`
+writes a `system/peer/transport/*` profile under **our own** peer-id, and `PeerManager.Create`
+calls it when the listener binds (new `Config.AdvertiseURL` for when the routable address differs
+from the bound one). Wildcard and port-0 advertisements are **refused, non-fatally** — the peer
+still listens, `HostedPeer.AdvertiseErr` says why, and nothing false goes in the tree. Pinned by a
+real-session test through `Create`, mutation-checked. Found on the way: the Avalonia bridge's
+`PeerListenAddr` reported `listening: false` for **every** WebSocket peer, because it gated on
+core-go's `Peer.Addr()` and only `ListenReady` sets `p.listener`; fixed to gate on `ListenScheme`.
+**Pieces 2 and 3 landed the same day.** The lesson from AP13 applied immediately: **core-go
+already had both halves.** `core/peer` writes every liveness transition (`connected` at handshake,
+`suspect` at the dispatch seam, `disconnected` on keepalive miss) whether or not anything is
+listening, and `ext/network` implements maintain-peer / release-peer / status / close plus the
+§4.1 reconnect continuation graph. Neither needed authoring — they needed *registering* and a
+consumer.
+
+- **Liveness read-model** — `Store.PeerLivenessOf` / `PeerLivenessAll` / `OnPeerLivenessChange`
+  (+ `AppPeer` wrappers) over `system/peer/status`, and `workbench.PeerLivenessModel` as the
+  renderer-neutral view with connected/suspect/disconnected counts. Prefix-subscribed, never
+  scan-and-filter. This replaces reading `ConnectedPeers()` in a renderer: the pool snapshot
+  cannot express `suspect`, cannot say *why* a peer went, and disagrees with the tree whenever a
+  connection is evicted without a demotion. Three properties the model carries deliberately:
+  absence is reported as absence (a stranger is not a goodbye), `LastSeen` is a transition
+  snapshot and **not** a heartbeat (§5.4.1), and the enum is three-state — `reconnecting` is not
+  a status the tree can hold.
+- **`system/network` handler wired** (`ExtensionsConfig.Network`, default-on) with the
+  post-construction `Bind`, plus `entitysdk.NetworkClient` — `MaintainPeer`, `ReleasePeer`,
+  `Status`, `MaintainedPeers`, `Close`. Registering it starts nothing: the continuation graph is
+  installed per-peer by a maintain-peer call.
+
+**Spec finding, found by running it:** §2.7's `maintained_peers` is **not** the maintained set.
+§4.3's own pseudocode enumerates every entity under `system/peer/status/`, so a released peer
+keeps its row and loses only its `session_id` — verified against a real handler when the obvious
+assertion failed. Routed to arch; `NetworkClient.MaintainedPeers()` is the `session_id != ""`
+filter in the meantime.
+
+Remaining on the four: connector registry + `meet`.
+
 ### 4. Publisher conformance — CLOSED 2026-08-18, the corridor emits a real signed root
 
 `publish/publish.go` advertised `signed_pointer: "system/peer/published-root"` +
@@ -269,6 +306,68 @@ result on this track, and the only one that is not cohort-consistent.
 **Process (AP12, ours).** Arch routed the finding on 08-17 addressed to us by name; we did not open
 a row and shipped three commits past it. `AGENTS.md` now makes the sibling-arch read a session-start
 step. Catalogued, not ratified — first time in this shape.
+
+### 5. R3 — the resolver-config ships (2026-08-18)
+
+Arch's `096fa96` folded the default `name_format_dispatch` globs into
+`EXTENSION-REGISTRY` §4.1a. That was **R1**, the item R3 was waiting on, so R3 — ours jointly
+with browser-rust — is unblocked and now done on our side.
+
+D20 check first, and this time the substrate did **not** have it: core-go reads the config and
+applies the dispatch list, but nothing in the cohort writes a default one (construction exists
+only in the `validate` harness). Shipping it is app-tier work, as arch said.
+
+`entitysdk/resolver_config.go` — `DefaultNameFormatDispatch` (the six §4.1a rules, in order),
+`DefaultResolverConfig` (that list + a local-name-only chain), `ValidateResolverConfig`, and
+`AppPeer.InstallResolverConfig` / `ResolverConfig` / `EnsureResolverConfig`.
+`EnableLocalNameResolver` now writes the dispatch list too — it used to write the chain alone,
+which was harmless only by accident (no dispatch list ⇒ every name consults every backend, and the
+chain happened to be local-only).
+
+- **Order is the contract.** First-match-wins, and rules 4/5 overlap on every dotted authority. A
+  glob cannot say "undotted", so `*@*.*` must precede `*@*`. The pin asserts the sequence — a
+  set-membership test passes on the reversed list, which routes every domain-scoped name to
+  peer-issued and then toward a catch-all that must not see it.
+- **The catch-all MUST be local-only** (§4.1 step 2 — "the primary privacy mechanism"). We
+  **refuse** rather than normalize: §11.1 permits either, but silently rewriting an operator's
+  privacy config into a different one means they never learn they did not get what they asked for.
+- Two cohort observations, inert today, routed: §4.1a names backend kind `did-key` while core-go's
+  only self-certifying constant is `self-certifying`; and `pinned` has no constant anywhere.
+
+**Operator surface:** `peer status` (new) renders the tree's lifecycle record —
+connected/suspect/disconnected, the transition reason, and a coarse age — deliberately a
+*different* answer from `peer ls`, which lists this session's alias table. A peer that connected
+to **us**, or one released an hour ago, appears in the first and not the second, and only the
+first can say `suspect`. Empty output says *"nothing has ever transitioned"* rather than showing a
+blank table that reads as "nothing is connected". The SINCE column shows `failing_since` or
+`connected_at` and **never `last_seen`** — rendering a transition snapshot as "last heard from"
+would tell an operator a healthy peer had gone quiet for hours.
+
+### 6. BLOCKED — `make test` is red across the tree, and it is core-go's (2026-08-18)
+
+**Not ours, not worked around, routed.** The sibling `entity-core-go` working tree carries an
+uncommitted change to `core/protocol/local.go` removing resource inheritance in sub-dispatch, per
+arch `ROUTING-2026-08-18-g` §5 (**ruled, normative** — `ENTITY-CORE-PROTOCOL` §5.2 at arch
+`980ddf1`). The ruling is right. Removing the inheritance also removed the only channel by which
+the in-process **entry point** delivered a resource it was explicitly given:
+`DispatchLocalExecute` sets `rootCtx.Resource` and then dispatches with `WithCapability` alone.
+
+Every one of the 100+ tests in `programs/` fails with one message —
+`resource target path is required` from `core/tree/handler.go` on `tree:put`. **The radius grew
+while we worked**: `entitysdk`'s `TestResolveChain_*` (four tests, failing at their *setup* step)
+and `TestEnsureResolverConfig_InstallsOnceAndDoesNotOverwrite` went red as more of the change landed,
+and then `shellcmd` went from green to **71 failures**. It is every in-process dispatched write
+that names a resource.
+
+**It wears five faces, and that is the part worth remembering** — the same defect will not present
+the same way twice, because each handler validates its resource independently and says so in its
+own words: `resource target path is required` (tree, 45), `bind_cap` (31, downstream of a failed
+put), `resource target is required for subscription` (10), `ambiguous_resource: install requires
+exactly one resource` (10), `missing_resource_path` (role, 1). Do not diagnose these separately.
+
+Full packet, including the one-line fix and the coverage gap that let it through:
+`docs/architecture/reviews/CORE-GO-LOCAL-DISPATCH-RESOURCE-2026-08-18.md`.
+**Re-run `make test` once it lands.** Do not work around it here — the call sites are correct.
 
 ## Open bugs
 

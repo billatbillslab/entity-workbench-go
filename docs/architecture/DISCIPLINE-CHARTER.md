@@ -81,13 +81,13 @@ L0-L3's actual behavior gets documented forensically.
 
 ---
 
-## 2. The 19 disciplines
+## 2. The 20 disciplines
 
 D1-D11 are inherited verbatim from the entity-OS discipline charter
 (originating in godot-entity-core-rust, ratified by egui-entity-core-rust).
 They are stack-agnostic; they govern how we use the substrate.
 
-D12-D19 are native to our stack (Avalonia + .NET + cgo + Go + the
+D12-D20 are native to our stack (Avalonia + .NET + cgo + Go + the
 two-renderer architecture). They are **earned** by shipped bugs and
 explicit feedback episodes. Each cites the commit or pin that proved
 we needed it.
@@ -108,7 +108,7 @@ we needed it.
 | D10 | Real-session coverage | Cross-boot + headed + real-store paths for load-bearing changes. Headless green is necessary, not sufficient. Eight crash-hunt commits proved this on the Avalonia side. |
 | D11 | Inventory-boundary declaration (meta) | At audit open: name what's in scope **and what's not.** Findings that surface outside the boundary extend the boundary for the next audit. |
 
-### Native to our stack — earned by shipped bugs (D12-D17, D19) and feedback episodes (D18)
+### Native to our stack — earned by shipped bugs (D12-D17, D19, D20) and feedback episodes (D18)
 
 **D12 — Cross-language lifetime accounting.**
 *Source:* the cgo + GCHandle FFI discipline.
@@ -300,6 +300,47 @@ or is marked unmeasured. `entitysdk/foreign_namespace_subscription_test.go`,
 `entitysdk/mirror_test.go::TestMirror_ForeignNamespaceMergeNeedsItsOwnCapability`,
 and `shellcmd/cmd_revision_mirror_test.go` are the three that exist
 because of this rule.
+
+**D20 — Price the work against the substrate, not against our own code.**
+*Source:* two estimates a session apart, same class, different shape.
+(1) `HANDOFF-2026-08-18` §2 priced the conformant publisher exit as "its
+own arc" because *our* closure walker is shallow and the spec requires
+the trie closure. Both halves true; the conclusion wrong, because
+`tree.CollectNodeClosure` in `entity-core-go` already implemented the
+obligation **and cited the same amendment in its doc comment**. The
+estimate measured our code instead of the requirement, and the arc
+collapsed to one session. (2) The connectivity scoping — ours and
+`entity-browser-rust`'s independently — listed four app-tier pieces as
+missing. Two of the four (`system/peer/status` liveness, the
+`maintain-peer` / reconnect graph) were already implemented in the
+kernel, in `core/peer` and `ext/network`, needing registration and a
+consumer rather than authoring. A third (WebSocket transport) was
+already working and needed only to be *advertised*.
+*Why:* we sit on a kernel we did not write and do not read daily. An
+absence in our tree is evidence about our tree and nothing else, yet it
+reads as evidence about the system — which is how a one-session task
+gets deferred as an arc, and how a "we need to build X" scoping survives
+into a plan when X exists one directory over. The failure is
+directional: it always over-estimates, so it never announces itself as a
+surprise, only as work that quietly did not happen.
+*How:*
+- Before estimating anything that names a spec obligation or a protocol
+  surface, **grep the substrate for it by name** — the primitive, the
+  amendment number, the entity type. `../entity-core-go` first, then the
+  spec.
+- A scoping row that says "we don't have X" states **where it looked**.
+  "Absent in `entitysdk/`" and "absent in the cohort" are different
+  claims and only one of them justifies building X.
+- When the substrate already has it, the work is registration, wiring
+  and a consumer — plan *that*, and say so in the packet, because the
+  sibling seat that scoped it for us is carrying the same wrong estimate.
+*Enforcement:* every "we need to build X" line in a handoff, plan, or
+routed packet carries the search that established the absence (a
+`file:line` miss, or a named grep). The three that exist because of this
+rule: `publish/signed_root.go`'s note on `CollectNodeClosure`,
+`entitysdk/peer_status.go`'s division-of-labour note (core/peer owns the
+imperative half), and `entitysdk/network.go`'s (the handler owns the
+reactive half).
 
 ---
 
