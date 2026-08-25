@@ -116,9 +116,9 @@ func TestSubscription47_RateLimitedMarkerEmitted(t *testing.T) {
 	for _, m := range trace.Errors {
 		if m.Reason == "rate_limited" {
 			found = true
-			if m.Body.OriginalCode == "" && m.Body.OriginalStatus == 0 {
+			if m.Body.Code == "" && m.Body.Status == 0 {
 				t.Logf("marker body: code=%q status=%d (engine emits empty for suppression — expected)",
-					m.Body.OriginalCode, m.Body.OriginalStatus)
+					m.Body.Code, m.Body.Status)
 			}
 		}
 	}

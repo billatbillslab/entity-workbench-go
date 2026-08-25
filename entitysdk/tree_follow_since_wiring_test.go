@@ -219,7 +219,7 @@ func TestTreeFollowSinceWiring_RevisionFetchDiff(t *testing.T) {
 				var md types.ChainErrorLostData
 				if err := cbor.Unmarshal(ent.Data, &md); err == nil {
 					t.Logf("    reason=%q status=%d code=%q failed_uri=%q chain_id=%q step=%q target_peer=%q rejected_marker=%v",
-						md.Reason, md.OriginalStatus, md.OriginalCode, md.FailedDeliveryURI,
+						md.Reason, md.Status, md.Code, md.TargetURI,
 						md.ChainID, md.StepIndex, md.TargetPeerID, md.RejectedMarkerHash)
 				}
 			}
@@ -233,7 +233,7 @@ func TestTreeFollowSinceWiring_RevisionFetchDiff(t *testing.T) {
 				var md types.ChainErrorLostData
 				if err := cbor.Unmarshal(ent.Data, &md); err == nil {
 					t.Logf("    reason=%q status=%d code=%q failed_uri=%q chain_id=%q step=%q requesting_peer=%q attempted_uri=%q",
-						md.Reason, md.OriginalStatus, md.OriginalCode, md.FailedDeliveryURI,
+						md.Reason, md.Status, md.Code, md.TargetURI,
 						md.ChainID, md.StepIndex, md.RequestingPeerID, md.AttemptedURI)
 				}
 			}

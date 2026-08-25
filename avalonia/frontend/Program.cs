@@ -185,6 +185,22 @@ public class App : Application
             (handle, _) => new LifeGamePanel(handle));
         PanelRegistry.Register("asteroids", "Asteroids (compute)",
             (handle, _) => new AsteroidsGamePanel(handle));
+
+        // The generic host: ONE panel class, three programs, mounted from
+        // descriptors. Registered ALONGSIDE the three legacy panels above so the
+        // two paths can be compared live before the legacy ones are removed —
+        // the legacy models are also the oracle the mounted programs are pinned
+        // against (workbench/program_host_test.go), so they earn their keep
+        // until the comparison is done.
+        //
+        // Note what is NOT here: three panel classes. The only per-program thing
+        // is the string, and it is used for authoring only.
+        PanelRegistry.Register("program-life", "Life (generic host)",
+            (handle, _) => new ProgramPanel(handle, "life"));
+        PanelRegistry.Register("program-snake", "Snake (generic host)",
+            (handle, _) => new ProgramPanel(handle, "snake"));
+        PanelRegistry.Register("program-asteroids", "Asteroids (generic host)",
+            (handle, _) => new ProgramPanel(handle, "asteroids"));
     }
 
     public override void OnFrameworkInitializationCompleted()

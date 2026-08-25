@@ -21,14 +21,13 @@ func TestChainForHash_MarkerEntity(t *testing.T) {
 
 	const chainID = "chain-for-hash-marker-001"
 	body := coretypes.ChainErrorLostData{
-		OriginalCode:      "not_found",
-		OriginalStatus:    404,
-		FailedDeliveryURI: "entity://peer/system/inbox/missing",
-		OriginalRequestID: "req-cfh-1",
-		Timestamp:         uint64(time.Now().UnixMicro()),
-		Reason:            "not_found",
-		ChainID:           chainID,
-		StepIndex:         "2",
+		Code:      "not_found",
+		Status:    404,
+		TargetURI: "entity://peer/system/inbox/missing",
+		Timestamp: uint64(time.Now().UnixMicro()),
+		Reason:    "not_found",
+		ChainID:   chainID,
+		StepIndex: "2",
 	}
 	ent, err := body.ToEntity()
 	if err != nil {

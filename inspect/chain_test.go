@@ -22,14 +22,13 @@ func TestTraceChain_ChainErrorMarker(t *testing.T) {
 
 	const chainID = "chain-trace-test-001"
 	body := coretypes.ChainErrorLostData{
-		OriginalCode:      "base_not_a_version",
-		OriginalStatus:    400,
-		FailedDeliveryURI: "entity://peer/system/inbox/follow/foo/bar/merge",
-		OriginalRequestID: "req-99",
-		Timestamp:         uint64(time.Now().UnixMicro()),
-		Reason:            "base_not_a_version",
-		ChainID:           chainID,
-		StepIndex:         "5",
+		Code:      "base_not_a_version",
+		Status:    400,
+		TargetURI: "entity://peer/system/inbox/follow/foo/bar/merge",
+		Timestamp: uint64(time.Now().UnixMicro()),
+		Reason:    "base_not_a_version",
+		ChainID:   chainID,
+		StepIndex: "5",
 	}
 	ent, err := body.ToEntity()
 	if err != nil {
@@ -62,11 +61,11 @@ func TestTraceChain_ChainErrorMarker(t *testing.T) {
 	if m.Reason != "base_not_a_version" {
 		t.Errorf("Reason = %q want base_not_a_version", m.Reason)
 	}
-	if m.Body.OriginalStatus != 400 {
-		t.Errorf("Body.OriginalStatus = %d want 400", m.Body.OriginalStatus)
+	if m.Body.Status != 400 {
+		t.Errorf("Body.Status = %d want 400", m.Body.Status)
 	}
-	if m.Body.OriginalCode != "base_not_a_version" {
-		t.Errorf("Body.OriginalCode = %q want base_not_a_version", m.Body.OriginalCode)
+	if m.Body.Code != "base_not_a_version" {
+		t.Errorf("Body.Code = %q want base_not_a_version", m.Body.Code)
 	}
 
 	// Path-binding side: same path captured.

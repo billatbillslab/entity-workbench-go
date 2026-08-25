@@ -387,6 +387,55 @@ public static class Bridge
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "LifeClose")]
     public static extern void LifeClose(long lifeHandle);
 
+    // --- The generic compute-program host -------------------------------
+    //
+    // ONE seam for every compute program, replacing what the three blocks
+    // above do per-program. The split is deliberate and visible:
+    //
+    //   ProgramAuthor(peer, name) -> descriptor path   ; per-program, once
+    //   ProgramMount(peer, path)  -> handle            ; generic, always
+    //
+    // A front-end holding a descriptor fetched from another peer by hash
+    // calls ProgramMount alone and never touches ProgramAuthor. That is the
+    // transferable-compute story in two signatures.
+    //
+    // ProgramRender returns every output port decoded BY SHAPE, so the C#
+    // side binds shapes (text, display-list) and never a program.
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "ProgramAuthor")]
+    public static extern IntPtr ProgramAuthor(long peerHandle,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "ProgramMount")]
+    public static extern IntPtr ProgramMount(long peerHandle,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string descriptorPath);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "ProgramRegisterWake")]
+    public static extern IntPtr ProgramRegisterWake(long programHandle, IntPtr callback);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "ProgramStart")]
+    public static extern IntPtr ProgramStart(long programHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "ProgramStop")]
+    public static extern IntPtr ProgramStop(long programHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "ProgramRestart")]
+    public static extern IntPtr ProgramRestart(long programHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "ProgramRender")]
+    public static extern IntPtr ProgramRender(long programHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "ProgramInputKeys")]
+    public static extern IntPtr ProgramInputKeys(long programHandle,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string portName, long keys);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "ProgramInputDirection")]
+    public static extern IntPtr ProgramInputDirection(long programHandle,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string portName, long dir);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "ProgramClose")]
+    public static extern void ProgramClose(long programHandle);
+
     // --- Per-panel shell ------------------------------------------------
     //
     // PHASE-I-DESKTOP-RENDERER-PLAN §I.5 — each ShellPanel owns its

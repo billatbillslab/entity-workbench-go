@@ -541,8 +541,8 @@ func cmdInspectChain(sh *Shell, args []string) (Result, error) {
 		for _, m := range trace.Errors {
 			lines = append(lines,
 				fmt.Sprintf("  [%s] step=%s reason=%s status=%d code=%s",
-					m.Kind, m.StepIndex, m.Reason, m.Body.OriginalStatus, m.Body.OriginalCode),
-				fmt.Sprintf("    failed_uri: %s", m.Body.FailedDeliveryURI),
+					m.Kind, m.StepIndex, m.Reason, m.Body.Status, m.Body.Code),
+				fmt.Sprintf("    failed_uri: %s", m.Body.TargetURI),
 				fmt.Sprintf("    marker:     %s", m.Hash),
 			)
 		}

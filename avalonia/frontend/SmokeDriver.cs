@@ -93,6 +93,15 @@ public static class SmokeDriver
             return StartAsteroids(window, peer);
         }
 
+        // WB_SMOKE_PROGRAM=life|snake|asteroids — drives the GENERIC host panel.
+        // One driver for every program, against the three above which are one
+        // driver each. Same real X11 paint, same Skia, same bridge.
+        var programMode = Environment.GetEnvironmentVariable("WB_SMOKE_PROGRAM");
+        if (!string.IsNullOrEmpty(programMode))
+        {
+            return StartProgram(window, peer, programMode);
+        }
+
         var siteMode = Environment.GetEnvironmentVariable("WB_SMOKE_SITE_NAVIGATE");
         if (!string.IsNullOrEmpty(siteMode))
         {
@@ -570,6 +579,101 @@ public static class SmokeDriver
             // clock stopping is the model working, not a failure. Log it
             // and keep sampling so the frames still cover the window.
             Log($"iter {_iteration}/{_cyclePaths} — {lp.StatusTextForTests}");
+            _iteration++;
+        };
+        _cycleTimer.Start();
+    }
+
+    // --- GENERIC-HOST mode (WB_SMOKE_PROGRAM) ---------------------------
+    //
+    // Drives ProgramPanel for any of the three programs. The ONLY thing that
+    // varies is the registry key; there is no per-program branch below, which is
+    // the same claim the Go host makes, now asserted through real X11 + Skia.
+    //
+    // This is the strongest cheap evidence available for the rung: if the
+    // vocabulary were secretly game-shaped, one of the three would need special
+    // handling right here, and it does not.
+    private static bool StartProgram(MainWindow window, PeerView peer, string program)
+    {
+        _window = window;
+        _peer = peer;
+        _cyclePaths = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_PATHS"), out var n) ? n : 20;
+        _cycleGapMs = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_GAP_MS"), out var g) ? g : 500;
+        Log($"program mode: program={program} samples={_cyclePaths} gap={_cycleGapMs}ms");
+
+        var slot = program switch
+        {
+            "life" => "program-life",
+            "snake" => "program-snake",
+            "asteroids" => "program-asteroids",
+            _ => null,
+        };
+        if (slot == null)
+        {
+            Log($"WB_SMOKE_PROGRAM={program} is not one of life|snake|asteroids");
+            return false;
+        }
+
+        try
+        {
+            peer.SwitchMiddleSlotForSmoke(slot);
+            Log($"middle slot -> {slot}");
+        }
+        catch (Exception ex)
+        {
+            Log($"failed to switch middle slot: {ex.Message}");
+            return false;
+        }
+
+        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        settle.Tick += (_, _) =>
+        {
+            settle.Stop();
+            StartProgramCycle();
+        };
+        settle.Start();
+        return true;
+    }
+
+    private static void StartProgramCycle()
+    {
+        if (_peer == null) return;
+        var prog = _peer.ProgramForSmoke;
+        if (prog == null)
+        {
+            Log("middle slot is not a ProgramPanel; program cycle aborted");
+            return;
+        }
+        prog.StartForTests();
+        Log($"program '{prog.ProgramNameForTests}' started (host tick clock running)");
+
+        _iteration = 0;
+        _cycleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_cycleGapMs) };
+        _cycleTimer.Tick += (_, _) =>
+        {
+            if (_peer == null)
+            {
+                _cycleTimer?.Stop();
+                return;
+            }
+            var pp = _peer.ProgramForSmoke;
+            if (pp == null)
+            {
+                _cycleTimer?.Stop();
+                Log("program panel disappeared mid-cycle; aborting");
+                return;
+            }
+            if (_iteration >= _cyclePaths)
+            {
+                _cycleTimer?.Stop();
+                Log($"program cycle complete ({_iteration} samples) — final: {pp.StatusTextForTests}");
+                return;
+            }
+            // The status line carries the tick count and the bound shapes, so a
+            // frozen tick or a missing shape shows up in the log without a
+            // screenshot. A program reaching a fixed point is the program
+            // working, not a failure.
+            Log($"iter {_iteration}/{_cyclePaths} — {pp.StatusTextForTests}");
             _iteration++;
         };
         _cycleTimer.Start();

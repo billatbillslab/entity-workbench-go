@@ -54,6 +54,12 @@ import (
 const (
 	lifeGridType = "app/life/grid"
 
+	// 16x16: comfortably under the arith budget cliff (24x24) with ~6x
+	// wall-time headroom at 6 ticks/s. One source of truth — the authoring
+	// step and the legacy model must instantiate the same program.
+	lifeWidth  = 16
+	lifeHeight = 16
+
 	lifeLCGMul = uint64(1103515245)
 	lifeLCGAdd = uint64(12345)
 	lifeLCGMod = uint64(2147483648)
@@ -122,9 +128,7 @@ func NewLifeGameModel(ap *entitysdk.AppPeer, root string, rngSeed uint64) (*Life
 	if rngSeed == 0 {
 		rngSeed = uint64(time.Now().UnixNano()) % lifeLCGMod
 	}
-	// 16x16: comfortably under the arith budget cliff (24x24) with ~6x
-	// wall-time headroom at 6 ticks/s. See the header.
-	const w, h = 16, 16
+	const w, h = lifeWidth, lifeHeight
 	m := &LifeGameModel{
 		ap: ap, w: w, h: h,
 		statePath:    root + "/state",

@@ -15,7 +15,7 @@ IMAGE    := entity-avalonia:dev
 # below is fenced with $(PODMAN_BUILD_CAPS) / $(PODMAN_RUN_CAPS).
 include $(WB_DIR)/caps.mk
 
-.PHONY: help build run extract host-run up test smoke-xvfb smoke-xvfb-driver smoke-xvfb-site smoke-xvfb-snake smoke-xvfb-life smoke-xvfb-asteroids crash clean
+.PHONY: help build run extract host-run up test smoke-xvfb smoke-xvfb-driver smoke-xvfb-site smoke-xvfb-snake smoke-xvfb-life smoke-xvfb-asteroids smoke-xvfb-program crash clean
 
 help:
 	@echo "avalonia — podman build targets for the Avalonia desktop renderer"
@@ -30,6 +30,8 @@ help:
 	@echo "  make smoke-xvfb-site   drive SITE panel: cycle Navigate across the demo site"
 	@echo "  make smoke-xvfb-snake  drive SNAKE compute panel: tick clock + input-port steering"
 	@echo "  make smoke-xvfb-life   drive LIFE compute panel: tick clock, display-only"
+	@echo "  make smoke-xvfb-program PROGRAM=life|snake|asteroids"
+	@echo "                         drive the GENERIC host panel: one panel, any program"
 	@echo "  make smoke-xvfb-asteroids drive ASTEROIDS compute panel: held-key SET input +"
 	@echo "                         display-list output (heterogeneous actors)"
 	@echo "  make crash      decode the most recent libbridge.so coredump"
@@ -337,6 +339,44 @@ smoke-xvfb-life: build extract
 	  if [ $$status -ne 0 ]; then \
 	    echo ""; \
 	    echo "==> smoke-xvfb-life FAILED (exit $$status)"; \
+	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
+	    exit $$status; \
+	  fi
+	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
+
+# GENERIC HOST — drives ProgramPanel for any of the three programs through the
+# ONE generic panel, under real X11 + Skia.
+#
+#   make smoke-xvfb-program PROGRAM=life
+#   make smoke-xvfb-program PROGRAM=snake
+#   make smoke-xvfb-program PROGRAM=asteroids
+#
+# The point is what does NOT vary: one panel class, one driver, one accessor,
+# three programs mounted from descriptors. If the shape vocabulary were secretly
+# game-shaped, one of the three would need special handling here. Run all three
+# against smoke-xvfb-life / -snake / -asteroids to compare the generic path
+# against the legacy per-program panels while both still ship.
+PROGRAM ?= life
+
+smoke-xvfb-program: build extract
+	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
+	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh
+	@echo "==> GENERIC-HOST Xvfb smoke: program=$(PROGRAM) (timer=$(DRIVER_SECS)s samples=$(DRIVER_CYCLES))"
+	@cd $(APP_DIR)/dist-native && \
+	  podman run --rm $(PODMAN_RUN_CAPS) \
+	    --userns=keep-id \
+	    -v $(APP_DIR)/dist-native:/app:Z \
+	    -e WB_SMOKE_PROGRAM=$(PROGRAM) \
+	    -e WB_SMOKE_CYCLE_PATHS=$(DRIVER_CYCLES) \
+	    -e WB_SMOKE_CYCLE_GAP_MS=$(DRIVER_GAP_MS) \
+	    -w /app \
+	    --entrypoint bash \
+	    $(IMAGE) \
+	    /app/run-xvfb-smoke.sh $(DRIVER_SECS); \
+	  status=$$?; \
+	  if [ $$status -ne 0 ]; then \
+	    echo ""; \
+	    echo "==> smoke-xvfb-program ($(PROGRAM)) FAILED (exit $$status)"; \
 	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
 	    exit $$status; \
 	  fi

@@ -234,6 +234,27 @@ public sealed class PeerView : UserControl, IDisposable, IPanelHost
         }
     }
 
+    // GENERIC-HOST smoke surface — the one accessor for ALL programs mounted
+    // through ProgramPanel (WB_SMOKE_PROGRAM=life|snake|asteroids).
+    //
+    // Note there is exactly one of these, where the three above are one per
+    // program. That collapse is the rung, visible in the test surface.
+    internal Panels.ProgramPanel? ProgramForSmoke
+    {
+        get
+        {
+            for (int i = 0; i < _panelStack.SlotCountForTests; i++)
+            {
+                if (_panelStack.SlotAtForTests(i).CurrentPanelControlForSmoke
+                    is Panels.ProgramPanel pp)
+                {
+                    return pp;
+                }
+            }
+            return null;
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

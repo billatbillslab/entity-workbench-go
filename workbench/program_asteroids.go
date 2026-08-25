@@ -246,7 +246,7 @@ func NewAsteroidsGameModel(ap *entitysdk.AppPeer, root string, rngSeed uint64) (
 		Build(context.Background(), m.stepPath); err != nil {
 		return nil, fmt.Errorf("AsteroidsGameModel: build step: %w", err)
 	}
-	if _, err := buildAsteroidsDisplayExpr(ap, m.statePath).
+	if _, err := buildAsteroidsDisplayExpr(ap, m.statePath, astDisplayType).
 		Build(context.Background(), m.displayPath); err != nil {
 		return nil, fmt.Errorf("AsteroidsGameModel: build display: %w", err)
 	}
@@ -1080,7 +1080,20 @@ func astRadiusUnitsExpr(c *entitysdk.ComputeBuilder, kind, sz *entitysdk.Builder
 //
 // Note the trig table is scaled by astFP (one world unit), so a vertex offset
 // is table[idx] * radiusUnits — still no division anywhere.
-func buildAsteroidsDisplayExpr(ap *entitysdk.AppPeer, statePath string) *entitysdk.Builder {
+// buildAsteroidsDisplayExpr builds the display-list projection.
+//
+// outType is the entity type the projection CONSTRUCTS at the boundary, and it
+// is a parameter for an ABI reason rather than a stylistic one. A blind
+// display-list driver binds to the SHAPE's canonical type
+// (app/shape/display-list); it must not have to know that this particular
+// program calls its output "app/asteroids/display". A driver that accepts a
+// program's private type is a program-aware driver — the exact thing arch's §2
+// ruling demoted `raw-state` for.
+//
+// The legacy hard-coded model still passes astDisplayType; the authored
+// descriptor passes DisplayListType. Only the OUTER construct crosses the
+// boundary — the "/quad" type below is in-flight and never materializes.
+func buildAsteroidsDisplayExpr(ap *entitysdk.AppPeer, statePath, outType string) *entitysdk.Builder {
 	c := ap.Compute()
 	sc := c.LookupScope
 
@@ -1185,7 +1198,7 @@ func buildAsteroidsDisplayExpr(ap *entitysdk.AppPeer, statePath string) *entitys
 			"collection": sc("live"),
 			"fn":         quadFn,
 		}),
-	}, c.Construct(astDisplayType, outFields)))))
+	}, c.Construct(outType, outFields)))))
 }
 
 // buildAsteroidsFramebuffer lowers the FRAMEBUFFER output port: a fbW x fbH

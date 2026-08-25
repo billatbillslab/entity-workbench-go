@@ -44,6 +44,11 @@ const (
 	snakeStateType = "app/snake/state"
 	snakeInputType = "app/snake/input"
 
+	// One source of truth: the authoring step and the legacy model must
+	// instantiate the same program.
+	snakeWidth  = 12
+	snakeHeight = 12
+
 	// SnakeUp/Right/Down/Left are the input-port direction values.
 	SnakeUp    = uint64(0)
 	SnakeRight = uint64(1)
@@ -118,7 +123,7 @@ func NewSnakeGameModel(ap *entitysdk.AppPeer, root string, rngSeed uint64) (*Sna
 	if rngSeed == 0 {
 		rngSeed = uint64(time.Now().UnixNano()) % snakeLCGMod
 	}
-	const w, h = 12, 12
+	const w, h = snakeWidth, snakeHeight
 	m := &SnakeGameModel{
 		ap: ap, w: w, h: h,
 		statePath:    root + "/state",
