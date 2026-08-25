@@ -281,6 +281,21 @@ type ExtensionsConfig struct {
 	// whichever node the pool selected.
 	SignalingNode *SignalingNodeConfig
 
+	// Discovery wires the EXTENSION-DISCOVERY substrate
+	// (`system/discovery`) on a peer that is NOT listening.
+	//
+	// A listening peer gets the substrate automatically — the mDNS
+	// backend needs a bound port and there is nothing to announce
+	// without one. This field is the door for backends that need no
+	// listener, which is the `rendezvous` case: a peer standing at a
+	// signaling mailbox to be introduced typically has no reachable
+	// address, and that is the situation the backend exists for.
+	//
+	// Default: off unless ListenAddr is set. Presence of a non-Disabled
+	// struct forces it on. Registering the substrate registers no
+	// backend — see AppPeer.EnableRendezvousDiscovery.
+	Discovery *DiscoveryConfig
+
 	// Registry toggles the EXTENSION-REGISTRY name-resolution substrate
 	// — the meta-resolver (system/registry:resolve) plus the local-name
 	// backend (system/registry/local-name) that backs the `name →
@@ -317,6 +332,11 @@ type SignalingNodeConfig struct {
 // RegistryConfig wires the system/registry resolution substrate. A
 // non-nil value with Disabled=false turns it on; nil leaves it off.
 type RegistryConfig struct{ Disabled bool }
+
+// DiscoveryConfig forces the system/discovery substrate on for a
+// non-listening peer. A non-nil value with Disabled=false turns it on;
+// nil leaves the listener-conditional default in place.
+type DiscoveryConfig struct{ Disabled bool }
 
 // RoleConfig toggles the system/role extension. Zero value = enabled
 // with defaults. Currently no knobs; the struct exists so future

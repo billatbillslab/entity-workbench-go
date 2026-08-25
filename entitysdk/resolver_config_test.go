@@ -7,6 +7,7 @@ import (
 
 	cbor "github.com/fxamacker/cbor/v2"
 
+	"go.entitychurch.org/entity-core-go/core/entity"
 	"go.entitychurch.org/entity-core-go/core/types"
 )
 
@@ -242,6 +243,36 @@ func TestValidateResolverConfig_TheRuleBindsTheConfiguration(t *testing.T) {
 		t.Errorf("error does not carry the code: %v", err)
 	}
 
+	// Door 1, KIND-SCOPED — the same broad rule with **no matching chain
+	// entry at all**. This is row (b) of `REG-DISPATCH-CONFIG-REFUSED-1`
+	// and it is the row that discriminates the two readings: a
+	// chain-scoped implementation ACCEPTS this config, because nothing in
+	// the chain transmits today.
+	//
+	// It is pinned separately from the row above even though our
+	// implementation passes both by construction (door 1 never reads the
+	// chain), because that is precisely the situation AP19 names: green
+	// was our only evidence the guard was right, and it was compatible
+	// with the guard being keyed on the wrong thing. Ruled kind-scoped at
+	// spec 1.17 and re-derived at 1.18 — the deciding argument is that a
+	// distribution cannot evaluate a property that depends on what a
+	// downstream operator later adds to a chain it can neither re-review
+	// nor reach. Kind-scoped is monotone under extension, so a reviewed
+	// artifact stays reviewed.
+	unchained := types.ResolverConfigData{
+		ResolverChain: []types.ResolverChainEntry{{BackendKind: types.BackendKindLocalName, Priority: 0}},
+		NameFormatDispatch: []types.DispatchEntry{
+			{Pattern: CatchAllPattern, BackendKinds: []string{types.BackendKindDIDWeb}},
+		},
+	}
+	if err := ValidateResolverConfig(unchained); err == nil {
+		t.Error("a catch-all naming did-web was accepted because no did-web chain entry exists; " +
+			"the MUST is KIND-SCOPED (spec 1.17) — validity is a function of name_format_dispatch " +
+			"alone, so a reviewed config cannot be armed by a later chain edit somewhere else")
+	} else if !strings.Contains(err.Error(), "catchall_transmits_name") {
+		t.Errorf("error does not carry the code: %v", err)
+	}
+
 	// Door 2 — no dispatch list, and a name-transmitting kind in the
 	// chain. §4.1 step 2's eligible_kinds returns ALL when there are no
 	// rules: the filter is DISABLED, so every name reaches dns-txt and
@@ -335,19 +366,36 @@ func TestMatchesUnscopedNames_TheClassificationTheMUSTKeysOn(t *testing.T) {
 // round trip and the idempotence. An operator's config is theirs; a
 // bootstrap helper that rewrote it every start would be a configuration
 // surface that silently reverts.
-// TestResolverConfig_RefusesAViolatingConfigAtLoad pins §11.1's
-// PLACEMENT: "refused or normalized **at load**". Enforcing only on
-// author is the variant that fails, because what a config means depends
-// on a vocabulary outside it — a kind that was inert under §4.2 when it
-// was written becomes disclosing the moment it is declared, and nothing
-// re-examines a config that was validated once.
+// TestResolverConfig_SurfacesAViolatingConfigAtLoadAndRunsAnyway pins
+// all three halves of §4.1 [MUST, v1.17]: **surface it, never normalize
+// it, never refuse to start.**
+//
+// This pin is a REVERSAL and the reversal is the point. It previously
+// asserted that a violating stored config was refused at load, citing
+// §11.1's "refused or normalized at load" — a sentence arch withdrew on
+// 2026-08-19 (ROUTING-2026-08-19-i §4.2) because a loading resolver
+// cannot observe the MUST's own subject: §6a.9.2's store-first rule puts
+// an operator's deliberate edit and a distribution's seed in one entity
+// at one path, so enforcing there necessarily over-enforces and deletes
+// the operator `MAY` granted in the same paragraph. The check moved to
+// the write; the load surfaces.
+//
+// Reading is still re-validated on EVERY read, which is the part of the
+// old reasoning that survived: what a config means depends on a
+// vocabulary outside it — a kind inert under §4.2 when the config was
+// authored becomes disclosing the moment core-go declares it — so a
+// write-time-only check never re-examines what is already in the tree.
+// What changed is what the peer DOES about it, not whether it looks.
 //
 // The fixture writes the entity straight to the tree, bypassing
-// InstallResolverConfig, which is exactly how a config authored by an
-// older build (or another tool) arrives.
+// InstallResolverConfig. That is not an artifact of the test: §4.3
+// [v1.18] keeps the direct tree write as the out-of-band seed path
+// precisely so an operator has one, and says a config arriving that way
+// carries no acknowledgement and is therefore surfaced at every load
+// rather than silently honored. This test is that sentence.
 //
 // Tier: contract pin.
-func TestResolverConfig_RefusesAViolatingConfigAtLoad(t *testing.T) {
+func TestResolverConfig_SurfacesAViolatingConfigAtLoadAndRunsAnyway(t *testing.T) {
 	ap, err := CreatePeer(PeerConfig{Extensions: ExtensionsConfig{Registry: &RegistryConfig{}}})
 	if err != nil {
 		t.Fatalf("CreatePeer: %v", err)
@@ -368,26 +416,102 @@ func TestResolverConfig_RefusesAViolatingConfigAtLoad(t *testing.T) {
 		t.Fatalf("PutEntity: %v", err)
 	}
 
+	// SURFACE — the condition is reported, on every read, not once.
 	cfg, found, err := ap.ResolverConfig()
 	if err == nil {
-		t.Fatal("a stored config whose catch-all names dns-txt loaded clean; §11.1 refuses at load, " +
-			"and a write-time-only check never re-examines what is already in the tree")
+		t.Fatal("a stored config whose catch-all names dns-txt loaded clean; the load MUST surface " +
+			"the condition, and a write-time-only check never re-examines what is already in the tree")
+	}
+	if !IsNameDisclosureRefusal(err) {
+		t.Errorf("the diagnostic is not classifiable as a name-disclosure condition (%v); a caller "+
+			"cannot tell it from a decode failure, and only one of the two may abort a boot", err)
 	}
 	if !found {
-		t.Error("the refusal also reported not-found; the entity is there and an operator has to see it")
+		t.Error("the diagnostic also reported not-found; the entity is there and an operator has to see it")
 	}
 	if len(cfg.NameFormatDispatch) != 1 {
-		t.Errorf("the refusal withheld the config (%+v); a load-time refusal denies USE, not SIGHT — "+
+		t.Errorf("the diagnostic withheld the config (%+v); it denies CONFIDENCE, not SIGHT — "+
 			"an operator cannot repair bytes they cannot read", cfg)
 	}
 
-	// And Ensure does not paper over it by reinstalling the default.
-	// That would be §11.1's normalization half, applied to somebody
-	// else's privacy configuration, on a boot they did not ask about.
-	if wrote, err := ap.EnsureResolverConfig(); err == nil {
-		t.Error("EnsureResolverConfig accepted a violating stored config")
-	} else if wrote {
-		t.Error("EnsureResolverConfig overwrote a violating config instead of refusing it")
+	// NEVER REFUSE TO START — the boot helper reports success.
+	wrote, err := ap.EnsureResolverConfig()
+	if err != nil {
+		t.Fatalf("EnsureResolverConfig refused to proceed on a violating stored config (%v); §4.1 "+
+			"[MUST, v1.17] says never refuse to start — a peer that will not boot on a config the "+
+			"operator deliberately wrote has revoked the override the same paragraph grants them", err)
+	}
+
+	// NEVER NORMALIZE — the operator's bytes are untouched, and the
+	// stored config after the boot helper ran is the one they wrote.
+	if wrote {
+		t.Error("EnsureResolverConfig overwrote a violating config with the default; that is the " +
+			"normalization half §11.1 once permitted and 1.17 forbids outright — it repairs " +
+			"somebody's privacy configuration into a different one on a boot they did not ask about")
+	}
+	after, _, _ := ap.ResolverConfig()
+	if len(after.NameFormatDispatch) != 1 ||
+		after.NameFormatDispatch[0].BackendKinds[0] != types.BackendKindDNSTXT {
+		t.Errorf("the stored config changed across the boot helper (%+v); a resolver MUST NOT rewrite "+
+			"stored configuration as a side effect of reading it (§4.1 [MUST, v1.17])", after)
+	}
+
+	// AND THE SURFACING LANDS SOMEWHERE. Starting clean and starting
+	// under a config the operator was warned about must not be
+	// indistinguishable — that silence is what the MUST is against.
+	if diag := ap.ResolverConfigDiagnostic(); diag == nil {
+		t.Error("the peer started with no recorded diagnostic; 'surface it' needs a place to land, " +
+			"and a frontend has nothing to print")
+	} else if !IsNameDisclosureRefusal(diag) {
+		t.Errorf("the recorded diagnostic is not the disclosure condition: %v", diag)
+	}
+}
+
+// TestEnsureResolverConfig_AnUnreadableConfigIsStillFatal is the other
+// half of the v1.17 split, and it exists because the reversal above is
+// exactly the kind that overshoots.
+//
+// "Never refuse to start" is about a config the peer UNDERSTANDS and
+// disagrees with — a policy decision §4.1 lets an operator make. A
+// config that will not decode, or that holds the wrong entity type, is
+// not a policy decision anyone made; a peer that cannot read its own
+// configuration is not a peer running under one it disagrees with. If
+// this test ever passes by returning nil, the fix above swallowed a
+// class of failure it was never about.
+//
+// Tier: contract pin.
+func TestEnsureResolverConfig_AnUnreadableConfigIsStillFatal(t *testing.T) {
+	ap, err := CreatePeer(PeerConfig{Extensions: ExtensionsConfig{Registry: &RegistryConfig{}}})
+	if err != nil {
+		t.Fatalf("CreatePeer: %v", err)
+	}
+	defer ap.Close()
+
+	// The right path, the wrong type — how a foreign tool or a botched
+	// migration leaves the slot.
+	body, err := cbor.Marshal(map[string]any{"name": "nope"})
+	if err != nil {
+		t.Fatalf("cbor.Marshal: %v", err)
+	}
+	wrong, err := entity.NewEntity("system/registry/binding", cbor.RawMessage(body))
+	if err != nil {
+		t.Fatalf("entity.NewEntity: %v", err)
+	}
+	if _, err := ap.PutEntity(types.ResolverConfigStoragePath, wrong); err != nil {
+		t.Fatalf("PutEntity: %v", err)
+	}
+
+	if _, err := ap.EnsureResolverConfig(); err == nil {
+		t.Fatal("a resolver-config slot holding the wrong entity type booted clean; only the " +
+			"name-disclosure condition is a diagnostic, and everything else is a peer that " +
+			"cannot read its own configuration")
+	} else if IsNameDisclosureRefusal(err) {
+		t.Errorf("a type mismatch classified as a name-disclosure condition (%v); the two get "+
+			"opposite treatment at boot and must not share a code", err)
+	}
+	if diag := ap.ResolverConfigDiagnostic(); diag != nil {
+		t.Errorf("an unreadable config was recorded as a disclosure diagnostic (%v); it is a "+
+			"failure, and a failure recorded as a warning is how a boot proceeds broken", diag)
 	}
 }
 

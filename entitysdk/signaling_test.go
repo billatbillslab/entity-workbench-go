@@ -67,7 +67,9 @@ func meetFixture(t *testing.T) (node, a, b *AppPeer) {
 // SIGNALING §1.2 — *"the key introduces; it never authorizes."* Standing
 // at a tag says nothing about who you are; the candidate surfacing and
 // the admission decision are DISCOVERY's, and the `rendezvous` backend
-// that does them is blocked on a spec fold (see signaling.go's header).
+// that does them is rendezvous.go, and its own gate
+// (TestRendezvous_TwoPeersSurfaceEachOtherAsCandidates) asserts the
+// layer this one deliberately does not reach.
 //
 // Tier: integration (real handler, real dispatch, real key derivation).
 func TestSignaling_TwoPeersMeetAtATag(t *testing.T) {

@@ -132,10 +132,13 @@ func newFromPeerConfig(cfg Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create local peer: %w", err)
 	}
+	// Same split as shellboot.Bootstrap: a name-disclosing stored config
+	// is a diagnostic on the peer and never a boot failure (§4.1
+	// [MUST, v1.17] — "never refuse to start"); an unreadable one aborts.
 	if !cfg.DisableRegistry {
 		if _, err := peer.EnsureResolverConfig(); err != nil {
 			_ = peer.Close()
-			return nil, fmt.Errorf("resolver-config refused at load: %w", err)
+			return nil, fmt.Errorf("resolver-config unreadable: %w", err)
 		}
 	}
 	drainTreeEvents(peer)

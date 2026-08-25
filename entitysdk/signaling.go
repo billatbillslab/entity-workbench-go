@@ -17,19 +17,15 @@ import (
 // anything is DISCOVERY's (§2's grant decision). Nothing in this file
 // surfaces a candidate or admits a peer, deliberately.
 //
-// The `rendezvous` DISCOVERY backend that sits on top is **not built
-// yet, and is blocked upstream rather than unscoped**:
-// PROPOSAL-DISCOVERY-RENDEZVOUS-BACKEND is RULED (2026-08-17) and its
-// §6 fold has not landed — `EXTENSION-DISCOVERY` is still v1.0 with a
-// `<"mdns" | "qr" | ...>` backend enum, no `rendezvous` token, and no
-// §5.5. That subsection is where the mode split and the TOFU +
-// successor requirements live, so building the backend now would mean
-// implementing a normative surface from a proposal. Ask routed:
-// `docs/architecture/reviews/DISCOVERY-RENDEZVOUS-FOLD-ASK-2026-08-19.md`.
+// The `rendezvous` DISCOVERY backend that sits on top is
+// **`rendezvous.go`**, built against the RULED proposal rather than
+// against landed `EXTENSION-DISCOVERY` (whose §6 fold is still owed —
+// arch's R-10). Read that file's header for the coupling and the cost.
 //
-// The carrier does not wait on any of that. It is landed spec, the
-// kernel ships it (`ext/signaling`), and until now nothing in this
-// repo consumed it.
+// The carrier does not depend on any of that. It is landed spec
+// (EXTENSION-SIGNALING v1.1), the kernel ships it (`ext/signaling`), and
+// it is consumable on its own by anything that wants a mailbox rather
+// than a candidate.
 
 // Rendezvous key modes — EXTENSION-SIGNALING §3.2. Exported because a
 // caller picks one, and because the mode string is domain-separated

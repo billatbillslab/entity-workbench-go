@@ -1,6 +1,7 @@
 package entitysdk
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -240,16 +241,68 @@ func matchesUnscopedNames(pattern string) bool {
 	return true
 }
 
-// ValidateResolverConfig enforces the MUST inside §4.1 step 2 before a
-// config can reach the tree: **a distribution's shipped resolver-config
-// MUST NOT make a name-transmitting backend eligible for an unscoped
-// name** (spec 1.14).
+// The three codes ValidateResolverConfig uses for the §4.1 step 2
+// name-disclosure MUST, and nothing else. They are enumerated here
+// because the ENFORCEMENT POINT differs by caller — a write refuses, a
+// load surfaces and runs anyway (§4.1 [MUST, v1.17]) — and a caller
+// cannot make that distinction from `err != nil`. A decode failure and
+// a disclosure violation are both errors and only one of them is a
+// policy decision the operator is allowed to have made.
+var nameDisclosureCodes = map[string]bool{
+	"catchall_transmits_name":        true,
+	"broad_pattern_transmits_name":   true,
+	"filter_disabled_transmits_name": true,
+}
+
+// IsNameDisclosureRefusal reports whether err is ValidateResolverConfig
+// finding the §4.1 step 2 condition — as opposed to a decode failure, a
+// type mismatch, or a store error.
 //
-// Refusals rather than normalizations. Normalizing would be conformant
-// per §11.1 ("refused or normalized at load"), but silently rewriting
-// an operator's privacy configuration into a different one is the wrong
-// half of that choice: the operator asked for something and would not
-// learn they did not get it.
+// The distinction is load-bearing at exactly one place: a peer starting
+// up. §4.1 [MUST, v1.17] says a resolver loading a violating config MUST
+// surface it and MUST NOT decline to run; a config it cannot *decode* is
+// a different fact and stays fatal.
+func IsNameDisclosureRefusal(err error) bool {
+	var e *Error
+	if !errors.As(err, &e) {
+		return false
+	}
+	return nameDisclosureCodes[e.Code]
+}
+
+// ValidateResolverConfig enforces the MUST inside §4.1 step 2: **a
+// resolver-config MUST NOT make a name-transmitting backend eligible
+// for an unscoped name** (spec 1.14).
+//
+// **This is a WRITE-side check, and that placement is now the spec's**
+// (1.17, arch ROUTING-2026-08-19-i §4.2). §4.1 step 2 binds *a
+// distribution shipping a config* and *a peer storing one*; §11.1's
+// former "refused or normalized **at load**" clause is **withdrawn**,
+// because §6a.9.2's store-first rule puts an operator's deliberate edit
+// and a distribution's seed in one entity at one path, so a loading
+// resolver cannot observe which act produced the bytes and necessarily
+// over-enforces. See ResolverConfig for what a load does instead.
+//
+// Refusals rather than normalizations, and 1.17 makes that general
+// rather than one of two permitted halves: **a resolver MUST NOT
+// rewrite stored configuration as a side effect of reading it.**
+// Silently rewriting an operator's privacy configuration into a
+// different one makes their stored bytes lie — the config says one
+// thing and the peer does another, with no diagnostic.
+//
+// **The check is KIND-SCOPED: a pure function of `name_format_dispatch`
+// that never consults `resolver_chain`** (ruled 1.17, derived 1.18).
+// Door 1 below refuses a broad rule naming `did-web` whether or not a
+// `did-web` chain entry exists. The deciding argument is who the MUST
+// binds: a distribution cannot evaluate "is this config safe" under a
+// chain-scoped reading, because safety would depend on what a
+// downstream operator later adds to a chain the distribution can
+// neither re-review nor reach. Kind-scoped makes validity monotone
+// under extension, so a reviewed artifact stays reviewed. (Arch's first
+// published rationale — "a chain-scoped row arms silently" — was
+// withdrawn at 1.18 as refuted by §4.1's own whole-config sentence. The
+// conclusion stands on the monotonicity argument; the pin below asserts
+// the behaviour, not the rationale.)
 //
 // **The rule binds the configuration, not one row** — widened by arch
 // at 1.14 (D4, ROUTING-2026-08-19-b §2), because a rule binding one row
@@ -262,7 +315,10 @@ func matchesUnscopedNames(pattern string) bool {
 //     matchesUnscopedNames for how the class is decided. Position is
 //     still not a defect — under the filter reading (§4, spec 1.7) a
 //     broad pattern is bounded by what it may NAME, not by where it
-//     sits.
+//     sits. **The chain is not consulted here** — that is the
+//     kind-scoped ruling, and row (b) of `REG-DISPATCH-CONFIG-REFUSED-1`
+//     is the discriminator that separates it from the chain-scoped
+//     reading a passing suite would otherwise hide.
 //  2. **An absent or empty `name_format_dispatch` while a
 //     name-transmitting kind sits in the `resolver_chain`.** §4.1 step
 //     2's `eligible_kinds` returns ALL when there are no rules — the
@@ -352,6 +408,27 @@ func sortedKinds(set map[string]bool) []string {
 
 // InstallResolverConfig validates and writes the resolver-config at its
 // canonical path. The entity is peer-local and not synced (§4).
+//
+// **This is the enforcement point the MUST binds** (spec 1.17): an
+// actor is present at a write, the refusal is actionable, and it
+// destroys nothing. Nothing is written on refusal — a subsequent read
+// returns the previous bytes, which is `REG-DISPATCH-CONFIG-REFUSED-1`
+// row (e), the row that pins "reading is not writing".
+//
+// **The operator `MAY` has no expression on this surface yet, and that
+// is a kernel gap rather than a decision of ours.** §4.3 [v1.18] makes
+// the override a parameter of a new registry operation —
+// `set-resolver-config {config, acknowledge_name_disclosure?}` — and
+// states in as many words that it MUST NOT become a field of the
+// entity: a field is written by whoever writes the bytes, so a
+// distribution could set it, and it would move a content-addressed
+// type's hash to carry a claim it cannot secure. That operation is
+// **unimplemented in every seat at 1.18**, core-go included, so there is
+// nothing to dispatch to. We do not invent a local acknowledgement
+// parameter in the meantime; the path an operator has today is the one
+// §4.3 keeps open — a direct tree write of the entity, which carries no
+// acknowledgement and is therefore surfaced at every load rather than
+// silently honored. That is exactly what ResolverConfig does.
 func (a *AppPeer) InstallResolverConfig(cfg types.ResolverConfigData) error {
 	if err := ValidateResolverConfig(cfg); err != nil {
 		return err
@@ -367,26 +444,40 @@ func (a *AppPeer) InstallResolverConfig(cfg types.ResolverConfigData) error {
 }
 
 // ResolverConfig reads the installed resolver-config, if any, and
-// validates it **at load** — §11.1's placement, not ours: "MUST be
-// refused or normalized at load".
+// reports the §4.1 step 2 condition alongside it.
 //
-// A write-time-only check is the variant that fails here, and the
-// failure is not hypothetical for us. What a config means depends on a
-// vocabulary that lives outside it: a `backend_kind` unknown when the
-// config was authored is inert by §4.2 and discloses nothing, and it
-// stops being inert the moment core-go declares it and our
-// classification maps name it. The peer that upgrades re-reads the
-// stored config, and the entry that was dead config becomes a refusal
-// on that read. Nothing re-examines it if the only check ran on the day
-// it was authored.
+// **What a load does is SURFACE, and 1.17 makes all three halves of
+// that a MUST: surface it, never normalize it, never refuse to start.**
+// The error this returns is the diagnostic, and it is returned on every
+// read rather than once, because a violating config that arrived
+// out-of-band is honored-but-loud by design (§4.3) — a peer that went
+// quiet about it after the first read would be back to silence.
+//
+// Re-reading it every time is also the only thing that catches the case
+// a write-time check structurally cannot: what a config MEANS depends on
+// a vocabulary outside it. A `backend_kind` unknown when the config was
+// authored is inert by §4.2 and discloses nothing, and it stops being
+// inert the moment core-go declares it and our classification names it.
+// Nothing re-examines a config that was validated once on the day it was
+// written.
 //
 // **The config is returned even when it fails**, non-zero, alongside
-// the error. A load-time refusal that also withheld the bytes would
-// leave an operator unable to see what to repair — the entity is theirs
-// and it is already in their tree; what the refusal denies is *use*,
-// not *sight*. Callers that only want the stored bytes (repair tools, a
-// `config show` verb) use the value and log the error; callers that act
-// on the config MUST treat a non-nil error as fatal.
+// the error. Withholding the bytes would leave an operator unable to
+// see what to repair — the entity is theirs and it is already in their
+// tree; what the diagnostic denies is *confidence*, not *sight*.
+//
+// **Callers MUST NOT treat a name-disclosure error from here as fatal**
+// (§4.1 [MUST, v1.17]): refusing to run on a config the operator
+// deliberately wrote revokes the override the same paragraph grants
+// them, as surely as normalizing it would. Use IsNameDisclosureRefusal
+// to separate that case from a decode failure, which stays fatal.
+// EnsureResolverConfig does exactly this and is the boot path.
+//
+// This is a correction. Until 2026-08-19 this function's contract said
+// "callers that act on the config MUST treat a non-nil error as fatal",
+// citing §11.1's "refused or normalized at load" — a sentence arch has
+// since **withdrawn** as an enforcement point that cannot observe its
+// own subject.
 func (a *AppPeer) ResolverConfig() (types.ResolverConfigData, bool, error) {
 	ent, ok := a.store.Get(types.ResolverConfigStoragePath)
 	if !ok {
@@ -410,19 +501,42 @@ func (a *AppPeer) ResolverConfig() (types.ResolverConfigData, bool, error) {
 //
 // Idempotent on purpose: an operator's config is theirs, and a
 // bootstrap helper that overwrote it on every start would be a
-// configuration surface that silently reverts.
+// configuration surface that silently reverts. 1.17 generalizes that
+// instinct into a MUST — a resolver MUST NOT rewrite stored
+// configuration as a side effect of reading it, at any configuration
+// surface.
 //
-// A stored config that fails the §4.1 step 2 MUST surfaces here as an
-// error and is NOT replaced. That is the load-time refusal (see
-// ResolverConfig), and overwriting instead would be the normalization
-// half of §11.1 — conformant, and the wrong half: it would repair an
-// operator's privacy configuration into a different one on the next
-// boot, silently, which is the failure this whole surface exists to
-// prevent.
+// **A stored config that trips the §4.1 step 2 name-disclosure MUST is
+// a DIAGNOSTIC here, not an error**, and this is the one behaviour on
+// this surface that changed at spec 1.17. It is recorded on the peer
+// (ResolverConfigDiagnostic), the config is left exactly as the
+// operator wrote it, and the peer starts. Two things it deliberately
+// does not do, because each deletes the operator `MAY` §4.1 grants in
+// the same paragraph as the ban:
+//
+//   - **Refuse to start.** This is what we shipped, and it was wrong:
+//     a peer that will not boot on a config an operator deliberately
+//     wrote has revoked their override. Ruled explicitly at 1.17
+//     ("never refuse to start", MUST).
+//   - **Reinstall the default over it.** That is the normalization half
+//     §11.1 once permitted and 1.17 now forbids outright — it repairs
+//     someone's privacy configuration into a different one, on a boot
+//     they did not ask about.
+//
+// Every OTHER error still returns: a config that will not decode, one
+// holding the wrong entity type, a failed write. Those are not policy
+// decisions an operator is allowed to have made, and a peer that cannot
+// read its own configuration is not a peer running under a
+// configuration it disagrees with.
 func (a *AppPeer) EnsureResolverConfig() (bool, error) {
-	if _, found, err := a.ResolverConfig(); err != nil {
+	_, found, err := a.ResolverConfig()
+	switch {
+	case IsNameDisclosureRefusal(err):
+		a.resolverConfigDiag = err
+		return false, nil
+	case err != nil:
 		return false, err
-	} else if found {
+	case found:
 		return false, nil
 	}
 	if err := a.InstallResolverConfig(DefaultResolverConfig()); err != nil {
@@ -430,3 +544,19 @@ func (a *AppPeer) EnsureResolverConfig() (bool, error) {
 	}
 	return true, nil
 }
+
+// ResolverConfigDiagnostic returns the §4.1 step 2 name-disclosure
+// condition EnsureResolverConfig found in an already-stored
+// resolver-config, or nil.
+//
+// This exists because "surface it, never refuse to start" needs somewhere
+// for the surfacing to LAND. A frontend prints it once at boot; the
+// `name config` verb prints it beside the config on every invocation;
+// nothing gates a code path on it. A peer that started clean and a peer
+// that started under a config its operator was warned about are
+// otherwise indistinguishable, which is the silence the MUST is against.
+//
+// It is set at boot rather than recomputed, and it is not a live view: a
+// config rewritten after start is re-validated by ResolverConfig on the
+// next read, which is where a resolution-time caller looks.
+func (a *AppPeer) ResolverConfigDiagnostic() error { return a.resolverConfigDiag }

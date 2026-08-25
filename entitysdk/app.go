@@ -111,6 +111,20 @@ type AppPeer struct {
 	// PublishedRootSeqFloor for why it is not persisted here.
 	prSeqMu    sync.Mutex
 	prSeqFloor map[string]uint64
+
+	// rendezvous is the registered `rendezvous` DISCOVERY backend, when
+	// EnableRendezvousDiscovery has run. Held so Close can stop its
+	// browse + re-offer loops — a backend with a live ticker outlives
+	// the peer otherwise, and D7's symmetric-state rule is that every
+	// start has a paired stop identified at the same change.
+	rdvMu      sync.Mutex
+	rendezvous *RendezvousBackend
+
+	// resolverConfigDiag holds the §4.1 step 2 name-disclosure condition
+	// EnsureResolverConfig found in an already-stored resolver-config, if
+	// any. It is a DIAGNOSTIC and never a boot failure — see
+	// ResolverConfigDiagnostic and resolver_config.go.
+	resolverConfigDiag error
 }
 
 // OwnerCapability returns the peer-owner self-capability entity
@@ -663,11 +677,23 @@ func buildPeerOptions(cfg PeerConfig) (*builtOptions, error) {
 	}
 	if cfg.ListenAddr != "" {
 		opts = append(opts, peer.WithListenAddr(cfg.ListenAddr))
-		// EXTENSION-DISCOVERY substrate, opt-in-on-listen. The mDNS
-		// backend needs the local peer-id and the bound port, both of
-		// which are only available post-peer.New(); the handler is
-		// registered here so dispatch can reach it (it returns 503 until
-		// SetupStore runs in assembleAppPeer).
+	}
+	// EXTENSION-DISCOVERY substrate. Wired when the peer listens (the
+	// mDNS backend needs the local peer-id and the bound port, both only
+	// available post-peer.New()) OR when Extensions.Discovery asks for it
+	// explicitly.
+	//
+	// **The explicit door exists because of the `rendezvous` backend.**
+	// Gating discovery on a listener was right while mDNS was the only
+	// backend — announcing a port you do not have is meaningless. It is
+	// exactly wrong for a rendezvous: a peer standing at a mailbox to be
+	// introduced is, in the common case, a peer with no reachable
+	// listener at all. The listener-conditional wiring would have
+	// excluded the peers the backend is for.
+	//
+	// The handler is registered here so dispatch can reach it; it returns
+	// 503 until SetupStore runs in assembleAppPeer.
+	if cfg.ListenAddr != "" || (cfg.Extensions.Discovery != nil && !cfg.Extensions.Discovery.Disabled) {
 		discoveryH := discovery.NewHandler()
 		opts = append(opts, peer.WithHandler(discovery.HandlerPattern, discoveryH))
 		built.discoveryHandler = discoveryH
@@ -1057,6 +1083,16 @@ func (a *AppPeer) SubscriptionEngine() *subscription.Engine { return a.subEngine
 // resources. Returns a 500 SDK Error on shutdown failure (partial
 // cleanup).
 func (a *AppPeer) Close() error {
+	// Stop the rendezvous backend's browse + re-offer tickers before the
+	// peer goes. They dispatch through this peer, so a loop that outlived
+	// Close would be polling a closed peer forever — D7's symmetric-state
+	// rule, and the reason the backend is held on the struct at all.
+	a.rdvMu.Lock()
+	rdv := a.rendezvous
+	a.rdvMu.Unlock()
+	if rdv != nil {
+		rdv.Close()
+	}
 	if err := a.peer.Close(); err != nil {
 		return WrapError(500, "close_failed", "peer close", err)
 	}

@@ -4,6 +4,12 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+
+	"go.entitychurch.org/entity-core-go/core/crypto"
+	"go.entitychurch.org/entity-core-go/core/peer"
+	"go.entitychurch.org/entity-core-go/core/types"
+
+	"entity-workbench-go/entitysdk"
 )
 
 // TestBootstrap_Memory verifies the default (ephemeral, in-memory)
@@ -85,5 +91,100 @@ func TestBootstrap_AliasFromIdentity(t *testing.T) {
 
 	if ws.Local.Alias != "myname" {
 		t.Fatalf("explicit LocalAlias should win, got %q", ws.Local.Alias)
+	}
+}
+
+// TestBootstrap_ANameDisclosingConfigDoesNotStopTheBoot crosses the seam
+// between the SDK's EnsureResolverConfig and the shipped startup
+// sequence: a peer whose stored resolver-config trips EXTENSION-REGISTRY
+// §4.1 step 2 **starts**, keeps the operator's bytes, and carries the
+// condition as a diagnostic.
+//
+// It is a real-session test — two Bootstraps over one SQLite file under
+// one keypair, so the second boot reads what the first one left — rather
+// than a unit call, because the defect it fences was ONLY at this seam.
+// EnsureResolverConfig was correct in isolation and shellboot wrapped its
+// error into a fatal `return nil, nil, err`; every unit test on either
+// side was green while the shipped binary refused to start. That is
+// AP21's shape, and D22 is the rule: a contract between two components is
+// only tested by a test that crosses it.
+//
+// The spec: §4.1 [MUST, v1.17] — "at load: surface it, never normalize
+// it, never refuse to start". Refusing to boot deletes the operator
+// override the same paragraph grants, exactly as normalizing would.
+//
+// Tier: real-session.
+func TestBootstrap_ANameDisclosingConfigDoesNotStopTheBoot(t *testing.T) {
+	ctx := context.Background()
+	storagePath := filepath.Join(t.TempDir(), "store.db")
+
+	// One keypair across both boots. Without it each Bootstrap generates a
+	// fresh one and writes under a different peer-id in the same file, so
+	// the second boot would read an empty namespace and the test would
+	// pass without ever loading the config it is about (the ephemeral-shell
+	// re-namespacing issue, STATUS "Open bugs").
+	kp, err := crypto.Generate()
+	if err != nil {
+		t.Fatalf("crypto.Generate: %v", err)
+	}
+	cfg := Config{
+		LocalAlias:       "op",
+		StorageKind:      "sqlite",
+		StoragePath:      storagePath,
+		ExtraPeerOptions: []peer.Option{peer.WithIdentity(kp)},
+	}
+
+	// Boot 1 — clean. Then the operator deliberately installs a config
+	// that discloses names, via the direct tree write §4.3 keeps open as
+	// the out-of-band seed path (InstallResolverConfig refuses it, which
+	// is the write-side MUST and is not what is under test here).
+	ap, _, err := Bootstrap(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Bootstrap (clean): %v", err)
+	}
+	violating := types.ResolverConfigData{
+		ResolverChain: []types.ResolverChainEntry{{BackendKind: types.BackendKindDNSTXT, Priority: 0}},
+		NameFormatDispatch: []types.DispatchEntry{
+			{Pattern: entitysdk.CatchAllPattern, BackendKinds: []string{types.BackendKindDNSTXT}},
+		},
+	}
+	ent, err := violating.ToEntity()
+	if err != nil {
+		t.Fatalf("ToEntity: %v", err)
+	}
+	if _, err := ap.PutEntity(types.ResolverConfigStoragePath, ent); err != nil {
+		t.Fatalf("seed the violating config: %v", err)
+	}
+	if err := ap.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Boot 2 — this is the assertion. Before 2026-08-19 it returned
+	// "resolver-config refused at load" and the binary exited.
+	ap2, _, err := Bootstrap(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Bootstrap refused to start on a name-disclosing stored config: %v\n"+
+			"EXTENSION-REGISTRY §4.1 [MUST, v1.17] says surface it and run; a peer that will not "+
+			"boot on a config its operator deliberately wrote has revoked the override the spec "+
+			"grants them in the same paragraph", err)
+	}
+	defer ap2.Close()
+
+	if diag := ap2.ResolverConfigDiagnostic(); diag == nil {
+		t.Error("the peer booted with no diagnostic recorded; 'surface it' is the other half of the " +
+			"MUST, and a boot that is silent about a disclosing config is the failure mode")
+	}
+
+	// And it is running under the operator's config, not a repaired copy.
+	// A boot that quietly reinstalled the default would satisfy the
+	// assertions above and be the normalization 1.17 forbids outright.
+	got, found, _ := ap2.ResolverConfig()
+	if !found {
+		t.Fatal("the stored config vanished across the boot")
+	}
+	if len(got.NameFormatDispatch) != 1 ||
+		got.NameFormatDispatch[0].BackendKinds[0] != types.BackendKindDNSTXT {
+		t.Errorf("the boot rewrote the operator's config (%+v); a resolver MUST NOT rewrite stored "+
+			"configuration as a side effect of reading it", got)
 	}
 }

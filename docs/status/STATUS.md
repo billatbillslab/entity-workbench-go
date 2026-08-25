@@ -33,15 +33,16 @@ label would explain away the one observation that does not fit it.
 It builds its peers directly via `entitysdk` and is untouched by this session's work. It is
 load-dependent, so `make test-each` reproduces it far more readily than a targeted run.
 
-**Latest arch packet read: `ROUTING-2026-08-19-d`** (arch `fc27873`, carrying **REGISTRY 1.16**
-at arch `d3752ca`); browser-rust's `ROUTING-2026-08-19-d` read at their `fbc2c5c`. D21 — this
-line is the subtraction that tells the next session what it has not opened. Read *every*
-document naming this repo, `cc` included:
+**Latest arch packet read: `ROUTING-2026-08-19-j`** (arch `05faaa5`, carrying **REGISTRY 1.18**);
+`-19-i` at arch `3dd5800` (**REGISTRY 1.17**) read in the same pass. browser-rust's
+`ROUTING-2026-08-19-d` read at their `fbc2c5c`. D21 — this line is the subtraction that tells the
+next session what it has not opened. Read *every* document naming this repo, `cc` included:
 `grep -ril 'workbench-go' ../entity-system-architecture/docs/status/`.
 
 **Inbound, all answered:** `-19-b` §2 (validator widening → §6c), `-19-c` (the registry board is
 closed; our only row was the widening), browser-rust's `-19-d` (consume-us ask → §6d, plus their
-F6 correction folded in as AP22), and arch's `-19-d` (→ §6e below).
+F6 correction folded in as AP22), arch's `-19-d` (→ §6e), and **`-19-i` + `-19-j` (→ §6f — both
+addressed to core-go, both moving a MUST we had shipped the day before; one live defect)**.
 
 ## Where it is
 
@@ -61,6 +62,12 @@ small CDN corridor (`entity-publish` / `entity-vcs` / `entity-fetch`, plus
 it is deliberately unmerged (see the guardrail below).
 
 ## Where we left off
+
+**Latest handoff:** `docs/status/HANDOFF-2026-08-19-reachability-front-door-and-the-rendezvous-hold.md`
+for the session before this one. **Piece 4 — the rendezvous DISCOVERY backend — is BUILT**
+(`021e5c2`), so the four-piece connectivity list is complete; §3 piece 4 has the result and what
+it routed. Also this session: a live conformance defect fixed under D21 (§6f — our boot refused
+to start on a config REGISTRY 1.17 says it MUST run under).
 
 Three threads: the share arc (open, moving), the compute floor (held), and a closed
 stabilization pass.
@@ -317,9 +324,10 @@ nobody prices this against our own tree again:**
   mechanism exists anywhere in the corpus** (arch Q18) — build against static config and route the
   wall rather than invent a credential shape.
 
-**Piece 4, started 2026-08-19 — the carrier landed; the backend waits on an editorial fold, not a
-decision.** The D20 pre-check said "registration + a consumer" and that is right; what it did not
-check is whether the DISCOVERY surface it registers into exists. It does not:
+**Piece 4, started 2026-08-19 — the carrier landed; the backend is READY TO BUILD.** The D20
+pre-check said "registration + a consumer" and that is right; what it did not check is whether the
+DISCOVERY surface it registers into exists in landed spec. It does not — which turned out to be
+worth knowing and not worth stopping for:
 
 ```
 $ grep -rn 'rendezvous' ../entity-system-architecture/specs/extensions/EXTENSION-DISCOVERY.md
@@ -335,25 +343,94 @@ locally is AP20's exact shape one step earlier. `entity-core-go` matches the spe
 `docs/architecture/reviews/DISCOVERY-RENDEZVOUS-FOLD-ASK-2026-08-19.md`. **A RULED stamp is a
 decision, not a normative surface** — we read it as landed and had to grep to find out otherwise.
 
-**Re-checked 2026-08-19 against arch HEAD (`05faaa5`), because "blocked" was overstating it.**
-Arch's own `docs/COHORT-OPEN-ITEMS.md` carries this as **R-10, owner `arch`, OPEN** — *"ruled, not
-folded; workbench-go is blocked on it"* — so they hold the same picture we do. What that means
-precisely, and the distinction worth keeping:
+**HOLD LIFTED by operator ruling, 2026-08-19. Piece 4 is READY TO BUILD — build it against the
+proposal.** The hold was mine and it was wrong; recording the correction so no session re-derives
+it.
 
-- **Nothing here is undecided.** The proposal header reads `Status: RULED 2026-08-17`, and its own
-  §0 states the normative delta is **one enum value** in `EXTENSION-DISCOVERY` §2.1 plus a
+Re-checked against arch HEAD (`05faaa5`): arch's `docs/COHORT-OPEN-ITEMS.md` carries this as
+**R-10, owner `arch`, OPEN** — *"ruled, not folded"*. The facts:
+
+- **Nothing here is undecided.** The proposal header reads `Status: RULED 2026-08-17`, and its §0
+  states the normative delta is **one enum value** in `EXTENSION-DISCOVERY` §2.1 plus a
   composition subsection — **no wire change, no new entity type**. The mode split, TOFU, and the
-  successor chain are fully written in §2/§5.
-- **What is missing is arch writing that ruling into the spec.** That is editorial, it is R-10, and
-  it is theirs.
-- **So this is a policy hold, not a technical one.** What stops us is `AGENTS-STANDARD`'s
-  implement-against-the-landed-spec rule plus AP20 (a token we would have to define locally is a
-  defect in one of two documents). Both are ours, and both are the right call at rest.
-- **The cost of the alternative is small and worth stating rather than implying.** Building against
-  the proposal today risks re-cutting a few hundred lines of backend if the token's spelling moves;
-  the enum is open (`<"mdns" | "qr" | ...>`), so an undeclared token is not a conformance violation
-  for a consumer. **This is an operator decision, not a blocker** — if the fold has not landed when
-  piece 4 next comes up, build it against the proposal and say so in the commit.
+  successor chain are fully written in §2/§5. It is buildable precisely, not guessed.
+- **What is missing is arch writing that ruling into spec text.** Editorial, R-10, theirs.
+
+**The operator's ruling: implementing a RULED proposal is normal practice in this cohort, and is
+one of the ways a spec gets validated before it is folded.** `AGENTS-STANDARD`'s *"implement
+against the landed spec, not in-flight proposals"* is aimed at **unruled** proposals — building on
+a shape nobody has decided. A proposal stamped RULED is a decision; treating it as in-flight is
+over-reading the rule, and the cost of that over-read here was a self-inflicted stop on work whose
+content was fully determined.
+
+**AP20 does not apply and I mis-cited it.** AP20 is about inventing a constant to satisfy a spec
+table *whose referent does not exist* — the tell being that you must write a doc comment
+explaining the absence. Here the referent exists and is named in a ruling; we are implementing
+ahead of the fold, which is a different act with a different failure mode.
+
+**Build it, and route what building teaches.** The known cost is small and stated up front: if the
+token's spelling moves in the fold, we re-cut a few hundred lines of backend. The enum is open
+(`<"mdns" | "qr" | ...>`), so an undeclared token is not a conformance violation for a consumer.
+The commit says it is built against `PROPOSAL-DISCOVERY-RENDEZVOUS-BACKEND` at arch `05faaa5` and
+not against landed `EXTENSION-DISCOVERY`, so the coupling is greppable when the fold lands — and
+anything the implementation surfaces goes back to arch as feedback on the proposal, which is the
+point of doing it in this order.
+
+The routed ask (`docs/architecture/reviews/DISCOVERY-RENDEZVOUS-FOLD-ASK-2026-08-19.md`) stands as
+a fold request, **not** as a blocker on us; it should be re-framed as "here is what we learned
+building it" when piece 4 lands.
+
+**PIECE 4 IS BUILT — 2026-08-19, `021e5c2`.** `entitysdk/rendezvous.go`, against the RULED
+proposal at arch `05faaa5`, not against landed `EXTENSION-DISCOVERY` v1.0. **The four-piece
+connectivity list is complete.**
+
+The D20 pre-check held: **registration and a consumer, not authoring.** `ext/signaling` ships the
+ops, the client, the key derivation and the §6.3 signed container; `ext/discovery` ships the
+substrate, the candidate store, the watchable prefix and `PromoteSuccessor`. **There is no `meet`
+op and there should not be one** — now confirmed from the implementing side rather than the
+reading.
+
+The rules that are not obvious, each pinned and each mutation-checked:
+
+- **`peer_id` and `identity_hint` are both ABSENT on `candidate_0`** — and we hold a
+  *cryptographically verified* counterpart identity at that moment (core-go's §6.3 container
+  returns a `VerifiedSigner`). The backend does not use it. §2.2 step 1 puts the peer-id after
+  IDENTIFY over the **admitted channel**, and SIGNALING §1.2 is why: reaching a key proves
+  someone derived that key, never that the channel admission opens belongs to them. This is the
+  half an implementation gets wrong by doing the helpful thing.
+- **`pair` mode is refused** (proposal §2.1) — both peer-ids are inputs, so there is nothing to
+  surface and a candidate would be the caller's own input presented to a user as a stranger.
+- **`endpoint_hint` locates a DEPOSIT, not a bucket.** The proposal's "bucket/key locator" cannot
+  tell two peers at one tag from one peer seen twice. For `secret` mode it carries neither the
+  secret nor the derived key — a candidate exists to be *shown to a user*, which is the last
+  place a credential belongs.
+- **Skip-own, departure-reaping, one candidate per standing peer.** A deposit falling out of the
+  bucket at the node's TTL is a real departure signal (§3.0.1 rule 3's shape, not rule 4's
+  one-shot waiver), and the candidate entity embeds `observed_at`, so re-emitting per poll would
+  show one peer N times.
+
+**Scope boundary:** `candidate_0` only. The §2.2 successor promotion, the §2 grant decision and
+IDENTIFY are the admission path, not the backend.
+
+**`Extensions.Discovery` is new and exists because of this** — see AP26. The substrate was wired
+only for **listening** peers, which was right while mDNS was the only backend and exactly wrong
+here: a rendezvous peer stands at a mailbox *because* it has no reachable listener, so the gate
+excluded precisely the peers the backend serves. Default unchanged; a control arm asserts that.
+
+**Routed, which is the other half of building ahead of a fold:**
+`docs/architecture/reviews/RENDEZVOUS-BACKEND-BUILD-RESULT-2026-08-19.md` — four things §5.5
+should carry (the TOFU rule's reason **and its cost**: §2.2.1's fail-closed IDENTIFY comparison is
+structurally unavailable to every rendezvous candidate, so TOFU is the ceiling and not a fallback;
+deposit granularity; the mode-dependent locator; a reap rule for a non-mDNS departure signal).
+**None is a defect in the ruling** — the layering, the token and the composition all held up under
+construction. The earlier fold-ask keeps its §3 ask and has its §2 (the stop) withdrawn in place.
+
+**Not cross-impl.** Everything above is Go meeting Go over its own node — cohort-consistent at
+best. The interop claim needs browser-rust's `src/rendezvous.rs` on the other end of **one shared
+node** (§3.4), which we have not run and are not asserting.
+
+**Ratchet: AP26** — *the first consumer's precondition became the substrate's.* Not promoted; it
+has bitten once. Charter is D1–D22 / **AP1–AP26**.
 
 **The carrier half is landed spec (EXTENSION-SIGNALING v1.1) and is done.** `entitysdk/signaling.go`
 — `AppPeer.Signaling(nodePeerID)` with `Offer` / `Collect` / `Advertise` through `extDispatch` (so
@@ -781,6 +858,68 @@ We deliberately do **not** put a `max_ttl` in `DefaultResolverConfig`. A ceiling
 choice, `0` is undeclared, and inventing a default here would ship an opinion the spec does not
 carry.
 
+### 6f. REGISTRY 1.17 + 1.18 — the load-time refusal we shipped is now a MUST NOT (2026-08-19)
+
+`2d312f1`, answering arch `ROUTING-2026-08-19-i` (arch `3dd5800`) and `-19-j` (`05faaa5`). **Both
+are addressed to `entity-core-go` and §7 of the first says explicitly "not yours to chase."** Read
+under D21 anyway, because each moves a MUST — and one of them moves a MUST we had implemented the
+previous day. This is D21 doing the exact job AP12 earned it for, on the session-start step rather
+than by feature work tripping over it.
+
+**§11.1's *"refused or normalized at load"* is WITHDRAWN, and we had shipped the refusal.** §4.1
+step 2 binds *a distribution shipping* a config and *a peer storing* one. §6a.9.2's store-first rule
+puts an operator's deliberate edit and a distribution's seed **in one entity at one path**, so a
+loading resolver cannot observe which act produced the bytes; it necessarily over-enforces, and the
+over-enforcement **deleted the operator `MAY` the same paragraph grants**. Replacement, all three
+halves a MUST at 1.17: **surface it, never normalize it, never refuse to start.**
+
+Ours refused, and `shellboot` turned that into a fatal — **`entity-shell` would not start** on a
+name-disclosing stored config. Fixed:
+
+- `EnsureResolverConfig` records a disclosure condition as a diagnostic and returns success;
+  `AppPeer.ResolverConfigDiagnostic` is where the surfacing lands, and `shellboot` prints it to
+  stderr at boot. `name config` already printed it beside the config and needed no change.
+- **Every other error still returns.** `IsNameDisclosureRefusal` is the classifier that makes the
+  split expressible: a policy decision an operator is allowed to have made, versus a config the
+  peer cannot read. A reversal like this overshoots in exactly one direction and that is the fence.
+- Nothing normalizes — the operator's bytes survive the boot verbatim, which 1.17 generalizes into
+  its own MUST (*a resolver MUST NOT rewrite stored configuration as a side effect of reading it*).
+
+**Verified rather than assumed on the rest of both packets:**
+
+- **§4.1 step 2 is KIND-SCOPED** (ruled 1.17, re-derived 1.18): validity is a function of
+  `name_format_dispatch` alone, never of `resolver_chain`. **Ours already was**, by construction —
+  door 1 never read the chain. Pinned anyway as `REG-DISPATCH-CONFIG-REFUSED-1` row (b): a broad
+  rule naming `did-web` with **no** `did-web` chain entry, which a chain-scoped implementation
+  accepts. AP19 is why — green under both readings was our only evidence.
+- **arch withdrew its own published rationale for that ruling at 1.18** (the "silent arming"
+  argument, refuted by §4.1's own whole-config sentence) and kept the conclusion on monotonicity.
+  Our doc comment carries the replacement reason and says the pin asserts the behaviour, not the
+  rationale — a correct conclusion resting on a withdrawn reason is what gets cited later.
+- **§4.3's `set-resolver-config` / `get-resolver-config` `[v1.18]` are new and unimplemented in
+  every seat, core-go included.** That is where the operator override
+  (`acknowledge_name_disclosure`) lives. **We do not invent a local acknowledgement parameter** —
+  the spec says in as many words it MUST NOT become a field of the entity, because a field is
+  written by whoever writes the bytes and would move a content-addressed type's hash to carry an
+  unsecurable claim. The path an operator has today is the one §4.3 keeps open: a direct tree
+  write, which carries no acknowledgement and is therefore surfaced at every load. **The fix above
+  is what makes that path work** — before it, the peer refused to boot instead.
+- `REG-NAME-CONSTRAINTS-GRAMMAR-1`, the `hints.max_ttl` ceiling, R-4, R-13: all confirmed to land
+  outside our tree.
+
+Three pins, all mutation-checked against the pre-fix code — including
+`TestBootstrap_ANameDisclosingConfigDoesNotStopTheBoot`, two `Bootstrap`s over one SQLite file
+under one keypair, because **the SDK call was correct in isolation and the fatal lived in the
+caller** (D22).
+
+**Ratchet: AP25 — an enforcement point that cannot observe the rule's subject.** *Before
+implementing a rule, ask whether the point you are implementing it at can see the thing the rule
+is about.* The tell is a check whose subject names an actor or an act — *did a **distribution**
+ship this?*, *was this **latched** or re-read?* — that the data at that point does not carry.
+**Deliberately not promoted:** this shape has bitten once. AP19 is a *test* that could not tell two
+rules apart and AP22 is a guard keyed on familiarity; neither is this. Charter is D1–D22 /
+**AP1–AP25**.
+
 ### 7. The name arc reaches a user, and the handler browser closes the parity gap (2026-08-19)
 
 `ddde4c7` + `27874ad` + `6204630`. Two gaps that were both *reachability*, not features.
@@ -988,6 +1127,12 @@ generic-host copy of all three panels. Retiring them means re-pinning that oracl
 `dev` is comparison surface, not a release.
 
 ## Waiting on
+
+> **"Waiting on" means the content is undecided.** A ruling that has not been folded into spec
+> text is **not** on this list — that is an editorial queue item on the authoring repo's board,
+> and we build against the ruling and route what it teaches (operator ruling 2026-08-19, see §3
+> piece 4 and `AGENTS.md`). Putting a decided-but-unfolded surface here is how a self-inflicted
+> stop gets laundered into a dependency.
 
 - **arch:** the subtree-state descriptor/host convention (the successor rung, and the same
   rung as Doom-realtime); the `concat` collection primitive ruling;

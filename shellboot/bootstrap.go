@@ -15,6 +15,7 @@ package shellboot
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"go.entitychurch.org/entity-core-go/core/peer"
 
@@ -213,18 +214,29 @@ func Bootstrap(ctx context.Context, cfg Config) (*entitysdk.AppPeer, *shellcmd.S
 	// EnsureResolverConfig is idempotent and never overwrites an operator's
 	// config, so this is a first-boot write, not a per-start one.
 	//
-	// A stored config that FAILS the §4.1 step 2 privacy MUST is fatal
-	// here, deliberately. §11.1 places the refusal at load and
-	// InstallResolverConfig refuses rather than normalizes; booting anyway
-	// would resolve names through the very configuration the validator
-	// exists to reject, and would do it silently. The message names the
-	// opt-out so an operator with a config we reject is not stuck.
+	// A stored config that FAILS the §4.1 step 2 privacy MUST is a
+	// DIAGNOSTIC, not a boot failure — EXTENSION-REGISTRY §4.1
+	// [MUST, v1.17]: "surface it, never normalize it, never refuse to
+	// start". We shipped the refusal (against §11.1's since-withdrawn
+	// "refused or normalized at load"), and it was wrong in the specific
+	// way the ruling names: refusing to boot on a config an operator
+	// deliberately wrote revokes the override the same paragraph grants
+	// them. The stderr line below is the surfacing, and it is the only
+	// place a `--` frontend gets one; `name config` prints the same
+	// condition beside the config on every invocation.
+	//
+	// Real errors — a config that will not decode, a failed write — still
+	// abort. See EnsureResolverConfig for the split.
 	if !cfg.DisableRegistry {
 		if _, err := ap.EnsureResolverConfig(); err != nil {
 			_ = ap.Close()
-			return nil, nil, fmt.Errorf("shellboot: resolver-config refused at load "+
-				"(EXTENSION-REGISTRY §4.1 step 2 / §11.1); repair it or start with "+
-				"registry disabled to inspect it: %w", err)
+			return nil, nil, fmt.Errorf("shellboot: resolver-config unreadable: %w", err)
+		}
+		if diag := ap.ResolverConfigDiagnostic(); diag != nil {
+			fmt.Fprintf(os.Stderr,
+				"warning: the stored resolver-config discloses names (EXTENSION-REGISTRY "+
+					"§4.1 step 2): %v\n         running under it as written; `name config` "+
+					"shows it, and the peer is NOT resolving through a repaired copy.\n", diag)
 		}
 	}
 

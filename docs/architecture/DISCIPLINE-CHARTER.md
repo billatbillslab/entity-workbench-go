@@ -451,7 +451,7 @@ Short enough to run on every change. Six inherited, four substrate-native.
 
 ---
 
-## 4. The anti-pattern catalog (AP1-AP24)
+## 4. The anti-pattern catalog (AP1-AP26)
 
 Each a real defect that shipped or a claim that was routed, diagnosed, and
 is now pinned by a regression test.
@@ -599,6 +599,48 @@ control and does not become a tripwire when core-go adds a handler. AP24 —
 `Walking_Every_Handler_Survives_Selection_Churn` in the headless suite, plus
 `make smoke-xvfb-handlers`, which logs the transition count it actually completed and says so
 explicitly when that count is zero (the same self-check the minimize gate earned).
+
+**AP25 — the resolver-config load-refusal (2026-08-19).** Earned by the D21 session-start
+read finding two packets past our last-read letter, both addressed to core-go, both moving a
+MUST we had shipped the day before.
+
+| AP  | Source | Pattern (the name we use for it) | Discipline |
+|-----|--------|----------------------------------|------------|
+| AP25 | `shellboot/bootstrap.go` + `entitysdk.EnsureResolverConfig` before `2d312f1`, against EXTENSION-REGISTRY 1.17 §4.1 | **An enforcement point that cannot observe the rule's subject.** EXTENSION-REGISTRY §11.1 said a violating `resolver-config` MUST be *"refused or normalized **at load**"*, so we refused at load, and `shellboot` turned that into a fatal — `entity-shell` would not start. Arch **withdrew the clause** the next day: §4.1 step 2 binds *a distribution shipping* a config and *a peer storing* one, and §6a.9.2's store-first rule puts an operator's deliberate edit and a distribution's seed **in one entity at one path**, so a loading resolver cannot tell which act produced the bytes. It therefore necessarily over-enforces, and the over-enforcement deleted the operator `MAY` granted in the same paragraph. The rule was never wrong; its *placement* was, and placement is the half no test on either side could discriminate. **Before implementing a rule, ask whether the point you are implementing it at can observe the thing the rule is about** — the tell is a check whose subject ("did a *distribution* ship this?", "was this *latched* or re-read?") names an actor or an act that the data at that point does not carry. When it cannot, the check will be right about the predicate and wrong about who it binds, and the failure lands as a refusal of something legal. | D8, D18, D21 |
+
+*Enforcement:* three pins, all mutation-checked against the pre-fix code.
+`TestResolverConfig_SurfacesAViolatingConfigAtLoadAndRunsAnyway` asserts all three halves of the
+replacement MUST (surface / never normalize / never refuse to start) and is itself a **reversal**
+of the pin that asserted the withdrawn behaviour — its doc comment carries the withdrawal so the
+next reader does not restore it. `TestEnsureResolverConfig_AnUnreadableConfigIsStillFatal` fences
+the direction a reversal like this overshoots in: only the *policy* condition is a diagnostic, and
+a config the peer cannot read stays fatal. `TestBootstrap_ANameDisclosingConfigDoesNotStopTheBoot`
+crosses the seam (D22) — two `Bootstrap`s over one SQLite file under one keypair — because the SDK
+call was correct in isolation and the fatal lived in the caller.
+
+**AP26 — the discovery-substrate listener gate (2026-08-19).** Earned building the second
+DISCOVERY backend, which is the first time the substrate had more than one.
+
+| AP  | Source | Pattern (the name we use for it) | Discipline |
+|-----|--------|----------------------------------|------------|
+| AP26 | `entitysdk/app.go`'s `if cfg.ListenAddr != ""` around `discovery.NewHandler()`, before `021e5c2` | **The first consumer's precondition became the substrate's.** The `system/discovery` substrate was wired only for peers with a `ListenAddr`. That is not a property of discovery; it is a property of **mDNS**, which announces a port and has nothing to say without one. When mDNS was the only backend the two were indistinguishable, so the gate was written in terms of the mechanism. The second backend inverted it exactly: a `rendezvous` peer stands at a mailbox **because it has no reachable listener**, so the gate excluded precisely the peers the backend exists to serve. Nothing was broken before, which is the trap — the constraint is invisible until a second consumer arrives, and by then it reads as load-bearing. **The tell is a substrate gate expressed in terms of a mechanism (a port, a socket, a file) rather than in terms of what the substrate does.** Ask what the *abstraction* needs, not what today's only implementation needs; when they differ, the implementation carries its own precondition and the substrate carries none. | D4, D5, D18 |
+
+*Enforcement:* `TestRendezvous_SubstrateNeedsNoListener` stands up a peer with **no** `ListenAddr`,
+asserts the substrate is present and a backend registers on it — and carries a **control arm**
+(AP23) asserting that a peer asking for neither a listener nor discovery still has no substrate, so
+the fix cannot be satisfied by making it unconditional. `Extensions.Discovery` is the explicit
+door; its doc comment names the reason so the gate is not re-added as a tidy-up.
+
+**Neither AP25 nor AP26 is promoted, and the count is the reason.** Each has bitten **once**. The
+neighbouring instances are different failures: AP19 is a *test* that could not tell two rules
+apart, AP22 is a guard keyed on familiarity rather than a property. If a second enforcement-point
+error lands — a check placed where its subject is unobservable — it earns a discipline then.
+
+**Evidence for D21, worth recording where D21 lives.** Both packets were addressed to
+`entity-core-go`; neither named us in its `To:` line; §7 of the first says explicitly *"not yours
+to chase."* The rule that says *a packet changing a table, a default, or a MUST is read the same
+session regardless of who it is addressed to* is the only reason this was found before it reached
+a user, and it was found on the session-start step rather than by feature work tripping over it.
 
 ---
 
