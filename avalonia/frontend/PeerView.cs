@@ -180,60 +180,6 @@ public sealed class PeerView : UserControl, IDisposable, IPanelHost
         }
     }
 
-    // ASTEROIDS smoke surface — same shape as SnakeForSmoke, for the
-    // heterogeneous-actor compute-program panel driver (WB_SMOKE_ASTEROIDS).
-    internal Panels.AsteroidsGamePanel? AsteroidsForSmoke
-    {
-        get
-        {
-            for (int i = 0; i < _panelStack.SlotCountForTests; i++)
-            {
-                if (_panelStack.SlotAtForTests(i).CurrentPanelControlForSmoke
-                    is Panels.AsteroidsGamePanel ap)
-                {
-                    return ap;
-                }
-            }
-            return null;
-        }
-    }
-
-    // SNAKE smoke surface — same shape as SiteForSmoke, for the
-    // compute-program panel driver (WB_SMOKE_SNAKE).
-    internal Panels.SnakeGamePanel? SnakeForSmoke
-    {
-        get
-        {
-            for (int i = 0; i < _panelStack.SlotCountForTests; i++)
-            {
-                if (_panelStack.SlotAtForTests(i).CurrentPanelControlForSmoke
-                    is Panels.SnakeGamePanel sp)
-                {
-                    return sp;
-                }
-            }
-            return null;
-        }
-    }
-
-    // LIFE smoke surface — same shape as SnakeForSmoke, for the
-    // display-only compute-program panel driver (WB_SMOKE_LIFE).
-    internal Panels.LifeGamePanel? LifeForSmoke
-    {
-        get
-        {
-            for (int i = 0; i < _panelStack.SlotCountForTests; i++)
-            {
-                if (_panelStack.SlotAtForTests(i).CurrentPanelControlForSmoke
-                    is Panels.LifeGamePanel lp)
-                {
-                    return lp;
-                }
-            }
-            return null;
-        }
-    }
-
     // HANDLER-BROWSER smoke surface (WB_SMOKE_HANDLERS). Same shape as
     // the others: find the mounted panel so the driver can select and
     // execute against it under real X11.

@@ -105,27 +105,13 @@ public static class SmokeDriver
 
     private static bool StartPrimaryMode(MainWindow window, PeerView peer)
     {
-        var snakeMode = Environment.GetEnvironmentVariable("WB_SMOKE_SNAKE");
-        if (!string.IsNullOrEmpty(snakeMode))
-        {
-            return StartSnake(window, peer);
-        }
-
-        var lifeMode = Environment.GetEnvironmentVariable("WB_SMOKE_LIFE");
-        if (!string.IsNullOrEmpty(lifeMode))
-        {
-            return StartLife(window, peer);
-        }
-
-        var asteroidsMode = Environment.GetEnvironmentVariable("WB_SMOKE_ASTEROIDS");
-        if (!string.IsNullOrEmpty(asteroidsMode))
-        {
-            return StartAsteroids(window, peer);
-        }
+        // WB_SMOKE_SNAKE / _LIFE / _ASTEROIDS drove the three legacy
+        // per-program panels and were retired with them on 2026-08-20.
+        // WB_SMOKE_PROGRAM=snake|life|asteroids drives the same programs
+        // through the generic host — one driver instead of three.
 
         // WB_SMOKE_PROGRAM=life|snake|asteroids — drives the GENERIC host panel.
-        // One driver for every program, against the three above which are one
-        // driver each. Same real X11 paint, same Skia, same bridge.
+        // One driver, every program. Same real X11 paint, same Skia, same bridge.
         var programMode = Environment.GetEnvironmentVariable("WB_SMOKE_PROGRAM");
         if (!string.IsNullOrEmpty(programMode))
         {
@@ -346,286 +332,6 @@ public static class SmokeDriver
         _iteration++;
     }
 
-    // --- SNAKE mode (WB_SMOKE_SNAKE) ------------------------------------
-    //
-    // Drives the compute-program panel end-to-end under real X11:
-    // switch the middle slot to the snake panel, start the host tick
-    // clock, then steer a clockwise box via the input port so the game
-    // survives the whole run (12x12 board, 6 ticks/s). Every surface a
-    // user touches — panel mount, Start, input-port writes, wake→render
-    // — runs for the full timer window; the run.log + frames carry the
-    // proof. Honors WB_SMOKE_CYCLE_PATHS (steer count, default 50) and
-    // WB_SMOKE_CYCLE_GAP_MS (steer gap, default 500ms ≈ one turn every
-    // 3 ticks).
-    private static bool StartSnake(MainWindow window, PeerView peer)
-    {
-        _window = window;
-        _peer = peer;
-        _cyclePaths = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_PATHS"), out var n) ? n : 50;
-        _cycleGapMs = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_GAP_MS"), out var g) ? g : 500;
-        Log($"snake mode: steers={_cyclePaths} gap={_cycleGapMs}ms");
-
-        try
-        {
-            peer.SwitchMiddleSlotForSmoke("snake");
-            Log("middle slot -> snake");
-        }
-        catch (Exception ex)
-        {
-            Log($"failed to switch middle slot: {ex.Message}");
-            return false;
-        }
-
-        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        settle.Tick += (_, _) =>
-        {
-            settle.Stop();
-            StartSnakeCycle();
-        };
-        settle.Start();
-        return true;
-    }
-
-    private static void StartSnakeCycle()
-    {
-        if (_peer == null) return;
-        var snake = _peer.SnakeForSmoke;
-        if (snake == null)
-        {
-            Log("middle slot is not snake; snake cycle aborted");
-            return;
-        }
-        snake.StartForTests();
-        Log("snake started (host tick clock running)");
-
-        // Clockwise box: right, down, left, up — safe forever from the
-        // seed (center of the board, heading right).
-        var steers = new long[] { 2, 3, 0, 1 };
-        _iteration = 0;
-        _cycleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_cycleGapMs) };
-        _cycleTimer.Tick += (_, _) =>
-        {
-            if (_peer == null)
-            {
-                _cycleTimer?.Stop();
-                return;
-            }
-            var sp = _peer.SnakeForSmoke;
-            if (sp == null)
-            {
-                _cycleTimer?.Stop();
-                Log("snake panel disappeared mid-cycle; aborting");
-                return;
-            }
-            if (_iteration >= _cyclePaths)
-            {
-                _cycleTimer?.Stop();
-                Log($"snake cycle complete ({_iteration} steers) — final: {sp.StatusTextForTests}");
-                return;
-            }
-            var dir = steers[_iteration % steers.Length];
-            sp.InputForTests(dir);
-            if ((_iteration % 8) == 0)
-            {
-                Log($"iter {_iteration}/{_cyclePaths} dir={dir} — {sp.StatusTextForTests}");
-            }
-            _iteration++;
-        };
-        _cycleTimer.Start();
-    }
-
-    // --- ASTEROIDS mode (WB_SMOKE_ASTEROIDS) ----------------------------
-    //
-    // Drives the heterogeneous-actor compute-program panel end-to-end under
-    // real X11: switch the middle slot to the asteroids panel, start the host
-    // tick clock, then fly — holding SETS of keys (thrust+turn together) and
-    // firing, so the run exercises the two things this panel exists to prove:
-    //
-    //   - the HELD-KEY SET input port. Snake's driver writes one direction per
-    //     step; this one writes a BITMASK, and the sets below deliberately hold
-    //     multiple keys at once — the case Snake's port structurally cannot
-    //     express.
-    //   - the DISPLAY-LIST output port. The frames are the proof: if the panel
-    //     paints actors it never received actor state for, the display list is
-    //     carrying the whole render contract.
-    //
-    // The status line reports the live drawable count, so a run that spawns
-    // bullets and splits asteroids shows the actor set CHANGING LENGTH in the
-    // log — the variable-set result, visible from the UI. Honors
-    // WB_SMOKE_CYCLE_PATHS (input changes, default 40) and
-    // WB_SMOKE_CYCLE_GAP_MS (gap, default 400ms).
-    private static bool StartAsteroids(MainWindow window, PeerView peer)
-    {
-        _window = window;
-        _peer = peer;
-        _cyclePaths = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_PATHS"), out var n) ? n : 40;
-        _cycleGapMs = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_GAP_MS"), out var g) ? g : 400;
-        Log($"asteroids mode: inputs={_cyclePaths} gap={_cycleGapMs}ms");
-
-        try
-        {
-            peer.SwitchMiddleSlotForSmoke("asteroids");
-            Log("middle slot -> asteroids");
-        }
-        catch (Exception ex)
-        {
-            Log($"failed to switch middle slot: {ex.Message}");
-            return false;
-        }
-
-        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        settle.Tick += (_, _) =>
-        {
-            settle.Stop();
-            StartAsteroidsCycle();
-        };
-        settle.Start();
-        return true;
-    }
-
-    private static void StartAsteroidsCycle()
-    {
-        if (_peer == null) return;
-        var ast = _peer.AsteroidsForSmoke;
-        if (ast == null)
-        {
-            Log("middle slot is not asteroids; asteroids cycle aborted");
-            return;
-        }
-        ast.StartForTests();
-        Log("asteroids started (host tick clock running)");
-
-        // Held-key SETS. Bits: 0 left, 1 right, 2 thrust, 3 fire.
-        // Note the combinations — 0b1100 is thrust+fire held together, 0b1010 is
-        // right+fire, 0b0110 is right+thrust. A single-value port cannot say any
-        // of these, which is the whole reason the port is a bitmask.
-        var sets = new long[]
-        {
-            0b1000, // fire
-            0b0110, // right + thrust
-            0b1100, // thrust + fire
-            0b0000, // coast
-            0b1001, // left + fire
-            0b0101, // left + thrust
-            0b1010, // right + fire
-            0b0100, // thrust
-        };
-        _iteration = 0;
-        _cycleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_cycleGapMs) };
-        _cycleTimer.Tick += (_, _) =>
-        {
-            if (_peer == null)
-            {
-                _cycleTimer?.Stop();
-                return;
-            }
-            var ap = _peer.AsteroidsForSmoke;
-            if (ap == null)
-            {
-                _cycleTimer?.Stop();
-                Log("asteroids panel disappeared mid-cycle; aborting");
-                return;
-            }
-            if (_iteration >= _cyclePaths)
-            {
-                _cycleTimer?.Stop();
-                Log($"asteroids cycle complete ({_iteration} inputs) — final: {ap.StatusTextForTests}");
-                return;
-            }
-            var keys = sets[_iteration % sets.Length];
-            ap.InputForTests(keys);
-            if ((_iteration % 4) == 0)
-            {
-                Log($"iter {_iteration}/{_cyclePaths} keys=0b{Convert.ToString(keys, 2).PadLeft(4, '0')} " +
-                    $"drawables={ap.DrawableCountForTests} — {ap.StatusTextForTests}");
-            }
-            _iteration++;
-        };
-        _cycleTimer.Start();
-    }
-
-    // --- LIFE mode (WB_SMOKE_LIFE) --------------------------------------
-    //
-    // Drives the display-only compute-program panel end-to-end under
-    // real X11: switch the middle slot to the life panel, start the host
-    // tick clock, then sample the status line while it evolves (16x16
-    // soup, 6 ticks/s). There is no input port to drive — Life is a
-    // closed program — so the proof this run carries is the other half
-    // of Snake's: panel mount, Start, wake→render, screenshots. Honors
-    // WB_SMOKE_CYCLE_PATHS (status samples, default 20) and
-    // WB_SMOKE_CYCLE_GAP_MS (sample gap, default 500ms ≈ 3 generations).
-    private static bool StartLife(MainWindow window, PeerView peer)
-    {
-        _window = window;
-        _peer = peer;
-        _cyclePaths = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_PATHS"), out var n) ? n : 20;
-        _cycleGapMs = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_GAP_MS"), out var g) ? g : 500;
-        Log($"life mode: samples={_cyclePaths} gap={_cycleGapMs}ms");
-
-        try
-        {
-            peer.SwitchMiddleSlotForSmoke("life");
-            Log("middle slot -> life");
-        }
-        catch (Exception ex)
-        {
-            Log($"failed to switch middle slot: {ex.Message}");
-            return false;
-        }
-
-        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        settle.Tick += (_, _) =>
-        {
-            settle.Stop();
-            StartLifeCycle();
-        };
-        settle.Start();
-        return true;
-    }
-
-    private static void StartLifeCycle()
-    {
-        if (_peer == null) return;
-        var life = _peer.LifeForSmoke;
-        if (life == null)
-        {
-            Log("middle slot is not life; life cycle aborted");
-            return;
-        }
-        life.StartForTests();
-        Log("life started (host tick clock running)");
-
-        _iteration = 0;
-        _cycleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_cycleGapMs) };
-        _cycleTimer.Tick += (_, _) =>
-        {
-            if (_peer == null)
-            {
-                _cycleTimer?.Stop();
-                return;
-            }
-            var lp = _peer.LifeForSmoke;
-            if (lp == null)
-            {
-                _cycleTimer?.Stop();
-                Log("life panel disappeared mid-cycle; aborting");
-                return;
-            }
-            if (_iteration >= _cyclePaths)
-            {
-                _cycleTimer?.Stop();
-                Log($"life cycle complete ({_iteration} samples) — final: {lp.StatusTextForTests}");
-                return;
-            }
-            // A soup can legitimately reach a fixed point mid-run; the
-            // clock stopping is the model working, not a failure. Log it
-            // and keep sampling so the frames still cover the window.
-            Log($"iter {_iteration}/{_cyclePaths} — {lp.StatusTextForTests}");
-            _iteration++;
-        };
-        _cycleTimer.Start();
-    }
-
     // --- HANDLER-BROWSER mode (WB_SMOKE_HANDLERS) -----------------------
     //
     // Drives HandlerBrowserPanel under real X11: mount it in the middle
@@ -834,13 +540,14 @@ public static class SmokeDriver
 
     // --- GENERIC-HOST mode (WB_SMOKE_PROGRAM) ---------------------------
     //
-    // Drives ProgramPanel for any of the three programs. The ONLY thing that
-    // varies is the registry key; there is no per-program branch below, which is
-    // the same claim the Go host makes, now asserted through real X11 + Skia.
+    // Drives ProgramPanel for any program. The ONLY thing that varies is the
+    // registry key; there is no per-program branch below, which is the same
+    // claim the Go host makes, now asserted through real X11 + Skia.
     //
     // This is the strongest cheap evidence available for the rung: if the
     // vocabulary were secretly game-shaped, one of the three would need special
-    // handling right here, and it does not.
+    // handling right here, and it does not. As of 2026-08-20 it is also the ONLY
+    // program driver — the three per-program ones were retired with their panels.
     private static bool StartProgram(MainWindow window, PeerView peer, string program)
     {
         _window = window;

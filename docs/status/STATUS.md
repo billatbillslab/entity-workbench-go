@@ -9,12 +9,11 @@ _Updated: 2026-08-20 · public: v0.8.0 (master) · working branch: `dev` (ahead 
 > bugs. There is **no roadmap doc and there never was one** — "what's next" is the newest
 > handoff's recommended order plus "Waiting on" at the bottom of this file.
 
-**Green as of `HEAD`:** ten suites, run **individually to completion** (AP15 — a count from
-`make test` stops at the first failing package). `entitysdk` 199.5s · `inspect` 2.3s · `shell` 4.1s ·
-`shellboot` 10.9s · `shellcmd` 286.4s · `shellpanel` 1.7s · `workbench` 2.5s · `programs` 137.1s ·
-`publish` 2.0s · `fetch` 1.3s. Zero failures. `make lint` clean, and `gofmt -l` is now empty too
-(`6204630`). The command was
-`for t in sdk inspect shell shellboot shellcmd shellpanel workbench programs publish fetch; do make test-$t; done`.
+**Green as of `2efeb9d` (2026-08-20, `make test-each`):** all ten suites run **to completion**
+(AP15 — a count from `make test` stops at the first failing package). `sdk` 196s · `inspect` 3s ·
+`shell` 4s · `shellboot` 14s · `shellcmd` 287s · `shellpanel` 2s · `workbench` 3s · `programs` 140s ·
+`publish` 2s · `fetch` 1s. **Zero failures.** `make lint` clean; `gofmt -l` empty. This is the
+**merge gate** run — the sweep that preceded `dev` → `master`.
 
 **Avalonia: 60/60 headless** (`make -C avalonia test`, 2026-08-20 — three new liveness tests),
 plus `make smoke-xvfb-handlers` green under real X11 + software Skia — 21 handlers walked,
@@ -57,7 +56,13 @@ read as a paradox and got the failure shelved under a label that could not expla
 **`applyBindings` was our prime suspect from source reading and the measurement ruled it out** for
 this failure; the B1/B2 split is what keeps that honest.
 
-**Latest arch packet read: `ROUTING-2026-08-19-j`** (arch `05faaa5`, carrying **REGISTRY 1.18**);
+**Latest arch packet read: `ROUTING-2026-08-20-e` + `-h` + `-i` + `STATUS-2026-08-20-c`,
+at arch `8dd5689`** (§11). `-e` is addressed to us and carries the compute disposition; `-h`/`-i`
+are core-go's and name us in their fold order (D21 — a `cc` is a packet), and neither asks anything.
+**Before that: the whole earlier 2026-08-20 set** — `STATUS-2026-08-20-b`,
+`HANDOFF-2026-08-20` (arch), `ROUTING-2026-08-20-a/-b/-c/-d`, plus `ROUTING-2026-08-19-k` and
+`STATUS-2026-08-19`, all at arch `a5dfff3`. Eight documents naming this repo had landed since the
+previous marker and none had been opened — see §9. **Previously: `ROUTING-2026-08-19-j`** (arch `05faaa5`, carrying **REGISTRY 1.18**);
 `-19-i` at arch `3dd5800` (**REGISTRY 1.17**) read in the same pass. browser-rust's
 `ROUTING-2026-08-19-d` read at their `fbc2c5c`. D21 — this line is the subtraction that tells the
 next session what it has not opened. Read *every* document naming this repo, `cc` included:
@@ -96,8 +101,8 @@ one before. **Piece 4 — the rendezvous DISCOVERY backend — is BUILT**
 it routed. Also this session: a live conformance defect fixed under D21 (§6f — our boot refused
 to start on a config REGISTRY 1.17 says it MUST run under).
 
-Three threads: the share arc (open, moving), the compute floor (held), and a closed
-stabilization pass.
+Three threads: the share arc (open, moving), the compute floor (**deferred by operator decision,
+resumes after the release** — §11), and a closed stabilization pass.
 
 ### 1. The compute floor (the primary arc — Doom-class realtime) — WORKBENCH SIDE IS DRY
 
@@ -255,7 +260,7 @@ Where the six steps stand:
 | **3** | **Target prefix on the sync surface (source ≠ target)** | **done** — `MirrorSinceLastSeen` + `InstallRevisionMirrorChain` + `revision mirror` |
 | 4 | Follow vocabulary settled with browser-rust | **open — needs browser-rust.** Arch confirms the two pieces (one follow verb with a `strategy` field; a per-follow minted capability) need no arch ruling |
 | 5 | The first `app/share/*` record | **arch half DELIVERED, our half STARTED (`146f9a4`).** `APP-CONVENTION-SHARE` v0.1 authored (`bb86cd1`, `ROUTING-i` §4); `entitysdk/share.go` ships the `app/share/*` type vocabulary, the tagged target union, `ShareGrants` (with `peers` omitted), `ValidateShareGrants` (the §1.1 MUST as a refusal), `AuthorShare` and `ShareWithdrawalNotice`. Vectors **SHARE-4** and **SHARE-6** pass, plus three shape pins. The authoring/validation layer is pure, so it is green **through** the kernel block; persisting the record + delivering tokens is the half that waits. `strategy` still open on browser-rust (step 4) |
-| 6 | `APP-CONVENTION-CHAT` review as a consumer | open, competes with nothing |
+| 6 | `APP-CONVENTION-CHAT` review as a consumer | **DONE 2026-08-20** — `reviews/APP-CONVENTION-CHAT-CONSUMER-REVIEW-2026-08-20.md`. Three findings, each grounded in something this tree already hit: §4's `.list`/subscribe over `/{P}/…` needs a **mirror capability the proposal never names** (AP11 + the §PR-8 403 we shipped wrong first); the per-author `prev` chain has **no gap rule** and it is the same construction browser-rust already flagged in our follow; `attachments` is a **Layer-2 chunking contract** wearing a Layer-1 spelling. Plus one unlisted substrate dependency (content-store GC — a conversation is the purest unbounded-append workload there is) and a measured datum for `[ASK-ARCH-CHAT-2]` (the 20.3 MB/peer delivery ring). **Not building it** — the proposal is DRAFT, not `RULED` |
 
 **What 3a/3 mean in practice.** A peer can now read another peer's signed
 `system/peer/published-root` (full verification: content-hash recompute, signature against
@@ -505,7 +510,7 @@ from the Base58 peer-id, walk the CHAMP trie from `root_hash` over the emitted s
 404 (`TestPublish_SignedRootVerifiesFromTheEmittedFiles`).
 
 **Three things fell out of building it**, all in
-`docs/architecture/reviews/PUBLISHER-CONFORMANCE-RESULT-2026-08-18.md`:
+`docs/architecture/reviews/archive/PUBLISHER-CONFORMANCE-RESULT-2026-08-18.md`:
 
 1. **A signed root and a filtered publish are incompatible — we refuse at the emitter.** The
    closure obligation would upload the `IncludeType`/`IncludePath`-excluded entities' bytes under
@@ -628,7 +633,7 @@ path** — shows the handler running at status 200 and seeing `Resource == nil`.
 verbatim, as the test core-go is missing.
 
 Full packet, including the one-line fix, the reproducer, and the coverage gap that let it through:
-`docs/architecture/reviews/CORE-GO-LOCAL-DISPATCH-RESOURCE-2026-08-18.md`.
+`docs/architecture/reviews/archive/CORE-GO-LOCAL-DISPATCH-RESOURCE-2026-08-18.md`.
 **Re-run `make test` once it lands.** Do not work around it here — the call sites are correct.
 
 **Historical note, corrected 2026-08-20:** this section once ended *"the packet is still unsent —
@@ -708,7 +713,7 @@ documented as presentational), and **§4.1 step 2's catch-all local-only MUST, s
 write as a refusal**. 1.7 makes that the load-bearing rule explicitly — the same conclusion resting
 on the right sentence.
 
-Routed: `docs/architecture/reviews/RESOLVER-CONFIG-FILTER-CORRECTION-2026-08-18.md`, which also
+Routed: `docs/architecture/reviews/archive/RESOLVER-CONFIG-FILTER-CORRECTION-2026-08-18.md`, which also
 carries the two cohort observations (`did-key` vs `self-certifying`; `pinned` has no constant) and
 the `ROUTING-2026-08-18-i` acknowledgement.
 
@@ -1057,6 +1062,164 @@ and exits non-zero on the first orphan. Both are empty as of this commit. Charte
 **Owed:** `make reachability` is not in `check` yet — one clean sweep is not enough evidence
 that it will not false-positive on a legitimately internal model. Join it after a few sessions.
 
+### 9. The D21 sweep, run late: eight unread packets, and one of them is a hold on us (2026-08-20)
+
+`grep -ril 'workbench-go' ../entity-system-architecture/docs/status/` returned **eight documents
+newer than our last-read marker** — the entire 2026-08-20 set plus `ROUTING-2026-08-19-k` and
+`STATUS-2026-08-19`. All read this session. This is the discipline working late rather than not at
+all, and it is worth noting that the previous session's audit did not run it either.
+
+**Nothing in them assigns us work.** Three findings, in order of how much they change:
+
+**1. T5 · COMPUTE is `HELD BY DECISION` — and arch's own §4 says the hold was never delivered to its
+driver. We are the driver.** `PROPOSAL-COMPUTE-COLLECTION-PRIMITIVES` (the `concat` family) is
+**parked**, not queued. We had it recorded here as *"gated on arch"*, which reads as a queue
+position; a decision is a different thing and we were carrying the wrong one. Arch calls it *"the
+highest-value unaddressed item on the board"* and says it needs an **operator call**: does compute
+reactivate this cycle, or does the hold stand and get told to its driver? Five of the 39 active
+proposals sit downstream of it.
+**Why it lands here and not only on the compute tier:** the hold is upstream of the HUD text port →
+which is upstream of retiring the legacy panels → which is why `dev` cannot cleanly release (see the
+guardrail). Routed with the cost measured, and with the uncertainty stated — the HUD may be
+expressible on today's `map`/`fold`/arith vocabulary without the parked primitives, and we have not
+run that spike: `reviews/COMPUTE-HOLD-IMPACT-2026-08-20.md`.
+
+**2. R-10 is arch's next item, and their board lists us as blocked behind it. We are not.**
+`STATUS-2026-08-20-b` §3 and their handoff both name `entity-workbench-go` as *"blocked on it
+today"* and put the fold first *"before more design"*. We built against the ruling and shipped;
+the fold's absence holds no code here. Corrected in the reply so the fold gets sequenced on R-25's
+need rather than on a seat that is not actually waiting.
+
+**3. The transport-set round opened, and §2.3 asks every seat to grep its tree.**
+`ROUTING-2026-08-20-d` — `PROPOSAL-PEER-TRANSPORT-SET` fourth pass, answering R-22 (*a consumer
+holding only a `peer_id` cannot learn where that peer is*). Not ruled, no work assigned; arch wants
+implementation evidence before ruling. We are the seat shipping **both ends** of the profile path,
+so we answered with measurements rather than opinion:
+`reviews/TRANSPORT-SET-IMPLEMENTATION-EVIDENCE-2026-08-20.md`. The three findings worth repeating
+here: `transport.set|transport_set|TransportSet` is **zero occurrences** in our tree (nothing to
+collide with); our three self-published profiles are **coexisting singletons, not a set**, and our
+one signed aggregate (the published root) is not over profiles; and on R7's confirm-before-publish
+`SHOULD`, **our missing half is not the confirmation, it is the expiry** — we refuse structurally
+undialable addresses at the publish site with no network, but a profile has no TTL, so a rule that
+binds only the publish instant buys less than it looks like.
+
+**Three packets went out on the strength of this sweep:** the transport-set evidence, the
+compute-hold impact, and — separately, closing share-arc step 6 — the
+`APP-CONVENTION-CHAT` consumer review. All three carry measurements from this tree rather than
+positions; none of them asks for a ruling.
+
+**Also noted, no action:** arch records that our v1.17 refusal-at-load crash independently validated
+their withdrawal (`ROUTING-2026-08-20-a` §6), and corrects the record that our posture matching
+browser-rust's on the signed-root path is **cohort-consistency, not convergence**
+(`ROUTING-2026-08-20-b` §3) — the same distinction we owe in the other direction.
+
+### 10. The console/TUI review, asked for and run: it is not behind — it is bounded (2026-08-20)
+
+Operator asked whether the TUI has fallen behind and whether a catch-up is owed. **Measured, not
+estimated** — every `workbench/*_model.go` against both renderers:
+
+| Model | console | Avalonia |
+|---|---|---|
+| detail · handler · log · markdown_files · markdown_view · peer_info · query · site · tree | **yes** (9) | yes |
+| `peer_connections` | no | yes |
+| `peer_liveness` | no | yes (new today) |
+
+**Nine of eleven, and the two absences are the policy line, not drift.** Both missing models are
+**multi-peer connectivity** surfaces, and console is **frozen and single-peer by policy**
+(`AGENTS.md`: multiple renderers are a discipline enforcer, not a parity obligation). A single-peer
+TUI has no connections list to render and no second peer to hold a lifecycle transition for. The
+compute/program panels are absent for the same reason — that track is Avalonia's.
+
+**So there is no catch-up debt**, and the D18 compile gate that keeps it honest is green:
+`make build` produces `entity-shell` + `entity-console` + the three corridor binaries at `1398139`.
+The thing to watch is not console falling behind; it is a *model* change that breaks console, which
+is the signal that the abstraction was wrong — that is what the gate is for.
+
+**If console ever goes multi-peer**, `peer_liveness` is the one worth taking first: it is a flat
+sorted list with three states, which is the cheapest possible tview surface, and the CLI already has
+the same answer under `peer status`.
+
+### 11. Compute is sequenced, not stalled — and the cross-impl program gate is measured clean (2026-08-20)
+
+Arch's `ROUTING-2026-08-20-e` read at arch `8dd5689`, tree green at `2d79fa2`. **The compute
+disposition arrived, and it closes the item §9 opened.**
+
+**The decision.** T5 compute is **deferred by operator decision and resumes after the release** — not
+doubted, not dropped. Two stated reasons: the reachability stack (registry / routing / relay /
+network / transport) is **cross-peer observable** and therefore the part that cannot be fixed later,
+while compute's outstanding refinements are mostly *within* a peer; and compute is opt-out in a way
+the network layer is not (an app that never touches `system/compute` is a complete app; one that
+cannot reach a peer is not). **The five levers stay arch's and stay on the board.** What changes here
+is only the reading: they were **paused**, not unanswered, and §1's ledger now says so.
+
+**The two packets crossed.** `-e` was written against our tree at `2f285f7` — *before*
+`COMPUTE-HOLD-IMPACT-2026-08-20.md` landed (`42bd8c1`, corrected `f887f3d`) — and arch says outright
+it is not claiming to know our current state. Both documents reached the same answer independently:
+the hold costs this seat nothing today, and **the defect was the delivery, not the decision**.
+
+**Lever 1 re-measured, since arch asked to be told if our tree moved.** It has not moved on compute:
+`programs/` carries no functional change since `968190b` (2026-07-27) — only `6204630` (gofmt) and
+`a5752e2` (the frozen Life oracle, test-only). **`concat`/`range`/`group-by`/`assoc` are implemented
+nowhere**, independently confirmed at core-go `0332c90`: the builtin set is still
+`{arithmetic, compare, logic, field, construct, map, filter, fold, store}`. We do not ship builtins —
+the seat is core-go's — so the fold (`EXTENSION-COMPUTE` 3.23 → **3.24**) changes nothing in this tree
+today. Note `assoc` folded with **`assoc` MUST NOT be an implicit lowering target**, which binds
+`compute_lower.go` if we ever lower a fold; and the naming gate re-spelled `group_by` → **`group-by`**
+(kebab in a path segment). Arch's `WORKSTREAMS.md` lever-1 row cites this fold as "`EXTENSION-COMPUTE`
+1.4→1.5" where the spec header says 3.23→3.24 — cosmetic, theirs, flagged not filed.
+
+**The cross-impl program gate: measured, not assumed.** Operator asked whether `entity-browser-rust`
+had fallen behind on compute. **It has not**, and this was settled by regenerating rather than reading:
+
+- Their host is real and Mount-only — `src/program_host/` (2916 lines: bundle, controls, descriptor,
+  host, input, sexpr, shapes) with a DOM/SVG `display-list` driver that fills **closed quads**, i.e.
+  our de-facto ABI. Their 07-19 review's **F2** (`display-list` arity — spec says variable polylines,
+  we shipped fixed quads) is therefore resolved *by adoption* and still **unruled**; **F1** they closed
+  with the fetch-by-hash → materialize → eval-by-path sequence they proposed.
+- Their fixtures are generated from **our** tree: `tools/program-dump` (theirs, `make
+  program-fixtures`) runs the unchanged `programs` authoring through a `replace` onto this repo.
+- **We re-ran it against `2d79fa2` into a scratch dir** (their tree untouched, verified clean before
+  and after) and diffed: **the per-tick oracle is byte-identical for all three programs** —
+  life 12/12, snake 12/12, asteroids 16/16 ticks. Entity counts match exactly (130 / 191 / 477).
+
+**The only diffs are the dump tool's per-run random `origin_peer`**, which re-keys the handful of
+entities whose IR embeds a peer-qualified path (4 same-path hash changes + 3–6 content-addressed
+`_expr/{hash}` renames per program). So a regeneration **always** produces a dirty `git diff`, which
+means "are these fixtures stale?" cannot be answered by looking — it has to be answered by comparing
+oracles, as here. **Worth routing to browser-rust as a suggestion** (seed the dump keypair and the
+fixture regen becomes reproducible), not a defect: their build-time `all_embedded_entities_hash_verify`
++ `corrupted_entity_is_refused` + `oracle_tests` already make a stale fixture a build failure on the
+Rust side. Their fixtures were last regenerated at their `98671db` (2026-07-28) — the day after our
+last functional `programs/` commit, which is why they are current.
+
+**One thing we own and got wrong.** `PROPOSAL-GENERIC-HOST-POINTER-INPUT-DEVICE-2026-07-27.md` is
+addressed *"To: arch + entity-browser-rust"* and this file has recorded it as **"blocked on arch"**
+for 24 days. **It never left this repo.** Exhaustive search across both sibling trees — by filename
+and by five distinctive phrases (`third input device`, `shapeDrivers`, `life-edit`,
+`AuthorLifeInteractive`, `click a cell`) — returns **zero** hits, and arch's `WORKSTREAMS.md` generic-
+host block lists the five compute levers with no pointer item. `pointer` is named in
+`PROPOSAL-APP-CONVENTION-COMPUTE-PROGRAM` §-taxonomy as a held-state device, but that proposal is
+DRAFT since 07-13 and carries no ABI for it. **This is AP12's mirror image** — that one was a routed
+packet nobody opened; this is an unrouted packet we recorded as routed, and the failure mode is worse
+because the ledger reads *waiting on them*. Not urgent (it is a post-release host gap, and the d-pad
+cursor in `programs/life_edit.go` is the honest maximum on the two devices that exist), but the
+delivery is owed and costs nothing — the packet is already written. **AP28**, with the outbound
+sweep as its enforcement point (`AGENTS.md`, beside the inbound one).
+
+**And the sweep's own first run corrected how it should be written.** Grepping siblings for our
+packet *filenames* flags **twelve of the packets in `reviews/`** — and **eleven of the twelve had
+plainly landed**: AE-5 is folded into `EXTENSION-COMPUTE` §11, `EXTENSION-DISCOVERY` §-mDNS names
+this repo, four `WORKSTREAMS` rows carry our transport findings, and R-10's fold carries all four of
+our rendezvous items. **Siblings cite our commits and our claims, never our file paths**, so the
+filename test fires on almost everything and means almost nothing. The **subject** test — grep their
+board and specs for what the packet is *about* — fired exactly once, on the pointer proposal. That is
+the version that went into `AGENTS.md`; a gate that flags twelve to catch one gets ignored by the
+third session that runs it.
+
+**Tree state at the time of this entry:** `make test-each` **all ten suites green to completion**
+(sdk 199s · shellcmd 287s · programs 144s · the rest under 15s), `make lint` clean, `gofmt -l` empty,
+`make reachability` clean, working tree clean at `2d79fa2`.
+
 ## Open bugs
 
 - **Managed stack overflow on window minimize** (Avalonia, software-render path). A tight
@@ -1239,41 +1402,38 @@ that it will not false-positive on a legitimately internal model. Join it after 
   `entitysdk/registry_bootstrap_cost_test.go`. Same family as the waived identity-rebootstrap
   leak; not ours, and owed a routing packet to core-go.
 
-## Guardrail — `dev` vs `master`, and the blocker is not the one this section named
+## `master` — the guardrail is cleared, and here is what cleared it
 
-The legacy hard-coded panels (`NewLifeGameModel` / `NewSnakeGameModel` /
-`NewAsteroidsGameModel`, now in `programs/`) were the oracle for
-`TestMount_LifeMatchesHardCodedModel`, and Avalonia registers both the legacy and the
-generic-host copy of all three panels. `dev` is comparison surface, not a release.
+**History, kept because the reasoning is the useful part.** This section used to read *"do not merge
+`dev` to `master` yet"*, on the grounds that the legacy hard-coded panels were the oracle for
+`TestMount_LifeMatchesHardCodedModel` and Avalonia registered both the legacy and the generic-host
+copy of all three programs. Both halves are now gone, and neither was gone the way the guardrail
+predicted:
 
-**The oracle half is done (2026-08-20).** `programs/oracle_vectors_test.go` freezes the twelve
-state hashes the two sides agreed on, so the mounted program is now gated against a **recorded**
-reference instead of against live legacy code. That is strictly stronger than the mutual
-comparison, which structurally cannot see a kernel-side encoding change: both sides shift
-together and stay green while every hash on disk moved. The frozen vector fails, and was
-verified to fail (one character flipped → red at tick 2). The mutual test stays while the legacy
-code does; it is no longer what blocks deleting it.
+1. **The oracle was re-pinned** (2026-08-20). `programs/oracle_vectors_test.go` freezes the twelve
+   state hashes the two sides agreed on, so the mounted program is gated against a **recorded**
+   reference rather than against live legacy code. Strictly stronger than the mutual comparison,
+   which cannot see a kernel-side encoding change — both sides shift together and stay green.
+   Verified to fail (one character flipped → red at tick 2). The mutual test stays while the legacy
+   Go models do; it is no longer what blocks deleting them.
+2. **The product regression that was the real blocker had already closed a month earlier, and
+   nothing was tracking that.** The generic panel *can* show program-specific status — the `text`
+   status port shipped 2026-07-27 (Life `POP nnnn`, Snake `LEN nnn`, Asteroids `SCORE nnnnn`),
+   projected in the tree so every renderer shows the byte-identical line, and it needed no `concat`.
+   We spent an hour on 2026-08-20 pricing this against the July review instead of against the tree —
+   **D20 failing in its usual direction** — and the correction is in
+   `reviews/COMPUTE-HOLD-IMPACT-2026-08-20.md` §2 plus an annotation on the July packet itself, so
+   the next reader does not pay it again.
 
-**The blocker underneath was never the oracle — it is a named product regression.** Per
-`reviews/COMPUTE-GENERIC-HOST-PHASE1-RESULT-2026-07-17.md §4`: the legacy panels show
-**program-specific status** (Life's population + `EXTINCT`/`STILL LIFE`, Snake's score,
-Asteroids' score) and the generic panel cannot, because those are *program* facts and a blind
-driver has no way to name them. The honest fix is a second output port bound to `text` — a HUD.
-Retiring the legacy panels today means shipping that regression.
+**The legacy trio is retired** (2026-08-20): three Avalonia panels, three bridge surfaces (23 of the
+118 exports), three registry entries, three smoke targets and three smoke-driver modes — deleted.
+`avalonia/bridge/program.go` + `ProgramPanel` drive every program from a descriptor, including the
+input ports and the status readout. **The legacy Go models in `programs/` stay** as the mutual
+test's oracle: they cost nothing, nothing else consumes them, and keeping a second independent
+implementation of Life around is the cheapest oracle we will ever have.
 
-**Feasibility, checked rather than assumed (2026-08-20):** `map` / `filter` / `fold` exist in
-the compute builtins (`ext/compute/builtins.go`), and `add`/`sub`/`mul`/`div`/`mod` in
-`eval_arith.go` — so a population count and its digits are expressible. `concat` does **not**
-exist (it is on arch's owed list), so assembling a `TextFrame`'s cell array is the open
-question: a `map` over a fixed index list may reach it without `concat`. That is a spike, not a
-knock-out, and nobody has run it.
-
-**So the merge decision reduces to three real options**, not to "re-pin the oracle":
-1. **Merge with both panel sets** — duplication ships, no regression, `master` stops being a
-   year behind. Cheapest honest release.
-2. **Spike the HUD text port first**, then retire the legacy trio and merge clean.
-3. **Keep waiting** — which has been the default for a month, and is the option nobody chose
-   on purpose.
+What that removes from the shipped app: nothing a user can do. What it removes from the tree: the
+duplicate path, which is what made `dev` a comparison surface instead of a release.
 
 ## Waiting on
 
@@ -1283,10 +1443,20 @@ knock-out, and nobody has run it.
 > piece 4 and `AGENTS.md`). Putting a decided-but-unfolded surface here is how a self-inflicted
 > stop gets laundered into a dependency.
 
-- **arch:** the subtree-state descriptor/host convention (the successor rung, and the same
-  rung as Doom-realtime); the `concat` collection primitive ruling;
+- ~~**⚠ arch / operator — the compute hold needs a call**~~ — **ANSWERED 2026-08-20**
+  (`ROUTING-2026-08-20-e` §1, §11 here). **The hold stands and was delivered**: compute is deferred
+  by operator decision and **resumes after the release**. It is off this list because the content is
+  decided, not because it is done — the five levers stay arch's and stay on their board. Lever 1's
+  ruling is **folded** (`EXTENSION-COMPUTE` 3.24) and the builtin is implemented nowhere, ours
+  included; nothing here is waiting on it.
+- **arch (post-release, not waiting on us or blocking us):** the subtree-state descriptor/host
+  convention (the successor rung, and the same rung as Doom-realtime);
   `PROPOSAL-CONTINUATION-STANDING-MODEL` §4 (the continuation join-failure policy); whether a
-  scan/up-sweep orchestration is in scope.
+  scan/up-sweep orchestration is in scope; **§4's fairness clause, which the 3.24 fold left
+  explicitly not ruled** — adopting `concat` does not bless an in-compute sharded step.
+- **⚠ OURS, not theirs — deliver `PROPOSAL-GENERIC-HOST-POINTER-INPUT-DEVICE-2026-07-27.md`.**
+  Recorded here for 24 days as "blocked on arch"; it never left this repo (§11). Post-release host
+  gap, zero build cost, and the packet is written.
 - **`entity-core-go` kernel:** published + tagged vanity module path; an idempotent
   identity-ceremony re-apply; a per-delivery deadline + parallel delivery workers;
   incremental revision-trie update.

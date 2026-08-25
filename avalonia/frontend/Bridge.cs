@@ -317,109 +317,11 @@ public static class Bridge
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "SiteClose")]
     public static extern void SiteClose(long siteHandle);
 
-    // --- Snake game panel ------------------------------------------------
-    //
-    // Display/input driver for the Snake hostable compute program
-    // (wb.SnakeGameModel — the compute-program runtime contract's first
-    // GUI consumer). Render returns the output-port frame as JSON;
-    // Input writes the snapshot input port (0=up 1=right 2=down 3=left);
-    // Start/Stop/Restart drive the host tick clock. Wake fires after
-    // every tick and run-state change.
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "SnakeOpen")]
-    public static extern IntPtr SnakeOpen(long peerHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "SnakeRegisterWake")]
-    public static extern IntPtr SnakeRegisterWake(long snakeHandle, IntPtr callback);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "SnakeInput")]
-    public static extern IntPtr SnakeInput(long snakeHandle, long direction);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "SnakeStart")]
-    public static extern IntPtr SnakeStart(long snakeHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "SnakeStop")]
-    public static extern IntPtr SnakeStop(long snakeHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "SnakeRestart")]
-    public static extern IntPtr SnakeRestart(long snakeHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "SnakeRender")]
-    public static extern IntPtr SnakeRender(long snakeHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "SnakeClose")]
-    public static extern void SnakeClose(long snakeHandle);
-
-    // --- Asteroids game panel --------------------------------------------
-    //
-    // Display driver for the Asteroids hostable compute program
-    // (wb.AsteroidsGameModel) — the first heterogeneous, variable-actor-set
-    // program, and the first to bind a DISPLAY-LIST output port.
-    //
-    // Two things differ from Snake, and both are the point:
-    //   - AsteroidsInput takes a held-key SET as a bitmask (bit 0 = left,
-    //     1 = right, 2 = thrust, 3 = fire), not one direction. Snake's port
-    //     is a single last-write-wins value and cannot express "thrust +
-    //     rotate + fire at once"; a bitmask can, and it is still a SNAPSHOT
-    //     port — no new port kind was needed.
-    //   - AsteroidsRender returns a DISPLAY LIST (world-space quads + kind
-    //     tags), not game state. The panel draws polylines and knows nothing
-    //     about asteroids.
-    // See docs/architecture/reviews/COMPUTE-ASTEROIDS-PORT-TAXONOMY-2026-07-16.md.
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsOpen")]
-    public static extern IntPtr AsteroidsOpen(long peerHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsRegisterWake")]
-    public static extern IntPtr AsteroidsRegisterWake(long asteroidsHandle, IntPtr callback);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsInput")]
-    public static extern IntPtr AsteroidsInput(long asteroidsHandle, long keyBitmask);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsStart")]
-    public static extern IntPtr AsteroidsStart(long asteroidsHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsStop")]
-    public static extern IntPtr AsteroidsStop(long asteroidsHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsRestart")]
-    public static extern IntPtr AsteroidsRestart(long asteroidsHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsRender")]
-    public static extern IntPtr AsteroidsRender(long asteroidsHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "AsteroidsClose")]
-    public static extern void AsteroidsClose(long asteroidsHandle);
-
-    // --- Life game panel -------------------------------------------------
-    //
-    // Display driver for the Conway's Life hostable compute program
-    // (wb.LifeGameModel). Same surface as Snake minus the input port —
-    // Life is a closed program (state₀ + step is the whole thing), so
-    // there is no LifeInput. Render returns the output-port frame as
-    // JSON; Start/Stop/Restart drive the host tick clock. Wake fires
-    // after every generation and run-state change.
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "LifeOpen")]
-    public static extern IntPtr LifeOpen(long peerHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "LifeRegisterWake")]
-    public static extern IntPtr LifeRegisterWake(long lifeHandle, IntPtr callback);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "LifeStart")]
-    public static extern IntPtr LifeStart(long lifeHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "LifeStop")]
-    public static extern IntPtr LifeStop(long lifeHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "LifeRestart")]
-    public static extern IntPtr LifeRestart(long lifeHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "LifeRender")]
-    public static extern IntPtr LifeRender(long lifeHandle);
-
-    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "LifeClose")]
-    public static extern void LifeClose(long lifeHandle);
+    // The three per-program panels (Snake / Life / Asteroids) that used to
+    // sit here were retired 2026-08-20 along with their bridge surfaces.
+    // The generic host below drives all three from descriptors, including
+    // the per-program status readout, so the per-program exports were 21
+    // functions expressing what ProgramMount expresses in one.
 
     // --- The generic compute-program host -------------------------------
     //

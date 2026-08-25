@@ -516,7 +516,7 @@ Short enough to run on every change. Six inherited, four substrate-native.
 
 ---
 
-## 4. The anti-pattern catalog (AP1-AP26)
+## 4. The anti-pattern catalog (AP1-AP28)
 
 Each a real defect that shipped or a claim that was routed, diagnosed, and
 is now pinned by a regression test.
@@ -614,7 +614,7 @@ core-go's tree, on our finding, and kept here because **we are the seat that exe
 `req.Context.*` inside the handler, assert on the recording) is the pattern for any future
 in-process/wire equivalence claim we depend on. It landed in core-go as
 `TestDispatchLocalExecute_CarriesResourceToHandler`; ours lives in the routing packet
-`reviews/CORE-GO-LOCAL-DISPATCH-RESOURCE-2026-08-18.md` rather than in our suites, because a test
+`reviews/archive/CORE-GO-LOCAL-DISPATCH-RESOURCE-2026-08-18.md` rather than in our suites, because a test
 asserting kernel behavior belongs in the kernel's tree.
 
 **AP18 / AP19 / AP20 — the v1.13 adoption trio (2026-08-18).** Earned on one session: re-cutting
@@ -689,8 +689,21 @@ DISCOVERY backend, which is the first time the substrate had more than one.
 | AP  | Source | Pattern (the name we use for it) | Discipline |
 |-----|--------|----------------------------------|------------|
 | AP26 | `entitysdk/app.go`'s `if cfg.ListenAddr != ""` around `discovery.NewHandler()`, before `021e5c2` | **The first consumer's precondition became the substrate's.** The `system/discovery` substrate was wired only for peers with a `ListenAddr`. That is not a property of discovery; it is a property of **mDNS**, which announces a port and has nothing to say without one. When mDNS was the only backend the two were indistinguishable, so the gate was written in terms of the mechanism. The second backend inverted it exactly: a `rendezvous` peer stands at a mailbox **because it has no reachable listener**, so the gate excluded precisely the peers the backend exists to serve. Nothing was broken before, which is the trap — the constraint is invisible until a second consumer arrives, and by then it reads as load-bearing. **The tell is a substrate gate expressed in terms of a mechanism (a port, a socket, a file) rather than in terms of what the substrate does.** Ask what the *abstraction* needs, not what today's only implementation needs; when they differ, the implementation carries its own precondition and the substrate carries none. | D4, D5, D18 |
+| AP27 | `reviews/COMPUTE-HOLD-IMPACT-2026-08-20.md` §2, first version — corrected within the hour | **Our own stale record used as the substrate.** Asked what a parked upstream proposal cost us, we read the review packet that named the blocker (*"the generic panel cannot show program-specific status; the honest fix is a `text` HUD"*), priced the work from it, and routed the cost to arch. The HUD had shipped **ten days after that packet was written**, a month before we read it — `programs/authoring.go::buildStatusTextExpr`, whose own doc comment also answered the open question we were about to ask (*"no string or concat primitive, so the line is assembled by an indexed map over fixed positions"*). Both facts were one grep away. **D20 says price against the substrate rather than our own tree; this is the same error one level in — pricing against our own *documents* rather than our own *code*.** A dated packet is a snapshot of a moment, and the tree moves underneath it; the older the packet, the more confidently wrong it reads, because nothing about a well-written record signals that it has expired. The tell is a plan whose blocker is quoted from a document rather than demonstrated from a file. **Before reporting that something is blocked, grep for the thing you say does not exist** — the search that proves the absence is the same search that would have found it. | D19, D20, D8 |
+| AP28 | `reviews/PROPOSAL-GENERIC-HOST-POINTER-INPUT-DEVICE-2026-07-27.md` — authored 07-27, found undelivered 08-20 | **A packet we never sent, recorded as sent.** The proposal is addressed *"To: arch + entity-browser-rust"*, `STATUS.md` carried it for 24 days as *"stays blocked on arch, as before"*, and an exhaustive search of both sibling trees — by filename and by five distinctive phrases — returns **zero** hits; arch's board has no row for it. **Writing a packet and routing a packet are two actions, and only the first leaves evidence in our own tree**, which is the only tree we look at when we update our own status. This is **AP12's mirror image**: that one was a routed finding nobody opened, this one is an unopened finding nobody routed, and ours is the worse failure mode because the ledger reads *waiting on them* — it converts our own inaction into an entry on someone else's account and then stops asking. Deferral by decision (§ compute) is a state a counterpart can confirm; deferral by silence is indistinguishable from a lost packet, and the driver cannot tell them apart from inside. **The tell is a "waiting on X" row whose only citation is a path inside our own repo.** A `To:` line is an intention; delivery is a fact, and D21's outbound direction needs the same evidence its inbound direction already demands. | D19, D21, D8 |
 
-*Enforcement:* `TestRendezvous_SubstrateNeedsNoListener` stands up a peer with **no** `ListenAddr`,
+*Enforcement:* the D21 session-start sweep gains an **outbound arm**, recorded in `AGENTS.md` beside
+the inbound one — before carrying a *"waiting on X"* row forward, grep the counterpart's board and
+specs for the packet's **subject**. The filename is the wrong instrument and we measured that the
+same session: twelve `reviews/` packets appear by name in **no** sibling tree, and eleven had
+plainly landed (AE-5 folded into `EXTENSION-COMPUTE` §11, `EXTENSION-DISCOVERY` naming this repo,
+four `WORKSTREAMS` rows carrying our transport findings). Siblings cite our commits and claims, not
+our paths. The pointer proposal is the one that failed on **subject** too — five distinctive
+phrases, both trees, zero hits, no row on arch's board — which is what separates *undelivered* from
+*delivered and quiet*. **A discipline whose gate fires on everything is theater in the other
+direction**; the subject test fired once out of twelve.
+
+*Enforcement (AP26):* `TestRendezvous_SubstrateNeedsNoListener` stands up a peer with **no** `ListenAddr`,
 asserts the substrate is present and a backend registers on it — and carries a **control arm**
 (AP23) asserting that a peer asking for neither a listener nor discovery still has no substrate, so
 the fix cannot be satisfied by making it unconditional. `Extensions.Discovery` is the explicit

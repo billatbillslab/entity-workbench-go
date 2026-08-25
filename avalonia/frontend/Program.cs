@@ -229,19 +229,17 @@ public class App : Application
             (handle, host) => new ShellPanel(handle, host));
         PanelRegistry.Register("peer-connections", "Peer Connections",
             (handle, _) => new PeerConnectionsPanel(handle));
-        PanelRegistry.Register("snake", "Snake (compute)",
-            (handle, _) => new SnakeGamePanel(handle));
-        PanelRegistry.Register("life", "Life (compute)",
-            (handle, _) => new LifeGamePanel(handle));
-        PanelRegistry.Register("asteroids", "Asteroids (compute)",
-            (handle, _) => new AsteroidsGamePanel(handle));
-
-        // The generic host: ONE panel class, three programs, mounted from
-        // descriptors. Registered ALONGSIDE the three legacy panels above so the
-        // two paths can be compared live before the legacy ones are removed —
-        // the legacy models are also the oracle the mounted programs are pinned
-        // against (workbench/program_host_test.go), so they earn their keep
-        // until the comparison is done.
+        // The generic host: ONE panel class, every program, mounted from
+        // descriptors.
+        //
+        // The three legacy per-program panels ("Snake (compute)" / "Life
+        // (compute)" / "Asteroids (compute)") were registered here alongside
+        // these until 2026-08-20, so the two paths could be compared live.
+        // The comparison is done: the generic path carries the display, the
+        // input ports AND the program-specific status readout (POP / LEN /
+        // SCORE, projected in the tree), and equality with the hard-coded
+        // models is pinned by frozen state-hash vectors that no longer need
+        // the legacy code to exist (programs/oracle_vectors_test.go).
         //
         // Note what is NOT here: three panel classes. The only per-program thing
         // is the string, and it is used for authoring only.

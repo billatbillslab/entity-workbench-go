@@ -15,7 +15,7 @@ IMAGE    := entity-avalonia:dev
 # below is fenced with $(PODMAN_BUILD_CAPS) / $(PODMAN_RUN_CAPS).
 include $(WB_DIR)/caps.mk
 
-.PHONY: help build run extract host-run up test smoke-xvfb smoke-xvfb-driver smoke-xvfb-site smoke-xvfb-connections smoke-xvfb-snake smoke-xvfb-life smoke-xvfb-asteroids smoke-xvfb-program crash clean
+.PHONY: help build run extract host-run up test smoke-xvfb smoke-xvfb-driver smoke-xvfb-site smoke-xvfb-connections smoke-xvfb-handlers smoke-xvfb-program smoke-xvfb-window crash clean
 
 help:
 	@echo "avalonia — podman build targets for the Avalonia desktop renderer"
@@ -32,14 +32,10 @@ help:
 	@echo "  make smoke-xvfb-site   drive SITE panel: cycle Navigate across the demo site"
 	@echo "  make smoke-xvfb-handlers  drive HANDLER-BROWSER panel: walk + execute every handler"
 	@echo "  make smoke-xvfb-connections drive PEER-CONNECTIONS panel: pool + liveness render churn"
-	@echo "  make smoke-xvfb-snake  drive SNAKE compute panel: tick clock + input-port steering"
-	@echo "  make smoke-xvfb-life   drive LIFE compute panel: tick clock, display-only"
-	@echo "  make smoke-xvfb-program PROGRAM=life|snake|asteroids"
-	@echo "                         drive the GENERIC host panel: one panel, any program"
+	@echo "  make smoke-xvfb-program PROGRAM=life|snake|asteroids|life-edit|life-big"
+	@echo "                         drive the compute host panel: one panel, any program"
 	@echo "  make smoke-xvfb-window  collapse/restore the WINDOW while a program paints"
 	@echo "                         (MODE=resize|minimize|both) — the open-minimize-crash gate"
-	@echo "  make smoke-xvfb-asteroids drive ASTEROIDS compute panel: held-key SET input +"
-	@echo "                         display-list output (heterogeneous actors)"
 	@echo "  make crash      decode the most recent libbridge.so coredump"
 	@echo "  make run        run the container with X11 forwarded from host"
 	@echo "  make extract    copy /app out of the image to ./dist-native/"
@@ -297,64 +293,6 @@ smoke-xvfb-site: build extract
 	  fi
 	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
 
-# SNAKE smoke — drives the compute-program panel (SnakeGamePanel over
-# wb.SnakeGameModel) under real X11: panel mount, host tick clock,
-# input-port steering, wake→render, screenshots. The full
-# compute-program loop (output port → display driver, input driver →
-# input port) exercised headless.
-smoke-xvfb-snake: build extract
-	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
-	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh
-	@echo "==> SNAKE Xvfb smoke (timer=$(DRIVER_SECS)s steers=$(DRIVER_CYCLES))"
-	@cd $(APP_DIR)/dist-native && \
-	  podman run --rm $(PODMAN_RUN_CAPS) \
-	    --userns=keep-id \
-	    -v $(APP_DIR)/dist-native:/app:Z \
-	    -e WB_SMOKE_SNAKE=1 \
-	    -e WB_SMOKE_CYCLE_PATHS=$(DRIVER_CYCLES) \
-	    -e WB_SMOKE_CYCLE_GAP_MS=$(DRIVER_GAP_MS) \
-	    -w /app \
-	    --entrypoint bash \
-	    $(IMAGE) \
-	    /app/run-xvfb-smoke.sh $(DRIVER_SECS); \
-	  status=$$?; \
-	  if [ $$status -ne 0 ]; then \
-	    echo ""; \
-	    echo "==> smoke-xvfb-snake FAILED (exit $$status)"; \
-	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
-	    exit $$status; \
-	  fi
-	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
-
-# LIFE smoke — drives the display-only compute-program panel
-# (LifeGamePanel over wb.LifeGameModel) under real X11: panel mount,
-# host tick clock, wake→render, screenshots. The other half of the
-# snake proof: no input port, so this exercises the output-port →
-# display-driver path on its own.
-smoke-xvfb-life: build extract
-	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
-	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh
-	@echo "==> LIFE Xvfb smoke (timer=$(DRIVER_SECS)s samples=$(DRIVER_CYCLES))"
-	@cd $(APP_DIR)/dist-native && \
-	  podman run --rm $(PODMAN_RUN_CAPS) \
-	    --userns=keep-id \
-	    -v $(APP_DIR)/dist-native:/app:Z \
-	    -e WB_SMOKE_LIFE=1 \
-	    -e WB_SMOKE_CYCLE_PATHS=$(DRIVER_CYCLES) \
-	    -e WB_SMOKE_CYCLE_GAP_MS=$(DRIVER_GAP_MS) \
-	    -w /app \
-	    --entrypoint bash \
-	    $(IMAGE) \
-	    /app/run-xvfb-smoke.sh $(DRIVER_SECS); \
-	  status=$$?; \
-	  if [ $$status -ne 0 ]; then \
-	    echo ""; \
-	    echo "==> smoke-xvfb-life FAILED (exit $$status)"; \
-	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
-	    exit $$status; \
-	  fi
-	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
-
 # HANDLER-BROWSER smoke — drives HandlerBrowserPanel (over
 # wb.HandlerBrowserModel) under real X11: mount, walk every discovered
 # handler, execute an operation on each, repaint the lists + spec line +
@@ -429,10 +367,14 @@ smoke-xvfb-connections: build extract
 #   make smoke-xvfb-program PROGRAM=asteroids
 #
 # The point is what does NOT vary: one panel class, one driver, one accessor,
-# three programs mounted from descriptors. If the shape vocabulary were secretly
-# game-shaped, one of the three would need special handling here. Run all three
-# against smoke-xvfb-life / -snake / -asteroids to compare the generic path
-# against the legacy per-program panels while both still ship.
+# every program mounted from a descriptor. If the shape vocabulary were secretly
+# game-shaped, one of the three would need special handling here.
+#
+# This target used to have three per-program siblings (smoke-xvfb-life / -snake
+# / -asteroids) driving the legacy panels, kept so the two paths could be
+# compared live. Both the panels and their drivers were retired 2026-08-20; the
+# comparison is done and the equality is pinned by frozen vectors instead
+# (programs/oracle_vectors_test.go).
 PROGRAM ?= life
 
 smoke-xvfb-program: build extract
@@ -454,33 +396,6 @@ smoke-xvfb-program: build extract
 	  if [ $$status -ne 0 ]; then \
 	    echo ""; \
 	    echo "==> smoke-xvfb-program ($(PROGRAM)) FAILED (exit $$status)"; \
-	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
-	    exit $$status; \
-	  fi
-	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
-
-# ASTEROIDS — the heterogeneous-actor compute program. Drives the held-key SET
-# input port (bitmasks with several keys down at once — the case Snake's
-# single-direction port cannot express) and the display-list output port.
-smoke-xvfb-asteroids: build extract
-	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
-	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh
-	@echo "==> ASTEROIDS Xvfb smoke (timer=$(DRIVER_SECS)s inputs=$(DRIVER_CYCLES))"
-	@cd $(APP_DIR)/dist-native && \
-	  podman run --rm $(PODMAN_RUN_CAPS) \
-	    --userns=keep-id \
-	    -v $(APP_DIR)/dist-native:/app:Z \
-	    -e WB_SMOKE_ASTEROIDS=1 \
-	    -e WB_SMOKE_CYCLE_PATHS=$(DRIVER_CYCLES) \
-	    -e WB_SMOKE_CYCLE_GAP_MS=$(DRIVER_GAP_MS) \
-	    -w /app \
-	    --entrypoint bash \
-	    $(IMAGE) \
-	    /app/run-xvfb-smoke.sh $(DRIVER_SECS); \
-	  status=$$?; \
-	  if [ $$status -ne 0 ]; then \
-	    echo ""; \
-	    echo "==> smoke-xvfb-asteroids FAILED (exit $$status)"; \
 	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
 	    exit $$status; \
 	  fi

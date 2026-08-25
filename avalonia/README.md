@@ -8,8 +8,8 @@ uses. All business logic (entity resolution, formatting, tree and
 selection state, the content models) lives renderer-neutral in
 `workbench/`; nothing in `frontend/` reimplements it.
 
-**Status:** shipped, not a spike. 15 panel types (18 registry entries),
-118 bridge exports, headless
+**Status:** shipped, not a spike. 12 panel types (15 registry entries),
+95 bridge exports, headless
 UI tests plus real-X11 smoke drivers per panel. The `console/` (tview)
 renderer is kept frozen and single-peer as a discipline enforcer — it is
 not a parity obligation, and Avalonia is expected to outpace it. (The
@@ -96,7 +96,7 @@ what was being rendered. See `docs/architecture/LOGGING-CONVENTIONS.md`.
 
 ```
 avalonia/
-  bridge/          Go c-shared library (-buildmode=c-shared), 118 exports
+  bridge/          Go c-shared library (-buildmode=c-shared), 95 exports
     main.go        init/shutdown, peer lifecycle, tree + watch, dispatch
     peer_connections.go  connection pool (aliases you can dial/drop)
     liveness.go    system/peer/status — the TREE's lifecycle record
@@ -104,13 +104,13 @@ avalonia/
     handlers.go    handler browser
     shell.go       shell panel dispatch
     site.go        site view
-    program.go / life.go / snake.go / asteroids.go   compute panels
+    program.go     the generic compute host — every program, one seam
   frontend/        Avalonia 11 app, plain code (no XAML)
     Program.cs     argv → BridgeConfig JSON → BridgeInit; render-mode switch
     MainWindow.cs  window chrome, peer tabs
     PeerView.cs    per-peer slot layout; implements IPanelHost
     Bridge.cs      P/Invoke surface (one DllImport per export)
-    Panels/        15 panel types + PanelRegistry, PanelStack, PanelSlot
+    Panels/        12 panel types + PanelRegistry, PanelStack, PanelSlot
   tests/           Workbench.Headless.Tests (Avalonia.Headless.XUnit)
   Containerfile    multi-stage Fedora build (Go + .NET SDK + tester stage)
   Makefile         podman build / extract / run / smoke targets
