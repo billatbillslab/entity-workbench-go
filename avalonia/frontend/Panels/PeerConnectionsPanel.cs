@@ -26,11 +26,24 @@ namespace EntityAvalonia.Panels;
 // Wake source: the bridge subscribes to `system/peer/transport/` on
 // the peer's store, so any Connect/Disconnect — from this panel or a
 // ShellPanel on the same peer — triggers a refresh.
+//
+// TWO DIFFERENT ANSWERS, BOTH SHOWN, NEITHER MISLABELLED. The
+// "Connections" list at the bottom is the local connection POOL: the
+// aliases this peer can dial or drop, which is what the connect /
+// disconnect buttons act on. The "Liveness" section is the TREE's
+// lifecycle record (`system/peer/status`, EXTENSION-NETWORK §3.13) —
+// the same view a remote consumer or the reconnect graph sees. They
+// are not the same set and are not expected to agree: a peer that
+// dialed US appears only in liveness, a connection evicted without a
+// demotion leaves liveness saying `connected`, and only liveness can
+// say `suspect` or say why a peer went away. Showing one under the
+// other's name is the mistake the split exists to prevent.
 public sealed class PeerConnectionsPanel : UserControl, IDisposable
 {
     private readonly long _peerHandle;
     private readonly long _handle;
     private readonly long _discoveryHandle;
+    private readonly long _livenessHandle;
     private readonly TextBox _addressInput;
     private readonly TextBox _aliasInput;
     private readonly Button _connectButton;
@@ -41,21 +54,37 @@ public sealed class PeerConnectionsPanel : UserControl, IDisposable
     private readonly TextBlock _nearbyPlaceholder;
     private readonly ListBox _connList;
     private readonly ListBox _nearbyList;
+    private readonly TextBlock _livenessHeader;
+    private readonly TextBlock _livenessPlaceholder;
+    private readonly TextBlock _connListCaption;
+    private readonly ListBox _livenessList;
     private readonly ObservableCollection<ConnVm> _connections = new();
     private readonly ObservableCollection<NearbyVm> _nearby = new();
+    private readonly ObservableCollection<LiveVm> _liveness = new();
 
     private Bridge.TreeWakeCallback? _wakeCallback;
     private Bridge.TreeWakeCallback? _discoveryWakeCallback;
+    private Bridge.TreeWakeCallback? _livenessWakeCallback;
     // Explicit GC roots — see TreeViewPanel for full rationale.
     private GCHandle _wakeCallbackHandle;
     private GCHandle _discoveryWakeCallbackHandle;
+    private GCHandle _livenessWakeCallbackHandle;
     private bool _renderQueued;
     private bool _nearbyRenderQueued;
+    private bool _livenessRenderQueued;
     private bool _disposed;
 
     // Test-only accessors (InternalsVisibleTo Workbench.Headless.Tests).
     internal long HandleForTests => _handle;
     internal long DiscoveryHandleForTests => _discoveryHandle;
+    internal long LivenessHandleForTests => _livenessHandle;
+    internal int LivenessCountForTests => _liveness.Count;
+    internal string LivenessHeaderForTests => _livenessHeader.Text ?? "";
+    internal string LivenessPlaceholderForTests => _livenessPlaceholder.Text ?? "";
+    internal bool LivenessPlaceholderVisibleForTests => _livenessPlaceholder.IsVisible;
+    internal string LivenessStatusAtForTests(int i) => _liveness[i].Status;
+    internal string LivenessPeerIdAtForTests(int i) => _liveness[i].PeerID;
+    internal void RerenderLivenessForTests() => RerenderLivenessFromBridge();
     internal int ConnectionCountForTests => _connections.Count;
     internal int NearbyCountForTests => _nearby.Count;
     internal string NearbyPeerIdAtForTests(int i) => _nearby[i].PeerID;
@@ -102,7 +131,12 @@ public sealed class PeerConnectionsPanel : UserControl, IDisposable
             _nearbyPlaceholder = new TextBlock();
             _connList = new ListBox();
             _nearbyList = new ListBox();
+            _livenessHeader = new TextBlock();
+            _livenessPlaceholder = new TextBlock();
+            _connListCaption = new TextBlock();
+            _livenessList = new ListBox();
             _discoveryHandle = -1;
+            _livenessHandle = -1;
             return;
         }
 
@@ -111,6 +145,14 @@ public sealed class PeerConnectionsPanel : UserControl, IDisposable
         // the "Nearby peers" section in that case.
         var discoveryReply = Bridge.TakeString(Bridge.DiscoveryOpen(peerHandle));
         _discoveryHandle = ParseHandle(discoveryReply);
+
+        // Liveness handle: the tree's lifecycle record. Unlike discovery
+        // this needs no peer configuration — every peer has a status
+        // namespace, empty until the first transition — so a failure
+        // here is a real error, not a "feature off" case. We still
+        // degrade to hiding the section rather than failing the panel.
+        var livenessReply = Bridge.TakeString(Bridge.LivenessOpen(peerHandle));
+        _livenessHandle = ParseHandle(livenessReply);
 
         _header = new TextBlock
         {
@@ -217,6 +259,83 @@ public sealed class PeerConnectionsPanel : UserControl, IDisposable
                 grid.Children.Add(trailing);
                 return grid;
             }, supportsRecycling: true),
+        };
+
+        // --- Liveness section (the tree's answer) ------------------------
+        _livenessHeader = new TextBlock
+        {
+            Text = "Liveness (tree)",
+            FontWeight = FontWeight.SemiBold,
+            FontSize = 12,
+            Opacity = 0.7,
+            Margin = new Thickness(0, 6, 0, 4),
+            IsVisible = _livenessHandle >= 0,
+        };
+
+        // "Nothing recorded" is NOT "nobody is connected" — the status
+        // entity is written on transition, so absence means "no
+        // transition has ever been recorded for anyone", which is the
+        // normal state of a peer that has not yet talked to another
+        // peer. The placeholder says that rather than implying an
+        // outage.
+        _livenessPlaceholder = new TextBlock
+        {
+            Text = "No lifecycle transitions recorded.",
+            FontSize = 11,
+            FontStyle = FontStyle.Italic,
+            Opacity = 0.45,
+            Margin = new Thickness(0, 0, 0, 4),
+            IsVisible = _livenessHandle >= 0,
+        };
+
+        _livenessList = new ListBox
+        {
+            ItemsSource = _liveness,
+            FontFamily = new FontFamily("monospace"),
+            FontSize = 12,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            MaxHeight = 140,
+            IsVisible = _livenessHandle >= 0,
+            ItemTemplate = new FuncDataTemplate<LiveVm>((vm, _) =>
+            {
+                var row = new StackPanel { Orientation = Orientation.Horizontal };
+                row.Children.Add(new TextBlock
+                {
+                    Text = "●",
+                    FontSize = 13,
+                    Foreground = StatusBrush(vm.Status),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 6, 0),
+                });
+                var info = new StackPanel
+                {
+                    Orientation = Orientation.Vertical,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                info.Children.Add(new SelectableTextBlock
+                {
+                    Text = $"{vm.ShortPeerId}  {vm.Status}",
+                    FontSize = 12,
+                });
+                info.Children.Add(new SelectableTextBlock
+                {
+                    Text = vm.Detail,
+                    FontSize = 10,
+                    Opacity = 0.55,
+                });
+                row.Children.Add(info);
+                return row;
+            }, supportsRecycling: true),
+        };
+
+        _connListCaption = new TextBlock
+        {
+            Text = "Connections (local pool)",
+            FontWeight = FontWeight.SemiBold,
+            FontSize = 12,
+            Opacity = 0.7,
+            Margin = new Thickness(0, 6, 0, 4),
         };
 
         _addressInput = new TextBox
@@ -337,10 +456,14 @@ public sealed class PeerConnectionsPanel : UserControl, IDisposable
         var top = new StackPanel { Orientation = Orientation.Vertical };
         top.Children.Add(_header);
         top.Children.Add(_listenLine);
+        top.Children.Add(_livenessHeader);
+        top.Children.Add(_livenessPlaceholder);
+        top.Children.Add(_livenessList);
         top.Children.Add(_nearbyHeader);
         top.Children.Add(_nearbyPlaceholder);
         top.Children.Add(_nearbyList);
         top.Children.Add(inputs);
+        top.Children.Add(_connListCaption);
 
         var dock = new DockPanel
         {
@@ -365,8 +488,93 @@ public sealed class PeerConnectionsPanel : UserControl, IDisposable
             Bridge.TakeString(Bridge.DiscoveryRegisterWake(_discoveryHandle, dPtr));
             _ = SettleNearbyPlaceholderAsync();
         }
+
+        if (_livenessHandle >= 0)
+        {
+            _livenessWakeCallback = OnLivenessWakeFromGo;
+            _livenessWakeCallbackHandle = GCHandle.Alloc(_livenessWakeCallback);
+            var lPtr = Marshal.GetFunctionPointerForDelegate(_livenessWakeCallback);
+            Bridge.TakeString(Bridge.LivenessRegisterWake(_livenessHandle, lPtr));
+        }
         PanelLog.Write("peer-connections",
-            $"Mount h={_handle} discovery={_discoveryHandle}");
+            $"Mount h={_handle} discovery={_discoveryHandle} liveness={_livenessHandle}");
+    }
+
+    // StatusBrush maps the three lifecycle states (EXTENSION-NETWORK
+    // §3.13) to colour. `suspect` gets its own colour precisely because
+    // it is the state the connection pool cannot represent — collapsing
+    // it into either green or grey throws away the whole reason this
+    // section exists.
+    private static IBrush StatusBrush(string status) => status switch
+    {
+        "connected" => Brushes.MediumSeaGreen,
+        "suspect" => Brushes.Goldenrod,
+        "disconnected" => Brushes.Gray,
+        _ => Brushes.DimGray,
+    };
+
+    private void OnLivenessWakeFromGo(long handle)
+    {
+        if (_disposed) return;
+        if (_livenessRenderQueued) return;
+        _livenessRenderQueued = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _livenessRenderQueued = false;
+            if (_disposed) return;
+            RerenderLivenessFromBridge();
+        });
+    }
+
+    // RerenderLivenessFromBridge reads the model snapshot the bridge
+    // holds open. Synchronous on purpose: the call is a mutex-guarded
+    // copy of an already-materialised slice (no store read, no network
+    // — see PeerLivenessModel.Render), which is a different cost class
+    // from the discovery path that had to move off the UI thread.
+    private void RerenderLivenessFromBridge()
+    {
+        if (_livenessHandle < 0 || _disposed) return;
+        PanelLog.Write("peer-connections", $"LivenessRender h={_livenessHandle}");
+        var reply = Bridge.TakeString(Bridge.LivenessRender(_livenessHandle));
+        LivenessRenderDto? dto = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(reply);
+            if (!doc.RootElement.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
+            {
+                _livenessHeader.Text = "Liveness (tree) — unavailable";
+                return;
+            }
+            dto = doc.RootElement.GetProperty("result").Deserialize<LivenessRenderDto>();
+        }
+        catch (Exception ex)
+        {
+            _livenessHeader.Text = $"Liveness (tree) — parse failed: {ex.Message}";
+            return;
+        }
+
+        _liveness.Clear();
+        if (dto?.Peers != null)
+        {
+            foreach (var p in dto.Peers)
+            {
+                _liveness.Add(new LiveVm(
+                    p.PeerId, p.Status, p.Reason, p.LastError, p.ConnectedAt, p.FailingSince));
+            }
+        }
+        _livenessPlaceholder.IsVisible = _liveness.Count == 0;
+
+        // A failed seed and an empty namespace look identical in a list;
+        // only one of them is fine, so the error goes in the header
+        // instead of being swallowed into a blank section.
+        if (!string.IsNullOrEmpty(dto?.SeedError))
+        {
+            _livenessHeader.Text = $"Liveness (tree) — read failed: {dto!.SeedError}";
+            return;
+        }
+        _livenessHeader.Text = dto == null
+            ? "Liveness (tree)"
+            : $"Liveness (tree) — {dto.Connected} connected · {dto.Suspect} suspect · {dto.Disconnected} disconnected";
     }
 
     private void DoConnectFromNearby(NearbyVm vm)
@@ -706,10 +914,18 @@ public sealed class PeerConnectionsPanel : UserControl, IDisposable
         {
             Bridge.DiscoveryClose(_discoveryHandle);
         }
+        if (_livenessHandle >= 0)
+        {
+            // LivenessClose joins its wake goroutine before returning,
+            // so freeing the GCHandle below cannot race a callback.
+            Bridge.LivenessClose(_livenessHandle);
+        }
         _wakeCallback = null;
         _discoveryWakeCallback = null;
+        _livenessWakeCallback = null;
         if (_wakeCallbackHandle.IsAllocated) _wakeCallbackHandle.Free();
         if (_discoveryWakeCallbackHandle.IsAllocated) _discoveryWakeCallbackHandle.Free();
+        if (_livenessWakeCallbackHandle.IsAllocated) _livenessWakeCallbackHandle.Free();
     }
 
     private sealed class RenderDto
@@ -755,6 +971,78 @@ public sealed class PeerConnectionsPanel : UserControl, IDisposable
         [JsonPropertyName("dial_url")] public string DialUrl { get; set; } = "";
         [JsonPropertyName("backend")] public string Backend { get; set; } = "";
         [JsonPropertyName("connected")] public bool Connected { get; set; }
+    }
+
+    private sealed class LivenessRenderDto
+    {
+        [JsonPropertyName("peers")] public List<LivenessEntryDto>? Peers { get; set; }
+        [JsonPropertyName("connected")] public int Connected { get; set; }
+        [JsonPropertyName("suspect")] public int Suspect { get; set; }
+        [JsonPropertyName("disconnected")] public int Disconnected { get; set; }
+        [JsonPropertyName("seed_error")] public string? SeedError { get; set; }
+    }
+
+    // No last_seen field, deliberately — the bridge does not emit one.
+    // See Bridge.cs's liveness section and liveness.go's header: the
+    // status entity is transition-written, so a "last seen" reading of
+    // that stamp would be a freshness claim the protocol never made.
+    private sealed class LivenessEntryDto
+    {
+        [JsonPropertyName("peer_id")] public string PeerId { get; set; } = "";
+        [JsonPropertyName("status")] public string Status { get; set; } = "";
+        [JsonPropertyName("reason")] public string Reason { get; set; } = "";
+        [JsonPropertyName("last_error")] public string LastError { get; set; } = "";
+        // ms since epoch, not a formatted string — the bridge passes the
+        // model's uint64 straight through.
+        [JsonPropertyName("connected_at")] public ulong ConnectedAt { get; set; }
+        [JsonPropertyName("failing_since")] public ulong FailingSince { get; set; }
+    }
+
+    private sealed class LiveVm
+    {
+        public string PeerID { get; }
+        public string Status { get; }
+        public string Reason { get; }
+        public string LastError { get; }
+        public ulong ConnectedAt { get; }
+        public ulong FailingSince { get; }
+        public string ShortPeerId =>
+            string.IsNullOrEmpty(PeerID)
+                ? ""
+                : (PeerID.Length > 14 ? PeerID.Substring(0, 12) + "…" : PeerID);
+
+        // Detail is the "why", in the order a reader needs it: the
+        // error if there is one, else the reason, else the stamp that
+        // actually applies to the current state. `failing_since` and
+        // `connected_at` mean what they look like (unlike last_seen).
+        public string Detail
+        {
+            get
+            {
+                if (!string.IsNullOrEmpty(LastError)) return LastError;
+                if (!string.IsNullOrEmpty(Reason)) return Reason;
+                if (Status == "connected" && ConnectedAt != 0)
+                    return $"since {Stamp(ConnectedAt)}";
+                if (FailingSince != 0) return $"failing since {Stamp(FailingSince)}";
+                return "";
+            }
+        }
+
+        // Stamp renders ms-since-epoch as local wall-clock. Zero means
+        // "not known" (the field is optional in §3.13), never epoch.
+        private static string Stamp(ulong ms) =>
+            DateTimeOffset.FromUnixTimeMilliseconds((long)ms).ToLocalTime().ToString("HH:mm:ss");
+
+        public LiveVm(string peerID, string status, string reason,
+            string lastError, ulong connectedAt, ulong failingSince)
+        {
+            PeerID = peerID;
+            Status = status;
+            Reason = reason;
+            LastError = lastError;
+            ConnectedAt = connectedAt;
+            FailingSince = failingSince;
+        }
     }
 
     private sealed class NearbyVm

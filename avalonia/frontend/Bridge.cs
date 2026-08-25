@@ -544,6 +544,31 @@ public static class Bridge
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "DiscoveryClose")]
     public static extern void DiscoveryClose(long discoveryHandle);
 
+    // --- Peer liveness (system/peer/status) ------------------------------
+    // The TREE's lifecycle record, not the connection pool. Handle
+    // lifecycle mirrors Connections*/Discovery*. Wakes fire on every
+    // lifecycle transition (EXTENSION-NETWORK §3.13) — including the
+    // demotion to `suspect`, which writes the status entity and nothing
+    // else, so a Connections wake would never see it.
+    //
+    // Rows carry status/reason/last_error/connected_at/failing_since.
+    // There is deliberately NO last_seen: the status entity is
+    // transition-written (§5.4.1 MUST), so the field is a snapshot taken
+    // at the transition, and rendering it as "last heard from" would
+    // invent a freshness contract the protocol does not offer.
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "LivenessOpen")]
+    public static extern IntPtr LivenessOpen(long peerHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "LivenessRegisterWake")]
+    public static extern IntPtr LivenessRegisterWake(long livenessHandle, IntPtr callback);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "LivenessRender")]
+    public static extern IntPtr LivenessRender(long livenessHandle);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl, EntryPoint = "LivenessClose")]
+    public static extern void LivenessClose(long livenessHandle);
+
     // TakeString copies a C-string allocated by Go into a managed
     // string and immediately frees the Go-side allocation. Returns
     // empty string when given IntPtr.Zero (Go's NULL return).

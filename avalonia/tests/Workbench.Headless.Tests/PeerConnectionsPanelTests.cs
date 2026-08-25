@@ -110,6 +110,79 @@ public sealed class PeerConnectionsPanelTests
         Assert.Contains("alias", panel.StatusTextForTests, StringComparison.OrdinalIgnoreCase);
     }
 
+    // --- Liveness section ------------------------------------------------
+    //
+    // Tier 2 (panel-with-real-bridge, TESTING-STRATEGY.md). These assert
+    // the WIRING — handle allocated, envelope parsed, counts rendered —
+    // not the model's semantics, which workbench/peer_liveness_model_test.go
+    // owns. The gap they close is the one the 2026-08-20 audit found:
+    // a green renderer-neutral model with no user-reachable path to it,
+    // which no existing test could have caught.
+
+    [AvaloniaFact]
+    public void Mount_Opens_Liveness_Handle_And_Renders_Counts()
+    {
+        var panel = new PeerConnectionsPanel(_bridge.DefaultPeer);
+        var window = new Window { Content = panel, Width = 400, Height = 300 };
+        window.Show();
+
+        Assert.True(panel.LivenessHandleForTests > 0,
+            $"liveness handle not allocated (got {panel.LivenessHandleForTests})");
+
+        panel.RerenderLivenessForTests();
+
+        // Header carries the three counts, so a parse failure or a
+        // swallowed seed error is visible rather than silent.
+        var header = panel.LivenessHeaderForTests;
+        Assert.Contains("connected", header, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("parse failed", header, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("read failed", header, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [AvaloniaFact]
+    public void Liveness_Empty_State_Says_No_Transitions_Not_Disconnected()
+    {
+        // The fixture peer has talked to nobody, so `system/peer/status`
+        // is empty. Absence means "no transition was ever recorded" —
+        // NOT "everyone is disconnected" (§5.4.1: the entity is
+        // transition-written, never a heartbeat). A placeholder that
+        // implies an outage would be inventing a liveness claim the
+        // protocol declines to make, so the wording is asserted here.
+        var panel = new PeerConnectionsPanel(_bridge.DefaultPeer);
+        var window = new Window { Content = panel, Width = 400, Height = 300 };
+        window.Show();
+
+        panel.RerenderLivenessForTests();
+
+        Assert.Equal(0, panel.LivenessCountForTests);
+        Assert.True(panel.LivenessPlaceholderVisibleForTests,
+            "empty liveness list should show the placeholder");
+        Assert.Contains("No lifecycle transitions",
+            panel.LivenessPlaceholderForTests, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("disconnected",
+            panel.LivenessPlaceholderForTests, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [AvaloniaFact]
+    public void Liveness_Rerender_Is_Idempotent_And_Survives_Dispose()
+    {
+        var panel = new PeerConnectionsPanel(_bridge.DefaultPeer);
+        var window = new Window { Content = panel, Width = 400, Height = 300 };
+        window.Show();
+
+        panel.RerenderLivenessForTests();
+        panel.RerenderLivenessForTests();
+        var before = panel.LivenessCountForTests;
+
+        // Dispose joins the bridge's wake goroutine before freeing the
+        // delegate's GCHandle; a render attempted afterwards must no-op
+        // rather than call through a freed handle.
+        panel.Dispose();
+        panel.RerenderLivenessForTests();
+
+        Assert.Equal(before, panel.LivenessCountForTests);
+    }
+
     [AvaloniaFact]
     public async Task Connect_To_Unreachable_Address_Shows_Error_And_Survives()
     {

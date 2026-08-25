@@ -39,7 +39,7 @@ itself to — offered as a worked example, not a standard to conform to.
 [[doc]]
 path  = "docs/architecture/DISCIPLINE-CHARTER.md"
 title = "Discipline Charter"
-blurb = "The 17 disciplines (D1–D17), the nine review questions, and the anti-pattern catalog (AP1–AP9) — the rule set everything is measured against."
+blurb = "The 23 disciplines (D1–D23), the ten review questions, and the anti-pattern catalog (AP1–AP26) — the rule set everything is measured against."
 group = "Disciplines & runtime model"
 
 [[doc]]

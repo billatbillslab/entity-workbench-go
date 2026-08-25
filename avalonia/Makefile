@@ -15,13 +15,15 @@ IMAGE    := entity-avalonia:dev
 # below is fenced with $(PODMAN_BUILD_CAPS) / $(PODMAN_RUN_CAPS).
 include $(WB_DIR)/caps.mk
 
-.PHONY: help build run extract host-run up test smoke-xvfb smoke-xvfb-driver smoke-xvfb-site smoke-xvfb-snake smoke-xvfb-life smoke-xvfb-asteroids smoke-xvfb-program crash clean
+.PHONY: help build run extract host-run up test smoke-xvfb smoke-xvfb-driver smoke-xvfb-site smoke-xvfb-connections smoke-xvfb-snake smoke-xvfb-life smoke-xvfb-asteroids smoke-xvfb-program crash clean
 
 help:
 	@echo "avalonia — podman build targets for the Avalonia desktop renderer"
 	@echo ""
 	@echo "  make up         build + extract + launch on host (one-shot — use this)"
 	@echo "  make build      build the multi-stage image ($(IMAGE))"
+	@echo "  ARGS=... on up / host-run forwards app flags:"
+	@echo "                  make host-run ARGS=\"--identity me --storage sqlite\""
 	@echo "  make test       run headless UI tests (Avalonia.Headless.XUnit)"
 	@echo "  make smoke-xvfb        run the real binary under Xvfb (real X11 paint, no display)"
 	@echo "  make smoke-xvfb-driver same, but with auto-driver: ingest docs/architecture +"
@@ -29,6 +31,7 @@ help:
 	@echo "  make smoke-xvfb-hidpi  driver variant at 2560x1440 to catch HiDPI scaling bugs"
 	@echo "  make smoke-xvfb-site   drive SITE panel: cycle Navigate across the demo site"
 	@echo "  make smoke-xvfb-handlers  drive HANDLER-BROWSER panel: walk + execute every handler"
+	@echo "  make smoke-xvfb-connections drive PEER-CONNECTIONS panel: pool + liveness render churn"
 	@echo "  make smoke-xvfb-snake  drive SNAKE compute panel: tick clock + input-port steering"
 	@echo "  make smoke-xvfb-life   drive LIFE compute panel: tick clock, display-only"
 	@echo "  make smoke-xvfb-program PROGRAM=life|snake|asteroids"
@@ -91,9 +94,14 @@ test:
 	@# layer hashes; only the final test invocation is forced.
 	podman build $(PODMAN_BUILD_CAPS) --target tester --no-cache -f $(APP_DIR)/Containerfile $(CTX_DIR)
 
+# ARGS forwards the app's own flags (--identity / --storage / --listen;
+# `./entity-avalonia --help` lists them). Without it the only reachable
+# configuration from a make target was the default — an ephemeral
+# in-memory peer that loses everything on exit — which is a poor default
+# to be *stuck* with even though it is a fine default to start from.
 host-run:
 	@if [ ! -x $(APP_DIR)/dist-native/entity-avalonia ]; then $(MAKE) extract; fi
-	cd $(APP_DIR)/dist-native && LD_LIBRARY_PATH=. ./entity-avalonia
+	cd $(APP_DIR)/dist-native && LD_LIBRARY_PATH=. ./entity-avalonia $(ARGS)
 
 # The one command you actually want during iteration: rebuild the
 # container image (podman caches unchanged stages, so this is fast
@@ -107,7 +115,7 @@ up: build extract
 	@chmod +x $(APP_DIR)/dist-native/run-with-dump.sh
 	@echo "==> launching entity-avalonia; output -> $(APP_DIR)/dist-native/run.log"
 	@cd $(APP_DIR)/dist-native && \
-	  ./run-with-dump.sh 2>&1 | tee run.log; \
+	  ./run-with-dump.sh $(ARGS) 2>&1 | tee run.log; \
 	  status=$${PIPESTATUS[0]}; \
 	  if [ $$status -ne 0 ]; then \
 	    echo ""; \
@@ -376,6 +384,38 @@ smoke-xvfb-handlers: build extract
 	  if [ $$status -ne 0 ]; then \
 	    echo ""; \
 	    echo "==> smoke-xvfb-handlers FAILED (exit $$status)"; \
+	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
+	    exit $$status; \
+	  fi
+	@echo "==> frames: $(APP_DIR)/dist-native/xvfb-smoke-out/frames/"
+
+# PEER-CONNECTIONS — drives the panel carrying both connection surfaces
+# (the local pool AND the tree's liveness record) under real X11 + Skia.
+# The liveness half landed 2026-08-20; this is its tier-3 gate.
+#
+# Read the log, not just the exit code: this harness runs ONE peer, so
+# no lifecycle transition is ever written and the liveness list is
+# legitimately empty. The run gates mount, handle allocation and render
+# churn — the AP24 class — not row content, and it says so in run.log.
+smoke-xvfb-connections: build extract
+	@cp $(APP_DIR)/run-xvfb-smoke.sh $(APP_DIR)/dist-native/
+	@chmod +x $(APP_DIR)/dist-native/run-xvfb-smoke.sh
+	@echo "==> PEER-CONNECTIONS Xvfb smoke (timer=$(DRIVER_SECS)s cycles=$(DRIVER_CYCLES))"
+	@cd $(APP_DIR)/dist-native && \
+	  podman run --rm $(PODMAN_RUN_CAPS) \
+	    --userns=keep-id \
+	    -v $(APP_DIR)/dist-native:/app:Z \
+	    -e WB_SMOKE_CONNECTIONS=1 \
+	    -e WB_SMOKE_CYCLE_PATHS=$(DRIVER_CYCLES) \
+	    -e WB_SMOKE_CYCLE_GAP_MS=$(DRIVER_GAP_MS) \
+	    -w /app \
+	    --entrypoint bash \
+	    $(IMAGE) \
+	    /app/run-xvfb-smoke.sh $(DRIVER_SECS); \
+	  status=$$?; \
+	  if [ $$status -ne 0 ]; then \
+	    echo ""; \
+	    echo "==> smoke-xvfb-connections FAILED (exit $$status)"; \
 	    echo "    artifacts in $(APP_DIR)/dist-native/xvfb-smoke-out/"; \
 	    exit $$status; \
 	  fi

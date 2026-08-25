@@ -115,6 +115,7 @@ help:
 	@echo "    make doctor      check prerequisites + sibling kernel; prints what is wrong"
 	@echo "    make run         build and start entity-shell (the CLI; REPL)"
 	@echo "    make gui         build and launch the Avalonia desktop app"
+	@echo "    make gui-run     launch the desktop app WITHOUT rebuilding (fast loop)"
 	@echo "    make demo        one-command tour: a peer, a name, a tree, in one shell"
 	@echo
 	@echo "  BUILD"
@@ -127,6 +128,7 @@ help:
 	@echo "    make test        full -race sweep; STOPS at the first failing package"
 	@echo "    make gui-test    Avalonia headless UI tests (podman)"
 	@echo "    make lint        go vet across all modules (read-only)"
+	@echo "    make reachability  D23: every bridge export consumed, every model surfaced"
 	@echo "    make fmt         gofmt -w over the tree (writes)"
 	@echo "    make check       lint + test (the green gate)"
 	@echo
@@ -198,15 +200,25 @@ doctor:
 # run / gui — the two entry points a person actually wants. `run` builds
 # first so it is never a stale binary; ARGS forwards a one-shot command
 # (`make run ARGS="name ls"`) instead of entering the REPL.
-.PHONY: run gui gui-build gui-test
+.PHONY: run gui gui-run gui-build gui-test
 run: shell-build
 	@$(BIN_DIR)/entity-shell $(ARGS)
 
 # Avalonia lives behind podman and its own Makefile. These are thin
 # passthroughs so the GUI is discoverable from `make help` at the root
 # rather than from a README line — `up` is build + extract + launch.
+#
+# gui vs gui-run is the distinction worth knowing. `gui` rebuilds the
+# image first — correct, and the only safe choice after a Go or C#
+# change. `gui-run` launches the already-extracted binary and rebuilds
+# NOTHING (extracting first if dist-native is missing). Before it
+# existed, "start the thing I built five minutes ago" had no verb at
+# the root and cost a full podman build.
 gui:
 	$(MAKE) -C avalonia up
+
+gui-run:
+	$(MAKE) -C avalonia host-run
 
 gui-build:
 	$(MAKE) -C avalonia build
@@ -242,6 +254,39 @@ fmt:
 	$(call IN_CONTAINER,make fmt-native)
 
 check: lint test
+
+# reachability — D23's enforcement point. Three times now a
+# renderer-neutral model has been complete, tested, and green with NO
+# user-reachable path to it (the name arc's unregistered handler, the
+# handler browser only tview drove, the PeerLiveness export no C# file
+# referenced). Every layer's tests pass in that state, because the
+# defect is the ABSENCE of an edge between two correct layers, and no
+# test starting inside either one can see it.
+#
+# Two sweeps, both pure grep, both fast. Underscores are stripped from
+# both sides in the second: the model is peer_liveness_model.go and its
+# consumer is LivenessRender, so a literal snake_case match reports
+# every model as orphaned — and a sweep that cries wolf gets ignored,
+# which is this same failure one level up.
+.PHONY: reachability
+reachability:
+	@echo "==> D23 reachability sweep"
+	@miss=0; \
+	for e in $$(grep -h '^//export ' avalonia/bridge/*.go | awk '{print $$2}' | sort -u); do \
+	  grep -rq "\b$$e\b" avalonia/frontend/ avalonia/tests/ || { echo "  bridge export with no C# consumer: $$e"; miss=1; }; \
+	done; \
+	for f in workbench/*_model.go; do \
+	  case "$$f" in *_test*) continue;; esac; \
+	  m=$$(basename "$$f" _model.go); \
+	  cat avalonia/frontend/Panels/*.cs console/*.go shellcmd/*.go 2>/dev/null \
+	    | tr -d '_' | grep -qi "$$(echo $$m | tr -d '_')" \
+	    || { echo "  workbench model no renderer or verb drives: $$m"; miss=1; }; \
+	done; \
+	if [ $$miss -ne 0 ]; then \
+	  echo "  -> a model or export with no shipped surface is not shipped (D23)."; \
+	  exit 1; \
+	fi; \
+	echo "  ok  every bridge export is consumed; every model has a surface"
 
 # --- Single granular target, bare-box --------------------------------
 #

@@ -28,7 +28,17 @@ Then pick an interface:
 make run                 # entity-shell REPL (the CLI)
 make run ARGS="name ls"  # ...or a one-shot command
 make gui                 # the Avalonia desktop app (podman; first build is slow)
+make gui-run             # ...launch it again later without rebuilding
 ```
+
+> **`make gui` rebuilds; `make gui-run` does not.** Use `gui` after any
+> Go or C# change (podman caches unchanged stages, but the first build
+> pulls the .NET SDK and takes minutes); use `gui-run` when you just want
+> the app you already built. Both forward app flags:
+> `make gui-run ARGS="--identity me --storage sqlite"`. With no flags the
+> GUI is an **ephemeral in-memory peer and loses everything on exit** —
+> see [Identity and storage](#identity-and-storage). `avalonia/README.md`
+> covers the crash-log path, render modes, and the X11 smoke drivers.
 
 And to check the tree's state:
 
@@ -108,6 +118,7 @@ the full set most people need.
 | `make build` | Every shipped Go binary → `./bin` (in-container) |
 | `make run` | Build + start `entity-shell` (REPL); `ARGS="…"` for one-shot |
 | `make gui` | Build + launch the Avalonia desktop app (podman) |
+| `make gui-run` | Launch the desktop app **without rebuilding**; `ARGS="…"` forwards its flags |
 | `make demo` | Scripted CLI tour in a throwaway HOME |
 | `make test-each` | Every Go suite **to completion** + summary table |
 | `make test` | Full `-race` sweep — **fail-fast**, stops at the first failure |
@@ -127,12 +138,14 @@ container (`make build-native`, `make test-each-native`).
 
 ### Identity and storage
 
-`entity-shell`, `entity-console`, and the Avalonia frontend share the same
-flags:
+`entity-shell`, `entity-console`, and the Avalonia frontend take the same
+set of options — but the Go binaries use Go's single-dash `flag` spelling
+and the .NET frontend uses double-dash:
 
 ```bash
 entity-shell   -identity peerA -storage sqlite   # path defaults to ~/.entity/peers/peerA/store.db
 entity-console -identity peerA -storage sqlite
+make gui-run ARGS="--identity peerA --storage sqlite"   # the GUI (see avalonia/README.md)
 ```
 
 > **Use `-identity` whenever you use `-storage sqlite`.** Without a named

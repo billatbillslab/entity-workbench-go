@@ -81,13 +81,13 @@ L0-L3's actual behavior gets documented forensically.
 
 ---
 
-## 2. The 22 disciplines
+## 2. The 23 disciplines
 
 D1-D11 are inherited verbatim from the entity-OS discipline charter
 (originating in godot-entity-core-rust, ratified by egui-entity-core-rust).
 They are stack-agnostic; they govern how we use the substrate.
 
-D12-D22 are native to our stack (Avalonia + .NET + cgo + Go + the
+D12-D23 are native to our stack (Avalonia + .NET + cgo + Go + the
 two-renderer architecture). They are **earned** by shipped bugs and
 explicit feedback episodes. Each cites the commit or pin that proved
 we needed it.
@@ -108,7 +108,7 @@ we needed it.
 | D10 | Real-session coverage | Cross-boot + headed + real-store paths for load-bearing changes. Headless green is necessary, not sufficient. Eight crash-hunt commits proved this on the Avalonia side. |
 | D11 | Inventory-boundary declaration (meta) | At audit open: name what's in scope **and what's not.** Findings that surface outside the boundary extend the boundary for the next audit. |
 
-### Native to our stack — earned by shipped bugs (D12-D17, D19, D20, D21, D22) and feedback episodes (D18)
+### Native to our stack — earned by shipped bugs (D12-D17, D19-D23) and feedback episodes (D18)
 
 **D12 — Cross-language lifetime accounting.**
 *Source:* the cgo + GCHandle FFI discipline.
@@ -421,6 +421,68 @@ is not in the default sweep is not a gate.
 
 ---
 
+**D23 — A model with no shipped surface is not shipped. Reachability is
+part of the feature, and only a sweep can tell you it is missing.**
+*Source:* three instances of one shape, found by audit rather than by
+test. (1) The **name arc** — `ResolveName` / `BindLocalName` / the
+resolver-config validator / the v1.13 adoption were all green in
+`entitysdk`, and `shellboot` never set `Extensions.Registry`, so **no
+shipped binary carried the handler a verb would dispatch to**.
+(2) The **handler browser** — `wb.HandlerBrowserModel` was complete and
+renderer-neutral; only tview drove it, so the primary renderer had no
+path to it. (3) **`PeerLiveness`** (2026-08-20) — the model was tested,
+the bridge exported it, and **no C# file referenced the export**, while
+`PeerConnectionsPanel` went on rendering `ConnectionsOpen`: the
+connection-pool snapshot that cannot express `suspect`, cannot say why a
+peer went away, and disagrees with the tree whenever a connection is
+evicted without a demotion. The GUI showed a strictly weaker and
+occasionally wrong answer with the correct one one unused export away.
+*Why:* every layer's own tests pass, because each layer is correct. The
+defect lives in the **absence of an edge** between two correct layers,
+and no test that starts inside one of them can see an edge that was
+never drawn. It is D22's failure mode with the join not merely untested
+but missing — and unlike a broken join it produces no symptom at all,
+just a capability that quietly does not exist. Worse, in case (3) the
+weaker surface it left in place *looked* like the feature working.
+*How:*
+- Landing a renderer-neutral model is **half** a feature. The other half
+  is a user-reachable path, in the same session, or the model ships
+  disabled with the gap named in `STATUS.md`.
+- Run the two sweeps below at every audit, not at every diff — they are
+  cheap and they are the only instrument that sees this.
+- When a new surface **supersedes** an old one, wire it and relabel the
+  old one in the same diff. Two answers to one question, one of them
+  unlabelled, is how the weaker one stays authoritative.
+- A test that mounts the panel and asserts the handle/envelope is what
+  crosses "can a user reach this" — cheaper than the audit that found
+  all three of these.
+*Enforcement:* **`make reachability`** runs both sweeps and exits
+non-zero on the first orphan. They are also written out here so the
+instrument survives the target:
+
+```bash
+# 1. bridge exports no C# consumes
+for e in $(grep -h '^//export ' avalonia/bridge/*.go | awk '{print $2}' | sort -u); do
+  grep -rq "\b$e\b" avalonia/frontend/ avalonia/tests/ || echo "$e"; done
+# 2. workbench models with no renderer or verb driving them.
+#    Underscores are stripped from BOTH sides: the model file is
+#    peer_liveness_model.go and the consumer is PeerLivenessPanel /
+#    LivenessRender, so a naive snake_case grep reports every model as
+#    missing — a sweep that cries wolf gets ignored, which is the same
+#    failure one level up.
+for f in workbench/*_model.go; do
+  m=$(basename "$f" _model.go)
+  cat avalonia/frontend/Panels/*.cs console/*.go shellcmd/*.go 2>/dev/null \
+    | tr -d '_' | grep -qi "$(echo "$m" | tr -d '_')" || echo "$m"
+done
+```
+
+Plus the panel-mount tier: `PeerConnectionsPanelTests` now asserts the
+liveness handle is allocated and its envelope parses
+(`Mount_Opens_Liveness_Handle_And_Renders_Counts`).
+
+---
+
 ## 3. The ten review questions (run on every diff)
 
 Short enough to run on every change. Six inherited, four substrate-native.
@@ -447,7 +509,10 @@ Short enough to run on every change. Six inherited, four substrate-native.
     presentation, is the renderer-specific pattern (P1-P6, debounce
     cadence, cap value, recycle strategy) named and motivated? Does
     `make build` keep both `entity-console` and `entity-avalonia`
-    compiling? (D18)
+    compiling? (D18) **And: can a user reach it?** Name the shipped
+    surface — verb, panel, or menu entry. "The model is done" is half a
+    feature; if the other half is deferred, it is a row in `STATUS.md`,
+    not an assumption. (D23)
 
 ---
 
@@ -670,7 +735,13 @@ first fix's own wording excluded. **D22 was earned by AP17 plus AP21** —
 a kernel equivalence claim tested on return values, and our own CDN
 corridor tested one half at a time; different repos, different layers,
 one shape: a contract asserted from each side separately is asserted by
-nobody.
+nobody. **D23 was earned three times before it was written** — the name
+arc (handler never registered in `shellboot`), the handler browser
+(model complete, only tview drove it), and `PeerLiveness` (exported,
+never referenced). Two of the three were found by audit rather than by
+test, and the promotion criteria above call for ratification at two; the
+third is the one that says the sweep belongs in the audit procedure
+rather than in anybody's memory.
 
 ---
 
@@ -686,6 +757,7 @@ nobody.
 | D16        | Four-tier test taxonomy (planned) | `TESTING-STRATEGY.md` + CI gate naming the tier |
 | D17        | `DEPLOYMENT-DIRECTION.md §1` already names wipe-and-rebuild | PR template prompt |
 | D18        | `make build` + `make test-workbench` exercise both renderers' inheritance from `workbench/*Model`. Renderer files (`console/*.go`, `avalonia/frontend/Panels/*.cs`) review-gated against owning local state. | `make` target that explicitly runs the two-renderer build matrix and reports which renderer broke first; eventual lint that flags state owned by a renderer file. |
+| D23        | **`make reachability`** — both sweeps, exits non-zero on the first orphan. Green at 2026-08-20 after the liveness wiring. Plus panel-mount tests asserting the handle + envelope for each bridge surface. | Join it to `check` once it has survived a few sessions without a false positive; today it is a target you run, not a gate that blocks. |
 
 The CI / tooling enforcement (greps, gates) is downstream work — the
 charter has to land first, then we wire enforcement to it.

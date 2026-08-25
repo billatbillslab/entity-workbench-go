@@ -270,6 +270,7 @@ func BridgeInit(cConfig *C.char) *C.char {
 			cascadeSites(h)
 			cascadeShells(h)
 			cascadeConnections(h)
+			cascadeLivenesses(h)
 			cascadeSnakes(h)
 			cascadeLives(h)
 			cascadeAsteroids(h)
@@ -472,66 +473,13 @@ func PeerConfig(h C.int64_t) *C.char {
 	return C.CString(string(b))
 }
 
-// The tree's lifecycle record for every peer a transition has ever been
-// written for — EXTENSION-NETWORK §3.13, read through the workbench
-// model rather than reassembled here (the renderer is thin I/O).
-//
-// Deliberately NOT the same set as PeerConnections, which reports the
-// connection pool. A peer that dialed US, or one released an hour ago,
-// appears here and not there; and only this surface can say `suspect`.
-// A UI showing one and labelling it the other is the mistake this
-// export exists to make avoidable.
-//
-// `last_seen` is not exposed. The status entity is transition-written
-// (§5.4.1 MUST) — a successful keepalive writes nothing — so the field
-// is a snapshot taken at the transition and any UI rendering it as
-// "last heard from" would invent a freshness contract the protocol
-// declines to offer. `connected_at` and `failing_since` are the two
-// stamps that mean what they look like.
-//
-//export PeerLiveness
-func PeerLiveness(h C.int64_t) *C.char {
-	if manager == nil {
-		return C.CString(errNotInit)
-	}
-	hp := manager.Get(int64(h))
-	if hp == nil {
-		return C.CString(errBadPeer)
-	}
-	model := wb.NewPeerLivenessModel(hp.AppPeer.Store())
-	defer model.Close()
-	out := model.Render()
-
-	rows := make([]map[string]any, 0, len(out.Peers))
-	for _, l := range out.Peers {
-		rows = append(rows, map[string]any{
-			"peer_id":       l.PeerID,
-			"status":        l.Status,
-			"reason":        l.Reason,
-			"last_error":    l.LastError,
-			"connected_at":  l.ConnectedAt,
-			"failing_since": l.FailingSince,
-			"failing":       l.Failing(),
-		})
-	}
-	result := map[string]any{
-		"peers":        rows,
-		"connected":    out.Connected,
-		"suspect":      out.Suspect,
-		"disconnected": out.Disconnected,
-	}
-	// A seed failure is surfaced, not swallowed: an empty list from a
-	// failed read and an empty list from a peer that has talked to
-	// nobody look identical in a UI, and only one of them is fine.
-	if out.SeedError != nil {
-		result["seed_error"] = out.SeedError.Error()
-	}
-	b, err := json.Marshal(map[string]any{"ok": true, "result": result})
-	if err != nil {
-		return C.CString(fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()))
-	}
-	return C.CString(string(b))
-}
+// The tree's lifecycle record — `system/peer/status` — lives in
+// liveness.go (LivenessOpen / RegisterWake / Render / Close). It used
+// to be a one-shot `PeerLiveness(h)` export here; that shape re-paid
+// the model's seed on every call and, having no wake, could not tell a
+// panel about the one transition the connection pool cannot express
+// (a demotion to `suspect` writes the status entity and nothing else).
+// See liveness.go's header.
 
 //export PeerListenAddr
 func PeerListenAddr(h C.int64_t) *C.char {

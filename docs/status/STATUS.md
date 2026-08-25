@@ -1,6 +1,13 @@
 # entity-workbench-go — status
 
-_Updated: 2026-08-19 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
+_Updated: 2026-08-20 · public: v0.8.0 (master) · working branch: `dev` (ahead of `master`)_
+
+> **Start here:** `docs/status/HANDOFF-2026-08-20-bearings-and-audit.md` is the audit —
+> where every arc actually stands, what gates us, and what nobody has scheduled.
+> §8 below is what the session after it landed. **`dev` is pushed** (`2f285f7` → `origin/dev`,
+> 2026-08-20): all four review packets are readable now, including the two naming live core-go
+> bugs. There is **no roadmap doc and there never was one** — "what's next" is the newest
+> handoff's recommended order plus "Waiting on" at the bottom of this file.
 
 **Green as of `HEAD`:** ten suites, run **individually to completion** (AP15 — a count from
 `make test` stops at the first failing package). `entitysdk` 199.5s · `inspect` 2.3s · `shell` 4.1s ·
@@ -9,8 +16,9 @@ _Updated: 2026-08-19 · public: v0.8.0 (master) · working branch: `dev` (ahead 
 (`6204630`). The command was
 `for t in sdk inspect shell shellboot shellcmd shellpanel workbench programs publish fetch; do make test-$t; done`.
 
-**Avalonia: 57/57 headless** (`make -C avalonia test`), plus `make smoke-xvfb-handlers` green
-under real X11 + software Skia — 21 handlers walked, exit 0.
+**Avalonia: 60/60 headless** (`make -C avalonia test`, 2026-08-20 — three new liveness tests),
+plus `make smoke-xvfb-handlers` green under real X11 + software Skia — 21 handlers walked,
+exit 0 — and the new `make smoke-xvfb-connections` (§8).
 
 **The burst flake is diagnosed, and it is a terminal write loss — not a flake and not saturation.**
 `TestE2E_Bidirectional_BurstWrites_NoFS`, reproduced 5× under load (0-in-10 idle). The
@@ -79,8 +87,11 @@ it is deliberately unmerged (see the guardrail below).
 
 ## Where we left off
 
-**Latest handoff:** `docs/status/HANDOFF-2026-08-19-reachability-front-door-and-the-rendezvous-hold.md`
-for the session before this one. **Piece 4 — the rendezvous DISCOVERY backend — is BUILT**
+**Latest handoff:** `docs/status/HANDOFF-2026-08-20-bearings-and-audit.md` — **start there.** It is
+the audit, not a session log: tree state, where every arc stands, what is owed each way, the one
+remaining renderer gap, and a recommended order. `HANDOFF-2026-08-20-piece-four-and-two-real-bugs.md`
+is that session's log; `HANDOFF-2026-08-19-reachability-front-door-and-the-rendezvous-hold.md` the
+one before. **Piece 4 — the rendezvous DISCOVERY backend — is BUILT**
 (`021e5c2`), so the four-piece connectivity list is complete; §3 piece 4 has the result and what
 it routed. Also this session: a live conformance defect fixed under D21 (§6f — our boot refused
 to start on a config REGISTRY 1.17 says it MUST run under).
@@ -620,11 +631,9 @@ Full packet, including the one-line fix, the reproducer, and the coverage gap th
 `docs/architecture/reviews/CORE-GO-LOCAL-DISPATCH-RESOURCE-2026-08-18.md`.
 **Re-run `make test` once it lands.** Do not work around it here — the call sites are correct.
 
-**Still live at core-go `6ed6f95`** (re-verified in the audit): `git log 0b9e261..HEAD --
-core/protocol/local.go` is empty — nothing has touched the file. Six commits have shipped on top,
-including `88615f6` *"three-way release gate — go clean"*. That green is real for their suites and
-does not cover this path, which is the whole point of the coverage gap. **The packet is still
-unsent** — it does not reach them until `dev` is pushed.
+**Historical note, corrected 2026-08-20:** this section once ended *"the packet is still unsent —
+it does not reach them until `dev` is pushed."* **It went out with the 2026-08-19 push and core-go
+landed the fix** (`7593618`). Kept because the shape is the lesson, not the outage.
 
 ### 5a. The cross-impl publish/consume check — three surfaces align, the front door does not (2026-08-18)
 
@@ -990,6 +999,64 @@ hash references to transport-profile entities and no surface hands a user one. A
 flag that can only take a hash nobody can obtain is worse than none. Wants the profile-hash story
 first.
 
+### 8. The last renderer gap closes, and the front door gets documented (2026-08-20)
+
+Three things, one session, all follow-ons from the bearings audit.
+
+**`dev` is pushed.** 14 commits to `origin/dev`. The four review packets that existed only
+locally — two of them naming live core-go bugs (`CORE-GO-LAST-BURST-WRITE-LOSS`,
+`CORE-GO-SUBSCRIPTION-DELIVERY-RING`) — are readable by their addressees now. That was the
+cheapest item on the list and it had been sitting.
+
+**`PeerLiveness` reaches a user.** The audit's one remaining renderer gap: the model was
+tested, the bridge exported it, and **no C# file referenced the export**, while
+`PeerConnectionsPanel` rendered `ConnectionsOpen` — the connection-pool snapshot the liveness
+model exists to replace. The GUI showed a strictly weaker answer with the correct one one
+unused export away.
+
+What landed is **not** the one-shot export wired to a button. That shape was wrong twice over:
+it re-paid the model's O(N) seed on every call, and having no wake it could never deliver the
+one transition the pool cannot express — **a demotion to `suspect` writes `system/peer/status`
+and nothing else**, so a panel refreshing on connection events would never see it. So
+`avalonia/bridge/liveness.go` is the standard handle lifecycle (`LivenessOpen` /
+`RegisterWake` / `Render` / `Close`, cascade-on-peer-destroy), holding one long-lived
+prefix-subscribed model; the one-shot `PeerLiveness` export is gone.
+
+The panel now shows **both** surfaces, labelled apart: *"Liveness (tree)"* with per-status
+colour (`suspect` gets its own — collapsing it into green or grey discards the whole reason
+the section exists) and the three counts, above *"Connections (local pool)"* which keeps the
+dial/drop buttons. `last_seen` is still not exposed anywhere: transition-written (§5.4.1),
+so rendering it as freshness would invent a contract the protocol declines to offer. The
+empty state says **"No lifecycle transitions recorded"**, not "nothing connected" — absence
+means no transition was ever written, and a test asserts that wording.
+
+**Avalonia 60/60 headless** (was 57), plus a new tier-3 gate: `make -C avalonia
+smoke-xvfb-connections` drives the panel under real X11 and churns both renders — the
+clear-an-ObservableCollection-under-selection shape that killed the handler browser in X11 and
+nowhere else (AP24). Its log states what it cannot prove: one peer writes no transitions, so
+row *content* is not under test.
+
+**The front door is documented and has a fast rung.** `make gui` rebuilds the image before
+launching, which is right after a code change and wrong when you just want to look at the app —
+and there was no other verb, so "start the thing I built five minutes ago" cost a full podman
+build. Added **`make gui-run`** (launch, rebuild nothing) and `ARGS` passthrough on both
+(`make gui-run ARGS="--identity me --storage sqlite"` — the .NET frontend takes double-dash
+flags, not Go's `flag` spelling; **with no flags the GUI is an ephemeral in-memory peer that
+loses everything on exit**). `avalonia/README.md` was rewritten: it had described the renderer
+as a three-spike POC, pointed at a `PHASE-I-DESKTOP-RENDERER-PLAN.md` that does not exist, and
+listed 7 bridge symbols when there are 118 — the same *doc-points-at-a-missing-file* failure
+the audit found in `AGENTS.md`, on the one page a newcomer reads first.
+
+**Ratchet: D23** — *a model with no shipped surface is not shipped.* Third instance of one
+shape (name arc, handler browser, this), two of the three found by audit because no test
+crosses "can a user reach this". Enforcement is real, not aspirational: **`make reachability`**
+runs both sweeps (bridge exports no C# consumes; workbench models no renderer or verb drives)
+and exits non-zero on the first orphan. Both are empty as of this commit. Charter is now
+**D1–D23** / AP1–AP26.
+
+**Owed:** `make reachability` is not in `check` yet — one clean sweep is not enough evidence
+that it will not false-positive on a legitimately internal model. Join it after a few sessions.
+
 ## Open bugs
 
 - **Managed stack overflow on window minimize** (Avalonia, software-render path). A tight
@@ -1032,6 +1099,27 @@ first.
   than no gate. It now compares against the previous tick's observation and prints, for every
   run, how many transitions actually took effect — with an explicit "this run is NOT evidence"
   line when that count is zero.
+  **2026-08-20 — a fourth negative, and an accounting of what is actually left.** Operator
+  challenged whether this bug is still real or is being carried forward on old text. It is
+  being carried, and here is exactly what stands behind it:
+  - **The original evidence was real** — three core dumps (PIDs 3239906 / 3331097 / 3513953),
+    analyzed, with the discriminator recorded as a count anyone could re-run
+    (`coredumpctl info | grep -icE 'gallium|GLX_mesa|libGL\.|swrast'` → 21 for the GPU crash,
+    **0** for this one). That is what makes it "ours, not the driver."
+  - **No artifact remains.** `coredumpctl list | grep -c entity-avalonia` → **0** today. The
+    dumps rotated out of `/var/lib/systemd/coredump`. Nothing is left to re-examine.
+  - **Four repro attempts, four negatives**, the newest on today's binary:
+    `make -C avalonia smoke-xvfb-window MODE=both` — 60 iterations, **59 transitions verified
+    to have taken effect**, collapse to 1×1 and restore with paint in flight, exit 0.
+  - **The stress coverage is real and specific**, not a claim: 25× width→0, 25×
+    `Minimized`/restore, 40× collapse-while-ticking (`PanelStackZeroCollapseTests`), plus the
+    400× real-Skia rasterize in `ProgramPanelStressTests`. All in the 60/60 headless run.
+  **Disposition, so this stops being carried by default:** it stays open only as *last seen
+  2026-07-18, unreproduced since, no artifact*. The next step is an operator capture on the
+  real desktop (compositing WM — mutter/kwin, which is the one condition the harness has never
+  had). **If the next occurrence produces no dump, close it as unreproducible** rather than
+  keeping a month-old symptom on an open-bug list, which is how a stale entry starts steering
+  work it can no longer justify.
 - **GPU-driver SIGSEGV** (distinct, older): the mesa hardware-GL path crashes under
   sustained compositor load. **The product call is made (2026-08-19): software Skia is the
   DEFAULT, hardware GL is opt-in via `WB_GPU_RENDER=1`.** Auto-detect was the other
@@ -1101,7 +1189,21 @@ first.
 
 **UI / renderer**
 - ~~**Handler-browser panel**~~ — **DONE 2026-08-19** (`27874ad`). The console→Avalonia parity
-  gap is closed; `console` is no longer ahead on any surface.
+  gap is closed; `console` is no longer ahead on any surface (re-verified by sweep 2026-08-20 —
+  console's `execute_console.go` IS its handler browser, and `HandlerBrowserPanel` matches it).
+- **`PeerLiveness` has a bridge export and no panel — the ONE remaining renderer gap.** Found by
+  audit 2026-08-20, by two sweeps that each return exactly one name: bridge exports no C# consumes,
+  and `workbench/*_model.go` files with no Avalonia panel. `workbench.PeerLivenessModel` is built
+  and tested, `avalonia/bridge/main.go:492` exports `PeerLiveness`, and **no C# file references
+  it** — `PeerConnectionsPanel` still reads `ConnectionsOpen`, the connection-pool snapshot the
+  liveness model exists to replace. Not cosmetic: the pool snapshot **cannot express `suspect`**,
+  cannot say why a peer went, and disagrees with the tree whenever a connection is evicted without
+  a demotion, so the GUI shows a strictly weaker and occasionally wrong answer while the correct
+  one sits one unused export away. The CLI already has it (`peer status`). **This is the third
+  instance of one shape** — the name arc, the handler browser, this — where a renderer-neutral
+  model was green and no shipped surface reached it; two of the three were found by audit rather
+  than by a test, because no test crosses "is there a user-reachable path to this." A fourth earns
+  a discipline.
 - **Console multi-peer UX** (deferred): peer-picker modal, status bar, `peer create`/`destroy`.
 - **Manifest-driven panel registration** (deferred from the multi-peer plan).
 - Avalonia drives feature work and may outpace the frozen `console` renderer; console-parity
@@ -1137,13 +1239,41 @@ first.
   `entitysdk/registry_bootstrap_cost_test.go`. Same family as the waived identity-rebootstrap
   leak; not ours, and owed a routing packet to core-go.
 
-## Guardrail — do not merge `dev` to `master` yet
+## Guardrail — `dev` vs `master`, and the blocker is not the one this section named
 
 The legacy hard-coded panels (`NewLifeGameModel` / `NewSnakeGameModel` /
-`NewAsteroidsGameModel`, now in `programs/`) are still the oracle for
+`NewAsteroidsGameModel`, now in `programs/`) were the oracle for
 `TestMount_LifeMatchesHardCodedModel`, and Avalonia registers both the legacy and the
-generic-host copy of all three panels. Retiring them means re-pinning that oracle first.
-`dev` is comparison surface, not a release.
+generic-host copy of all three panels. `dev` is comparison surface, not a release.
+
+**The oracle half is done (2026-08-20).** `programs/oracle_vectors_test.go` freezes the twelve
+state hashes the two sides agreed on, so the mounted program is now gated against a **recorded**
+reference instead of against live legacy code. That is strictly stronger than the mutual
+comparison, which structurally cannot see a kernel-side encoding change: both sides shift
+together and stay green while every hash on disk moved. The frozen vector fails, and was
+verified to fail (one character flipped → red at tick 2). The mutual test stays while the legacy
+code does; it is no longer what blocks deleting it.
+
+**The blocker underneath was never the oracle — it is a named product regression.** Per
+`reviews/COMPUTE-GENERIC-HOST-PHASE1-RESULT-2026-07-17.md §4`: the legacy panels show
+**program-specific status** (Life's population + `EXTINCT`/`STILL LIFE`, Snake's score,
+Asteroids' score) and the generic panel cannot, because those are *program* facts and a blind
+driver has no way to name them. The honest fix is a second output port bound to `text` — a HUD.
+Retiring the legacy panels today means shipping that regression.
+
+**Feasibility, checked rather than assumed (2026-08-20):** `map` / `filter` / `fold` exist in
+the compute builtins (`ext/compute/builtins.go`), and `add`/`sub`/`mul`/`div`/`mod` in
+`eval_arith.go` — so a population count and its digits are expressible. `concat` does **not**
+exist (it is on arch's owed list), so assembling a `TextFrame`'s cell array is the open
+question: a `map` over a fixed index list may reach it without `concat`. That is a spike, not a
+knock-out, and nobody has run it.
+
+**So the merge decision reduces to three real options**, not to "re-pin the oracle":
+1. **Merge with both panel sets** — duplication ships, no regression, `master` stops being a
+   year behind. Cheapest honest release.
+2. **Spike the HUD text port first**, then retire the legacy trio and merge clean.
+3. **Keep waiting** — which has been the default for a month, and is the option nobody chose
+   on purpose.
 
 ## Waiting on
 

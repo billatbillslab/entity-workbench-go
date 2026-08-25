@@ -253,6 +253,25 @@ public sealed class PeerView : UserControl, IDisposable, IPanelHost
         }
     }
 
+    // PEER-CONNECTIONS smoke surface (WB_SMOKE_CONNECTIONS). Reaches the
+    // panel that renders BOTH connection surfaces — the local pool and
+    // the tree's liveness record — under real X11.
+    internal Panels.PeerConnectionsPanel? ConnectionsForSmoke
+    {
+        get
+        {
+            for (int i = 0; i < _panelStack.SlotCountForTests; i++)
+            {
+                if (_panelStack.SlotAtForTests(i).CurrentPanelControlForSmoke
+                    is Panels.PeerConnectionsPanel cp)
+                {
+                    return cp;
+                }
+            }
+            return null;
+        }
+    }
+
     // GENERIC-HOST smoke surface — the one accessor for ALL programs mounted
     // through ProgramPanel (WB_SMOKE_PROGRAM=life|snake|asteroids).
     //

@@ -37,6 +37,12 @@ namespace EntityAvalonia;
 //                           surface in this repo that can reach the
 //                           open minimize crash (headless has no X11
 //                           backend). See StartWindowCycle.
+//   WB_SMOKE_CONNECTIONS  — drive the PEER-CONNECTIONS panel: mount it,
+//                           then churn both renders (the local pool and
+//                           the tree's liveness record) under real X11.
+//                           Gates mount + handle allocation + render
+//                           churn, NOT row content — one peer writes no
+//                           lifecycle transitions. See StartConnections.
 //   WB_SMOKE_SITE_NAVIGATE — set to non-empty to drive the SITE panel
 //                           instead of markdown-view. Leaves the
 //                           middle slot at site-view (its default) and
@@ -130,6 +136,12 @@ public static class SmokeDriver
         if (!string.IsNullOrEmpty(handlersMode))
         {
             return StartHandlers(window, peer);
+        }
+
+        var connectionsMode = Environment.GetEnvironmentVariable("WB_SMOKE_CONNECTIONS");
+        if (!string.IsNullOrEmpty(connectionsMode))
+        {
+            return StartConnections(window, peer);
         }
 
         var siteMode = Environment.GetEnvironmentVariable("WB_SMOKE_SITE_NAVIGATE");
@@ -708,6 +720,112 @@ public static class SmokeDriver
             else
             {
                 Log($"iter {_iteration}/{limit} — {pattern} (no operations)");
+            }
+            _iteration++;
+        };
+        _cycleTimer.Start();
+    }
+
+    // --- PEER-CONNECTIONS mode (WB_SMOKE_CONNECTIONS) --------------------
+    //
+    // Drives the panel that carries BOTH connection surfaces under real
+    // X11: the local connection pool and the tree's liveness record
+    // (`system/peer/status`). The liveness half is new as of 2026-08-20
+    // and this is its tier-3 gate.
+    //
+    // **What this run can and cannot prove.** It proves the panel mounts,
+    // both handles open, the render loop survives churn, and the
+    // dispatcher is not starved — the class of fault AP24 caught in the
+    // handler browser, which headless was structurally blind to. It does
+    // NOT prove the liveness rows are correct: a lifecycle transition
+    // needs a second peer, and a failed dial to a dead port never
+    // establishes one, so this harness's status namespace stays empty by
+    // construction. The log says so explicitly rather than letting an
+    // empty list read as a pass.
+    private static bool StartConnections(MainWindow window, PeerView peer)
+    {
+        _window = window;
+        _peer = peer;
+        _cyclePaths = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_PATHS"), out var n) ? n : 20;
+        _cycleGapMs = int.TryParse(Environment.GetEnvironmentVariable("WB_SMOKE_CYCLE_GAP_MS"), out var g) ? g : 250;
+        Log($"connections mode: cycles={_cyclePaths} gap={_cycleGapMs}ms");
+
+        try
+        {
+            peer.SwitchMiddleSlotForSmoke("peer-connections");
+            Log("middle slot -> peer-connections");
+        }
+        catch (Exception ex)
+        {
+            Log($"failed to switch middle slot: {ex.Message}");
+            return false;
+        }
+
+        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        settle.Tick += (_, _) =>
+        {
+            settle.Stop();
+            StartConnectionsCycle();
+        };
+        settle.Start();
+        return true;
+    }
+
+    private static void StartConnectionsCycle()
+    {
+        if (_peer == null) return;
+        var cp = _peer.ConnectionsForSmoke;
+        if (cp == null)
+        {
+            Log("middle slot is not peer-connections; connections cycle aborted");
+            return;
+        }
+        Log($"peer-connections mounted: conns={cp.ConnectionCountForTests} "
+            + $"liveness handle={cp.LivenessHandleForTests}");
+        if (cp.LivenessHandleForTests < 0)
+        {
+            Log("LIVENESS HANDLE NOT ALLOCATED — this run is NOT evidence the section works");
+        }
+
+        _iteration = 0;
+        _cycleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_cycleGapMs) };
+        _cycleTimer.Tick += (_, _) =>
+        {
+            if (_peer == null)
+            {
+                _cycleTimer?.Stop();
+                return;
+            }
+            var p = _peer.ConnectionsForSmoke;
+            if (p == null)
+            {
+                _cycleTimer?.Stop();
+                Log("peer-connections panel disappeared mid-cycle; aborting");
+                return;
+            }
+            if (_iteration >= _cyclePaths)
+            {
+                _cycleTimer?.Stop();
+                Log($"connections cycle complete ({_iteration} render churns) — "
+                    + $"final: {p.LivenessHeaderForTests}");
+                if (p.LivenessCountForTests == 0)
+                {
+                    Log("liveness list is EMPTY, which is correct here: this harness runs one "
+                        + "peer, no transition was ever written, and absence is not disconnection "
+                        + "(§5.4.1). Row CONTENT is not under test in this run.");
+                }
+                return;
+            }
+            // Both halves churn on every tick — the pool render clears an
+            // ObservableCollection a ListBox is selecting into, which is
+            // the exact shape that killed the handler browser under X11
+            // and nowhere else (AP24).
+            p.RerenderForTests();
+            p.RerenderLivenessForTests();
+            if ((_iteration % 5) == 0)
+            {
+                Log($"iter {_iteration}/{_cyclePaths} — conns={p.ConnectionCountForTests} "
+                    + $"liveness={p.LivenessCountForTests} :: {p.LivenessHeaderForTests}");
             }
             _iteration++;
         };
