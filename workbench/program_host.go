@@ -61,6 +61,16 @@ const (
 	HostFaulted
 )
 
+// Compute engine patterns the host can eval against. The default is the Stage-1
+// reference; the Axis-1 pattern is the alternate engine (entitysdk/axis1) whose
+// side-effect-free evals cut the per-shard read/contention cost (review
+// COMPUTE-SHARDING-INTO-HOST §5/§5a caveat). Selecting it is purely which
+// resource ExecuteOnResource targets — the host stays engine-blind.
+const (
+	ComputeEngineSystem = "system/compute"
+	ComputeEngineAxis1  = "app/axis1/compute"
+)
+
 // PortValue is a materialized output port: the shape a driver binds to, the
 // scene metadata it can't infer, and the raw entity data. The host does not
 // decode Data — decoding is the driver's job, per its shape. This is where
@@ -109,6 +119,15 @@ type Host struct {
 	// the stitch reads them in declared order). The serial path exists so a test
 	// can pin parallel == serial. Ignored for an unsharded program.
 	parallelShards bool
+
+	// computePattern is the handler pattern the host evals against. Defaults to
+	// "system/compute" (the Stage-1 reference engine). A caller may point it at an
+	// alternate eval engine registered on the SAME peer — e.g. "app/axis1/compute"
+	// (entitysdk/axis1) — to drive the identical mount/tick over a faster
+	// evaluator, without the host learning anything new: eval is still one
+	// ExecuteOnResource, only the resource pattern changes. The peer must carry a
+	// handler at this pattern or eval fails at dispatch.
+	computePattern string
 }
 
 // Mount reads the descriptor at descriptorPath and returns a stopped, seeded
@@ -139,6 +158,7 @@ func Mount(ap *entitysdk.AppPeer, descriptorPath string) (*Host, error) {
 		ports:          make(map[string]PortValue, len(desc.OutputPorts)),
 		status:         HostStopped,
 		parallelShards: true,
+		computePattern: ComputeEngineSystem,
 	}
 	if desc.Tick.Mode == TickClockDriven {
 		h.tickInterval = time.Second / time.Duration(desc.Tick.RateHint)
@@ -231,7 +251,7 @@ func (h *Host) eval(path string) (string, cbor.RawMessage, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	resp, err := h.ap.Executor().ExecuteOnResource("system/compute", "eval", req,
+	resp, err := h.ap.Executor().ExecuteOnResource(h.computePattern, "eval", req,
 		&types.ResourceTarget{Targets: []string{path}})
 	if err != nil {
 		return "", nil, fmt.Errorf("eval dispatch %s: %w", path, err)
